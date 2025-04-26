@@ -1,0 +1,2527 @@
+Directory structure:
+└── langchain-ai-executive-ai-assistant/
+    ├── README.md
+    ├── CONTRIBUTING.md
+    ├── langgraph.json
+    ├── LICENSE
+    ├── pyproject.toml
+    ├── .env.example
+    ├── eaia/
+    │   ├── __init__.py
+    │   ├── cron_graph.py
+    │   ├── gmail.py
+    │   ├── reflection_graphs.py
+    │   ├── schemas.py
+    │   └── main/
+    │       ├── __init__.py
+    │       ├── config.py
+    │       ├── config.yaml
+    │       ├── draft_response.py
+    │       ├── fewshot.py
+    │       ├── find_meeting_time.py
+    │       ├── graph.py
+    │       ├── human_inbox.py
+    │       ├── rewrite.py
+    │       └── triage.py
+    └── scripts/
+        ├── run_ingest.py
+        ├── run_single.py
+        ├── setup_cron.py
+        └── setup_gmail.py
+
+================================================
+FILE: README.md
+================================================
+# Executive AI Assistant
+
+Executive AI Assistant (EAIA) is an AI agent that attempts to do the job of an Executive Assistant (EA).
+
+For a hosted version of EAIA, see documentation [here](https://mirror-feeling-d80.notion.site/How-to-hire-and-communicate-with-an-AI-Email-Assistant-177808527b17803289cad9e323d0be89?pvs=4).
+
+Table of contents
+
+- [General Setup](#general-setup)
+  - [Env](#env)
+  - [Credentials](#env)
+  - [Configuration](#configuration)
+- [Run locally](#run-locally)
+  - [Setup EAIA](#set-up-eaia-locally)
+  - [Ingest emails](#ingest-emails-locally)
+  - [Connect to Agent Inbox](#set-up-agent-inbox-with-local-eaia)
+  - [Use Agent Inbox](#use-agent-inbox)
+- [Run in production (LangGraph Cloud)](#run-in-production--langgraph-cloud-)
+  - [Setup EAIA on LangGraph Cloud](#set-up-eaia-on-langgraph-cloud)
+  - [Ingest manually](#ingest-manually)
+  - [Set up cron job](#set-up-cron-job)
+
+## General Setup
+
+### Env
+
+1. Fork and then clone this repo. Note: make sure to fork it first, as in order to deploy this you will need your own repo.
+2. Create a Python virtualenv and activate it (e.g. `pyenv virtualenv 3.11.1 eaia`, `pyenv activate eaia`)
+3. Run `pip install -e .` to install dependencies and the package
+
+### Set up credentials
+
+1. Export OpenAI API key (`export OPENAI_API_KEY=...`)
+2. Export Anthropic API key (`export ANTHROPIC_API_KEY=...`)
+3. Enable Google
+   1. [Enable the API](https://developers.google.com/gmail/api/quickstart/python#enable_the_api)
+      - Enable Gmail API if not already by clicking the blue button `Enable the API`
+   2. [Authorize credentials for a desktop application](https://developers.google.com/gmail/api/quickstart/python#authorize_credentials_for_a_desktop_application)
+  
+> Note: If you're using a personal email (non-Google Workspace), select "External" as the User Type in the OAuth consent screen. With "External" selected, you must add your email as a test user in the Google Cloud Console under "OAuth consent screen" > "Test users" to avoid the "App has not completed verification" error. The "Internal" option only works for Google Workspace accounts.
+
+4. Download the client secret. After that, run these commands:
+5. `mkdir eaia/.secrets` - This will create a folder for secrets
+6. `mv ${PATH-TO-CLIENT-SECRET.JSON} eaia/.secrets/secrets.json` - This will move the client secret you just created to that secrets folder
+7. `python scripts/setup_gmail.py` - This will generate another file at `eaia/.secrets/token.json` for accessing Google services.
+8. Export LangSmith API key (`export LANGSMITH_API_KEY`)
+
+### Configuration
+
+The configuration for EAIA can be found in `eaia/main/config.yaml`. Every key in there is required. These are the configuration options:
+
+- `email`: Email to monitor and send emails as. This should match the credentials you loaded above.
+- `full_name`: Full name of user
+- `name`: First name of user
+- `background`: Basic info on who the user is
+- `timezone`: Default timezone the user is in
+- `schedule_preferences`: Any preferences for how calendar meetings are scheduled. E.g. length, name of meetings, etc
+- `background_preferences`: Any background information that may be needed when responding to emails. E.g. coworkers to loop in, etc.
+- `response_preferences`: Any preferences for what information to include in emails. E.g. whether to send calendly links, etc.
+- `rewrite_preferences`: Any preferences for the tone of your emails
+- `triage_no`: Guidelines for when emails should be ignored
+- `triage_notify`: Guidelines for when user should be notified of emails (but EAIA should not attempt to draft a response)
+- `triage_email`: Guidelines for when EAIA should try to draft a response to an email
+
+## Run locally
+
+You can run EAIA locally.
+This is useful for testing it out, but when wanting to use it for real you will need to have it always running (to run the cron job to check for emails).
+See [this section](#run-in-production--langgraph-cloud-) for instructions on how to run in production (on LangGraph Cloud)
+
+### Set up EAIA locally
+
+1. Install development server `pip install -U "langgraph-cli[inmem]"`
+2. Run development server `langgraph dev`
+
+### Ingest Emails Locally
+
+Let's now kick off an ingest job to ingest some emails and run them through our local EAIA.
+
+Leave the `langgraph dev` command running, and open a new terminal. From there, get back into this directory and virtual environment. To kick off an ingest job, run:
+
+```shell
+python scripts/run_ingest.py --minutes-since 120 --rerun 1 --early 0
+```
+
+This will ingest all emails in the last 120 minutes (`--minutes-since`). It will NOT break early if it sees an email it already saw (`--early 0`) and it will
+rerun ones it has seen before (`--rerun 1`). It will run against the local instance we have running.
+
+### Set up Agent Inbox with Local EAIA
+
+After we have [run it locally](#run-locally), we can interract with any results.
+
+1. Go to [Agent Inbox](https://dev.agentinbox.ai/)
+2. Connect this to your locally running EAIA agent:
+   1. Click into `Settings`
+   2. Input your LangSmith API key.
+   3. Click `Add Inbox`
+      1. Set `Assistant/Graph ID` to `main`
+      2. Set `Deployment URL` to `http://127.0.0.1:2024`
+      3. Give it a name like `Local EAIA`
+      4. Press `Submit`
+
+You can now interract with EAIA in the Agent Inbox.
+
+## Run in production (LangGraph Cloud)
+
+These instructions will go over how to run EAIA in LangGraph Cloud.
+You will need a LangSmith Plus account to be able to access [LangGraph Cloud](https://langchain-ai.github.io/langgraph/concepts/langgraph_cloud/)
+
+If desired, you can always run EAIA in a self-hosted manner using LangGraph Platform [Lite](https://langchain-ai.github.io/langgraph/concepts/self_hosted/#self-hosted-lite) or [Enterprise](https://langchain-ai.github.io/langgraph/concepts/self_hosted/#self-hosted-enterprise).
+
+### Set up EAIA on LangGraph Cloud
+
+1. Make sure you have a LangSmith Plus account
+2. Navigate to the deployments page in LangSmith
+3. Click `New Deployment`
+4. Connect it to your GitHub repo containing this code.
+5. Give it a name like `Executive-AI-Assistant`
+6. Add the following environment variables
+   1. `OPENAI_API_KEY`
+   2. `ANTHROPIC_API_KEY`
+   3. `GMAIL_SECRET` - This is the value in `eaia/.secrets/secrets.json`
+   4. `GMAIL_TOKEN` - This is the value in `eaia/.secrets/token.json`
+7. Click `Submit` and watch your EAIA deploy
+
+### Ingest manually
+
+Let's now kick off a manual ingest job to ingest some emails and run them through our LangGraph Cloud EAIA.
+
+First, get your `LANGGRAPH_CLOUD_URL`
+
+To kick off an ingest job, run:
+
+```shell
+python scripts/run_ingest.py --minutes-since 120 --rerun 1 --early 0 --url ${LANGGRAPH-CLOUD-URL}
+```
+
+This will ingest all emails in the last 120 minutes (`--minutes-since`). It will NOT break early if it sees an email it already saw (`--early 0`) and it will
+rerun ones it has seen before (`--rerun 1`). It will run against the prod instance we have running (`--url ${LANGGRAPH-CLOUD-URL}`)
+
+### Set up Agent Inbox with LangGraph Cloud EAIA
+
+After we have [deployed it](#set-up-eaia-on-langgraph-cloud), we can interract with any results.
+
+1. Go to [Agent Inbox](https://dev.agentinbox.ai/)
+2. Connect this to your locally running EAIA agent:
+   1. Click into `Settings`
+   2. Click `Add Inbox`
+      1. Set `Assistant/Graph ID` to `main`
+      2. Set `Deployment URL` to your deployment URL
+      3. Give it a name like `Prod EAIA`
+      4. Press `Submit`
+
+### Set up cron job
+
+You probably don't want to manually run ingest all the time. Using LangGraph Platform, you can easily set up a cron job
+that runs on some schedule to check for new emails. You can set this up with:
+
+```shell
+python scripts/setup_cron.py --url ${LANGGRAPH-CLOUD-URL}
+```
+
+## Advanced Options
+
+If you want to control more of EAIA besides what the configuration allows, you can modify parts of the code base.
+
+**Reflection Logic**
+To control the prompts used for reflection (e.g. to populate memory) you can edit `eaia/reflection_graphs.py`
+
+**Triage Logic**
+To control the logic used for triaging emails you can edit `eaia/main/triage.py`
+
+**Calendar Logic**
+To control the logic used for looking at available times on the calendar you can edit `eaia/main/find_meeting_time.py`
+
+**Tone & Style Logic**
+To control the logic used for the tone and style of emails you can edit `eaia/main/rewrite.py`
+
+**Email Draft Logic**
+To control the logic used for drafting emails you can edit `eaia/main/draft_response.py`
+
+
+
+================================================
+FILE: CONTRIBUTING.md
+================================================
+Since this powers Harrison's real email assistant, only contributions that improve that experience for Harrison will be merged in.
+
+Harrison is very supportive of variants of this email assistant popping up. Add in other LLMs - great! Add in other email providers - great!
+
+He just doesn't want to maintain them as he's already very busy.
+
+Therefore, he will only merge in PRs that improve his experience, but he heartily invites you to fork and modify this repo to your hearts content!
+
+
+
+================================================
+FILE: langgraph.json
+================================================
+{
+  "python_version": "3.11",
+  "dependencies": [
+    "."
+  ],
+  "graphs": {
+    "main": "./eaia/main/graph.py:graph",
+    "cron": "./eaia/cron_graph.py:graph",
+    "general_reflection_graph": "./eaia/reflection_graphs.py:general_reflection_graph",
+    "multi_reflection_graph": "./eaia/reflection_graphs.py:multi_reflection_graph"
+  },
+  "store": {
+    "index": {
+      "embed": "openai:text-embedding-3-small",
+      "dims": 1536
+    }
+  }
+}
+
+
+================================================
+FILE: LICENSE
+================================================
+MIT License
+
+Copyright (c) 2024 LangChain
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+
+================================================
+FILE: pyproject.toml
+================================================
+[tool.poetry]
+name = "eaia"
+version = "0.1.0"
+description = ""
+authors = []
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+langgraph = "^0.2.48"
+langgraph-checkpoint = "^2.0.0"
+langchain = "^0.3.9"
+langchain-openai = "^0.2"
+langchain-anthropic = "^0.3"
+google-api-python-client = "^2.128.0"
+google-auth-oauthlib = "^1.2.0"
+google-auth-httplib2 = "^0.2.0"
+langgraph-sdk = "^0.1"
+langsmith = "^0.2"
+pytz = "*"
+pyyaml = "*"
+python-dateutil = "^2.9.0.post0"
+python-dotenv = "^1.0.1"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+customer_support = ["*.txt", "*.rst"]
+
+[tool.poetry.group.dev.dependencies]
+ipykernel = "^6.29.4"
+pytest-asyncio = "^0.23.6"
+pytest = "^8.2.0"
+pytest-watch = "^4.2.0"
+vcrpy = "^6.0.1"
+langgraph-cli = "^0.1.35"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+
+
+================================================
+FILE: .env.example
+================================================
+LANGSMITH_API_KEY=...
+OPENAI_API_KEY=...
+GMAIL_SECRET=...
+GMAIL_TOKEN=...
+ANTHROPIC_API_KEY=...
+
+
+================================================
+FILE: eaia/__init__.py
+================================================
+
+
+
+================================================
+FILE: eaia/cron_graph.py
+================================================
+from typing import TypedDict
+from eaia.gmail import fetch_group_emails
+from langgraph_sdk import get_client
+import httpx
+import uuid
+import hashlib
+from langgraph.graph import StateGraph, START, END
+from eaia.main.config import get_config
+
+client = get_client()
+
+
+class JobKickoff(TypedDict):
+    minutes_since: int
+
+
+async def main(state: JobKickoff, config):
+    minutes_since: int = state["minutes_since"]
+    email = get_config(config)["email"]
+
+    # TODO: This really should be async
+    for email in fetch_group_emails(email, minutes_since=minutes_since):
+        thread_id = str(
+            uuid.UUID(hex=hashlib.md5(email["thread_id"].encode("UTF-8")).hexdigest())
+        )
+        try:
+            thread_info = await client.threads.get(thread_id)
+        except httpx.HTTPStatusError as e:
+            if "user_respond" in email:
+                continue
+            if e.response.status_code == 404:
+                thread_info = await client.threads.create(thread_id=thread_id)
+            else:
+                raise e
+        if "user_respond" in email:
+            await client.threads.update_state(thread_id, None, as_node="__end__")
+            continue
+        recent_email = thread_info["metadata"].get("email_id")
+        if recent_email == email["id"]:
+            break
+        await client.threads.update(thread_id, metadata={"email_id": email["id"]})
+
+        await client.runs.create(
+            thread_id,
+            "main",
+            input={"email": email},
+            multitask_strategy="rollback",
+        )
+
+
+graph = StateGraph(JobKickoff)
+graph.add_node(main)
+graph.add_edge(START, "main")
+graph.add_edge("main", END)
+graph = graph.compile()
+
+
+
+================================================
+FILE: eaia/gmail.py
+================================================
+import logging
+from datetime import datetime, timedelta, time
+from pathlib import Path
+from typing import Iterable
+import pytz
+import os
+
+from dateutil import parser
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+import base64
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+import email.utils
+
+from langchain_core.tools import tool
+from langchain_core.pydantic_v1 import BaseModel, Field
+
+from eaia.schemas import EmailData
+
+logger = logging.getLogger(__name__)
+_SCOPES = [
+    "https://www.googleapis.com/auth/gmail.modify",
+    "https://www.googleapis.com/auth/calendar",
+]
+_ROOT = Path(__file__).parent.absolute()
+_PORT = 54191
+_SECRETS_DIR = _ROOT / ".secrets"
+_SECRETS_PATH = str(_SECRETS_DIR / "secrets.json")
+_TOKEN_PATH = str(_SECRETS_DIR / "token.json")
+
+
+def get_credentials(
+    gmail_token: str | None = None, gmail_secret: str | None = None
+) -> Credentials:
+    creds = None
+    _SECRETS_DIR.mkdir(parents=True, exist_ok=True)
+    gmail_token = gmail_token or os.getenv("GMAIL_TOKEN")
+    if gmail_token:
+        with open(_TOKEN_PATH, "w") as token:
+            token.write(gmail_token)
+    gmail_secret = gmail_secret or os.getenv("GMAIL_SECRET")
+    if gmail_secret:
+        with open(_SECRETS_PATH, "w") as secret:
+            secret.write(gmail_secret)
+    if os.path.exists(_TOKEN_PATH):
+        creds = Credentials.from_authorized_user_file(_TOKEN_PATH)
+
+    if not creds or not creds.valid or not creds.has_scopes(_SCOPES):
+        if (
+            creds
+            and creds.expired
+            and creds.refresh_token
+            and creds.has_scopes(_SCOPES)
+        ):
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(_SECRETS_PATH, _SCOPES)
+            creds = flow.run_local_server(port=_PORT)
+        with open(_TOKEN_PATH, "w") as token:
+            token.write(creds.to_json())
+
+    return creds
+
+
+def extract_message_part(msg):
+    """Recursively walk through the email parts to find message body."""
+    if msg["mimeType"] == "text/plain":
+        body_data = msg.get("body", {}).get("data")
+        if body_data:
+            return base64.urlsafe_b64decode(body_data).decode("utf-8")
+    elif msg["mimeType"] == "text/html":
+        body_data = msg.get("body", {}).get("data")
+        if body_data:
+            return base64.urlsafe_b64decode(body_data).decode("utf-8")
+    if "parts" in msg:
+        for part in msg["parts"]:
+            body = extract_message_part(part)
+            if body:
+                return body
+    return "No message body available."
+
+
+def parse_time(send_time: str):
+    try:
+        parsed_time = parser.parse(send_time)
+        return parsed_time
+    except (ValueError, TypeError) as e:
+        raise ValueError(f"Error parsing time: {send_time} - {e}")
+
+
+def create_message(sender, to, subject, message_text, thread_id, original_message_id):
+    message = MIMEMultipart()
+    message["to"] = ", ".join(to)
+    message["from"] = sender
+    message["subject"] = subject
+    message["In-Reply-To"] = original_message_id
+    message["References"] = original_message_id
+    message["Message-ID"] = email.utils.make_msgid()
+    msg = MIMEText(message_text)
+    message.attach(msg)
+    raw = base64.urlsafe_b64encode(message.as_bytes())
+    raw = raw.decode()
+    return {"raw": raw, "threadId": thread_id}
+
+
+def get_recipients(
+    headers,
+    email_address,
+    addn_receipients=None,
+):
+    recipients = set(addn_receipients or [])
+    sender = None
+    for header in headers:
+        if header["name"].lower() in ["to", "cc"]:
+            recipients.update(header["value"].replace(" ", "").split(","))
+        if header["name"].lower() == "from":
+            sender = header["value"]
+    if sender:
+        recipients.add(sender)  # Ensure the original sender is included in the response
+    for r in list(recipients):
+        if email_address in r:
+            recipients.remove(r)
+    return list(recipients)
+
+
+def send_message(service, user_id, message):
+    message = service.users().messages().send(userId=user_id, body=message).execute()
+    return message
+
+
+def send_email(
+    email_id,
+    response_text,
+    email_address,
+    gmail_token: str | None = None,
+    gmail_secret: str | None = None,
+    addn_receipients=None,
+):
+    creds = get_credentials(gmail_token, gmail_secret)
+
+    service = build("gmail", "v1", credentials=creds)
+    message = service.users().messages().get(userId="me", id=email_id).execute()
+
+    headers = message["payload"]["headers"]
+    message_id = next(
+        header["value"] for header in headers if header["name"].lower() == "message-id"
+    )
+    thread_id = message["threadId"]
+
+    # Get recipients and sender
+    recipients = get_recipients(headers, email_address, addn_receipients)
+
+    # Create the response
+    subject = next(
+        header["value"] for header in headers if header["name"].lower() == "subject"
+    )
+    response_subject = subject
+    response_message = create_message(
+        "me", recipients, response_subject, response_text, thread_id, message_id
+    )
+    # Send the response
+    send_message(service, "me", response_message)
+
+
+def fetch_group_emails(
+    to_email,
+    minutes_since: int = 30,
+    gmail_token: str | None = None,
+    gmail_secret: str | None = None,
+) -> Iterable[EmailData]:
+    creds = get_credentials(gmail_token, gmail_secret)
+
+    service = build("gmail", "v1", credentials=creds)
+    after = int((datetime.now() - timedelta(minutes=minutes_since)).timestamp())
+
+    query = f"(to:{to_email} OR from:{to_email}) after:{after}"
+    messages = []
+    nextPageToken = None
+    # Fetch messages matching the query
+    while True:
+        results = (
+            service.users()
+            .messages()
+            .list(userId="me", q=query, pageToken=nextPageToken)
+            .execute()
+        )
+        if "messages" in results:
+            messages.extend(results["messages"])
+        nextPageToken = results.get("nextPageToken")
+        if not nextPageToken:
+            break
+
+    count = 0
+    for message in messages:
+        try:
+            msg = (
+                service.users().messages().get(userId="me", id=message["id"]).execute()
+            )
+            thread_id = msg["threadId"]
+            payload = msg["payload"]
+            headers = payload.get("headers")
+            # Get the thread details
+            thread = service.users().threads().get(userId="me", id=thread_id).execute()
+            messages_in_thread = thread["messages"]
+            # Check the last message in the thread
+            last_message = messages_in_thread[-1]
+            last_headers = last_message["payload"]["headers"]
+            from_header = next(
+                header["value"] for header in last_headers if header["name"] == "From"
+            )
+            last_from_header = next(
+                header["value"]
+                for header in last_message["payload"].get("headers")
+                if header["name"] == "From"
+            )
+            if to_email in last_from_header:
+                yield {
+                    "id": message["id"],
+                    "thread_id": message["threadId"],
+                    "user_respond": True,
+                }
+            # Check if the last message was from you and if the current message is the last in the thread
+            if to_email not in from_header and message["id"] == last_message["id"]:
+                subject = next(
+                    header["value"] for header in headers if header["name"] == "Subject"
+                )
+                from_email = next(
+                    (header["value"] for header in headers if header["name"] == "From"),
+                    "",
+                ).strip()
+                _to_email = next(
+                    (header["value"] for header in headers if header["name"] == "To"),
+                    "",
+                ).strip()
+                if reply_to := next(
+                    (
+                        header["value"]
+                        for header in headers
+                        if header["name"] == "Reply-To"
+                    ),
+                    "",
+                ).strip():
+                    from_email = reply_to
+                send_time = next(
+                    header["value"] for header in headers if header["name"] == "Date"
+                )
+                # Only process emails that are less than an hour old
+                parsed_time = parse_time(send_time)
+                body = extract_message_part(payload)
+                yield {
+                    "from_email": from_email,
+                    "to_email": _to_email,
+                    "subject": subject,
+                    "page_content": body,
+                    "id": message["id"],
+                    "thread_id": message["threadId"],
+                    "send_time": parsed_time.isoformat(),
+                }
+                count += 1
+        except Exception:
+            logger.info(f"Failed on {message}")
+
+    logger.info(f"Found {count} emails.")
+
+
+def mark_as_read(
+    message_id,
+    gmail_token: str | None = None,
+    gmail_secret: str | None = None,
+):
+    creds = get_credentials(gmail_token, gmail_secret)
+
+    service = build("gmail", "v1", credentials=creds)
+    service.users().messages().modify(
+        userId="me", id=message_id, body={"removeLabelIds": ["UNREAD"]}
+    ).execute()
+
+
+class CalInput(BaseModel):
+    date_strs: list[str] = Field(
+        description="The days for which to retrieve events. Each day should be represented by dd-mm-yyyy string."
+    )
+
+
+@tool(args_schema=CalInput)
+def get_events_for_days(date_strs: list[str]):
+    """
+    Retrieves events for a list of days. If you want to check for multiple days, call this with multiple inputs.
+
+    Input in the format of ['dd-mm-yyyy', 'dd-mm-yyyy']
+
+    Args:
+    date_strs: The days for which to retrieve events (dd-mm-yyyy string).
+
+    Returns: availability for those days.
+    """
+
+    creds = get_credentials(None, None)
+    service = build("calendar", "v3", credentials=creds)
+    results = ""
+    for date_str in date_strs:
+        # Convert the date string to a datetime.date object
+        day = datetime.strptime(date_str, "%d-%m-%Y").date()
+
+        start_of_day = datetime.combine(day, time.min).isoformat() + "Z"
+        end_of_day = datetime.combine(day, time.max).isoformat() + "Z"
+
+        events_result = (
+            service.events()
+            .list(
+                calendarId="primary",
+                timeMin=start_of_day,
+                timeMax=end_of_day,
+                singleEvents=True,
+                orderBy="startTime",
+            )
+            .execute()
+        )
+        events = events_result.get("items", [])
+
+        results += f"***FOR DAY {date_str}***\n\n" + print_events(events)
+    return results
+
+
+def format_datetime_with_timezone(dt_str, timezone="US/Pacific"):
+    """
+    Formats a datetime string with the specified timezone.
+
+    Args:
+    dt_str: The datetime string to format.
+    timezone: The timezone to use for formatting.
+
+    Returns:
+    A formatted datetime string with the timezone abbreviation.
+    """
+    dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+    tz = pytz.timezone(timezone)
+    dt = dt.astimezone(tz)
+    return dt.strftime("%Y-%m-%d %I:%M %p %Z")
+
+
+def print_events(events):
+    """
+    Prints the events in a human-readable format.
+
+    Args:
+    events: List of events to print.
+    """
+    if not events:
+        return "No events found for this day."
+
+    result = ""
+
+    for event in events:
+        start = event["start"].get("dateTime", event["start"].get("date"))
+        end = event["end"].get("dateTime", event["end"].get("date"))
+        summary = event.get("summary", "No Title")
+
+        if "T" in start:  # Only format if it's a datetime
+            start = format_datetime_with_timezone(start)
+            end = format_datetime_with_timezone(end)
+
+        result += f"Event: {summary}\n"
+        result += f"Starts: {start}\n"
+        result += f"Ends: {end}\n"
+        result += "-" * 40 + "\n"
+    return result
+
+
+def send_calendar_invite(
+    emails, title, start_time, end_time, email_address, timezone="PST"
+):
+    creds = get_credentials(None, None)
+    service = build("calendar", "v3", credentials=creds)
+
+    # Parse the start and end times
+    start_datetime = datetime.fromisoformat(start_time)
+    end_datetime = datetime.fromisoformat(end_time)
+    emails = list(set(emails + [email_address]))
+    event = {
+        "summary": title,
+        "start": {
+            "dateTime": start_datetime.isoformat(),
+            "timeZone": timezone,
+        },
+        "end": {
+            "dateTime": end_datetime.isoformat(),
+            "timeZone": timezone,
+        },
+        "attendees": [{"email": email} for email in emails],
+        "reminders": {
+            "useDefault": False,
+            "overrides": [
+                {"method": "email", "minutes": 24 * 60},
+                {"method": "popup", "minutes": 10},
+            ],
+        },
+        "conferenceData": {
+            "createRequest": {
+                "requestId": f"{title}-{start_datetime.isoformat()}",
+                "conferenceSolutionKey": {"type": "hangoutsMeet"},
+            }
+        },
+    }
+
+    try:
+        service.events().insert(
+            calendarId="primary",
+            body=event,
+            sendNotifications=True,
+            conferenceDataVersion=1,
+        ).execute()
+        return True
+    except Exception as e:
+        logger.info(f"An error occurred while sending the calendar invite: {e}")
+        return False
+
+
+
+================================================
+FILE: eaia/reflection_graphs.py
+================================================
+from langgraph.store.base import BaseStore
+from langchain_openai import ChatOpenAI
+from langchain_anthropic import ChatAnthropic
+from typing import TypedDict, Optional
+from langgraph.graph import StateGraph, START, END, MessagesState
+from langgraph.types import Command, Send
+
+TONE_INSTRUCTIONS = "Only update the prompt to include instructions on the **style and tone and format** of the response. Do NOT update the prompt to include anything about the actual content - only the style and tone and format. The user sometimes responds differently to different types of people - take that into account, but don't be too specific."
+RESPONSE_INSTRUCTIONS = "Only update the prompt to include instructions on the **content** of the response. Do NOT update the prompt to include anything about the tone or style or format of the response."
+SCHEDULE_INSTRUCTIONS = "Only update the prompt to include instructions on how to send calendar invites - eg when to send them, what title should be, length, time of day, etc"
+BACKGROUND_INSTRUCTIONS = "Only update the propmpt to include pieces of information that are relevant to being the user's assistant. Do not update the instructions to include anything about the tone of emails sent, when to send calendar invites. Examples of good things to include are (but are not limited to): people's emails, addresses, etc."
+
+
+def get_trajectory_clean(messages):
+    response = []
+    for m in messages:
+        response.append(m.pretty_repr())
+    return "\n".join(response)
+
+
+class ReflectionState(MessagesState):
+    feedback: Optional[str]
+    prompt_key: str
+    assistant_key: str
+    instructions: str
+
+
+class GeneralResponse(TypedDict):
+    logic: str
+    update_prompt: bool
+    new_prompt: str
+
+
+general_reflection_prompt = """You are helping an AI agent improve. You can do this by changing their system prompt.
+
+These is their current prompt:
+<current_prompt>
+{current_prompt}
+</current_prompt>
+
+Here was the agent's trajectory:
+<trajectory>
+{trajectory}
+</trajectory>
+
+Here is the user's feedback:
+
+<feedback>
+{feedback}
+</feedback>
+
+Here are instructions for updating the agent's prompt:
+
+<instructions>
+{instructions}
+</instructions>
+
+
+Based on this, return an updated prompt
+
+You should return the full prompt, so if there's anything from before that you want to include, make sure to do that. Feel free to override or change anything that seems irrelevant. You do not need to update the prompt - if you don't want to, just return `update_prompt = False` and an empty string for new prompt."""
+
+
+async def update_general(state: ReflectionState, config, store: BaseStore):
+    reflection_model = ChatOpenAI(model="o1", disable_streaming=True)
+    # reflection_model = ChatAnthropic(model="claude-3-5-sonnet-latest")
+    namespace = (state["assistant_key"],)
+    key = state["prompt_key"]
+    result = await store.aget(namespace, key)
+
+    async def get_output(messages, current_prompt, feedback, instructions):
+        trajectory = get_trajectory_clean(messages)
+        prompt = general_reflection_prompt.format(
+            current_prompt=current_prompt,
+            trajectory=trajectory,
+            feedback=feedback,
+            instructions=instructions,
+        )
+        _output = await reflection_model.with_structured_output(
+            GeneralResponse, method="json_schema"
+        ).ainvoke(prompt)
+        return _output
+
+    output = await get_output(
+        state["messages"],
+        result.value["data"],
+        state["feedback"],
+        state["instructions"],
+    )
+    if output["update_prompt"]:
+        await store.aput(
+            namespace, key, {"data": output["new_prompt"]}, index=False
+        )
+
+
+
+general_reflection_graph = StateGraph(ReflectionState)
+general_reflection_graph.add_node(update_general)
+general_reflection_graph.add_edge(START, "update_general")
+general_reflection_graph.add_edge("update_general", END)
+general_reflection_graph = general_reflection_graph.compile()
+
+MEMORY_TO_UPDATE = {
+    "tone": "Instruction about the tone and style and format of the resulting email. Update this if you learn new information about the tone in which the user likes to respond that may be relevant in future emails.",
+    "background": "Background information about the user. Update this if you learn new information about the user that may be relevant in future emails",
+    "email": "Instructions about the type of content to be included in email. Update this if you learn new information about how the user likes to respond to emails (not the tone, and not information about the user, but specifically about how or when they like to respond to emails) that may be relevant in the future.",
+    "calendar": "Instructions about how to send calendar invites (including title, length, time, etc). Update this if you learn new information about how the user likes to schedule events that may be relevant in future emails.",
+}
+MEMORY_TO_UPDATE_KEYS = {
+    "tone": "rewrite_instructions",
+    "background": "random_preferences",
+    "email": "response_preferences",
+    "calendar": "schedule_preferences",
+}
+MEMORY_TO_UPDATE_INSTRUCTIONS = {
+    "tone": TONE_INSTRUCTIONS,
+    "background": BACKGROUND_INSTRUCTIONS,
+    "email": RESPONSE_INSTRUCTIONS,
+    "calendar": SCHEDULE_INSTRUCTIONS,
+}
+
+CHOOSE_MEMORY_PROMPT = """You are helping an AI agent improve. You can do this by changing prompts.
+
+Here was the agent's trajectory:
+<trajectory>
+{trajectory}
+</trajectory>
+
+Here is the user's feedback:
+
+<feedback>
+{feedback}
+</feedback>
+
+These are the different types of prompts that you can update in order to change their behavior:
+
+<types_of_prompts>
+{types_of_prompts}
+</types_of_prompts>
+
+Please choose the types of prompts that are worth updating based on this trajectory + feedback. Only do this if the feedback seems like it has info relevant to the prompt. You will update the prompts themselves in a separate step. You do not have to update any memory types if you don't want to! Just leave it empty."""
+
+
+class MultiMemoryInput(MessagesState):
+    prompt_types: list[str]
+    feedback: str
+    assistant_key: str
+
+
+async def determine_what_to_update(state: MultiMemoryInput):
+    reflection_model = ChatOpenAI(model="gpt-4o", disable_streaming=True)
+    reflection_model = ChatAnthropic(model="claude-3-5-sonnet-latest")
+    trajectory = get_trajectory_clean(state["messages"])
+    types_of_prompts = "\n".join(
+        [f"`{p_type}`: {MEMORY_TO_UPDATE[p_type]}" for p_type in state["prompt_types"]]
+    )
+    prompt = CHOOSE_MEMORY_PROMPT.format(
+        trajectory=trajectory,
+        feedback=state["feedback"],
+        types_of_prompts=types_of_prompts,
+    )
+
+    class MemoryToUpdate(TypedDict):
+        memory_types_to_update: list[str]
+
+    response = reflection_model.with_structured_output(MemoryToUpdate).invoke(prompt)
+    sends = []
+    for t in response["memory_types_to_update"]:
+        _state = {
+            "messages": state["messages"],
+            "feedback": state["feedback"],
+            "prompt_key": MEMORY_TO_UPDATE_KEYS[t],
+            "assistant_key": state["assistant_key"],
+            "instructions": MEMORY_TO_UPDATE_INSTRUCTIONS[t],
+        }
+        send = Send("reflection", _state)
+        sends.append(send)
+    return Command(goto=sends)
+
+
+# Done so this can run in parallel
+async def call_reflection(state: ReflectionState):
+    await general_reflection_graph.ainvoke(state)
+
+
+multi_reflection_graph = StateGraph(MultiMemoryInput)
+multi_reflection_graph.add_node(determine_what_to_update)
+multi_reflection_graph.add_node("reflection", call_reflection)
+multi_reflection_graph.add_edge(START, "determine_what_to_update")
+multi_reflection_graph = multi_reflection_graph.compile()
+
+
+
+================================================
+FILE: eaia/schemas.py
+================================================
+from typing import Annotated, List, Literal
+from langchain_core.pydantic_v1 import BaseModel, Field
+from langgraph.graph.message import AnyMessage
+from typing_extensions import TypedDict
+
+
+from langgraph.graph import add_messages
+
+
+class EmailData(TypedDict):
+    id: str
+    thread_id: str
+    from_email: str
+    subject: str
+    page_content: str
+    send_time: str
+    to_email: str
+
+
+class RespondTo(BaseModel):
+    logic: str = Field(
+        description="logic on WHY the response choice is the way it is", default=""
+    )
+    response: Literal["no", "email", "notify", "question"] = "no"
+
+
+class ResponseEmailDraft(BaseModel):
+    """Draft of an email to send as a response."""
+
+    content: str
+    new_recipients: List[str]
+
+
+class NewEmailDraft(BaseModel):
+    """Draft of a new email to send."""
+
+    content: str
+    recipients: List[str]
+
+
+class ReWriteEmail(BaseModel):
+    """Logic for rewriting an email"""
+
+    tone_logic: str = Field(
+        description="Logic for what the tone of the rewritten email should be"
+    )
+    rewritten_content: str = Field(description="Content rewritten with the new tone")
+
+
+class Question(BaseModel):
+    """Question to ask user."""
+
+    content: str
+
+
+class Ignore(BaseModel):
+    """Call this to ignore the email. Only call this if user has said to do so."""
+
+    ignore: bool
+
+
+class MeetingAssistant(BaseModel):
+    """Call this to have user's meeting assistant look at it."""
+
+    call: bool
+
+
+class SendCalendarInvite(BaseModel):
+    """Call this to send a calendar invite."""
+
+    emails: List[str] = Field(
+        description="List of emails to send the calendar invitation for. Do NOT make any emails up!"
+    )
+    title: str = Field(description="Name of the meeting")
+    start_time: str = Field(
+        description="Start time for the meeting, should be in `2024-07-01T14:00:00` format"
+    )
+    end_time: str = Field(
+        description="End time for the meeting, should be in `2024-07-01T14:00:00` format"
+    )
+
+
+# Needed to mix Pydantic with TypedDict
+def convert_obj(o, m):
+    if isinstance(m, dict):
+        return RespondTo(**m)
+    else:
+        return m
+
+
+class State(TypedDict):
+    email: EmailData
+    triage: Annotated[RespondTo, convert_obj]
+    messages: Annotated[List[AnyMessage], add_messages]
+
+
+email_template = """From: {author}
+To: {to}
+Subject: {subject}
+
+{email_thread}"""
+
+
+
+================================================
+FILE: eaia/main/__init__.py
+================================================
+
+
+
+
+================================================
+FILE: eaia/main/config.py
+================================================
+import yaml
+from pathlib import Path
+
+_ROOT = Path(__file__).absolute().parent
+
+
+def get_config(config: dict):
+    # This loads things either ALL from configurable, or
+    # all from the config.yaml
+    # This is done intentionally to enforce an "all or nothing" configuration
+    if "email" in config["configurable"]:
+        return config["configurable"]
+    else:
+        with open(_ROOT.joinpath("config.yaml")) as stream:
+            return yaml.safe_load(stream)
+
+
+
+================================================
+FILE: eaia/main/config.yaml
+================================================
+email: ...
+full_name: Harrison Chase
+name: Harrison
+background: Harrison is CEO and co-founder of LangChain. LangChain is a startup building tools for developers to build LLM applications.
+schedule_preferences: By default, unless specified otherwise, you should make meetings 30 minutes long.
+background_preferences: |
+  LangChain has a product marketer - Linda. For emails where she may be relevant, please loop her in. If possible, just add her to the thread and let her handle any asks (not Harrison). Examples include: being asked to amplify a podcast, blogpost, or other work featuring Harrison or LangChain
+response_preferences:
+timezone: "PST"
+rewrite_preferences: |
+  Harrison has a few rules for how he likes his emails to be written:
+
+  - He generally likes to match their tone. If they write formally, then so will he. If they write casually, then he should write casual
+  - If working with an assistant to schedule, then he is usually more formal
+  - If conversing with someone he seems to know well, then he is more direct and to the fact
+  - Harrison REALLY does not want anyone to know he is using an assistant, so you should try not to sound too much like an assistant and rather sound like Harrison
+  - When Harrison is casual, he generally does not include any greetings or sign offs, and just directly says his message
+
+triage_no: |
+  - Automated emails from services that are spamming Harrison
+  - Cold outreach from vendors - this happens a lot as people try to sell Harrison things. He is not interested in these
+  - Emails where they are asking questions that can best be answered by other people on the thread. \
+  Harrison is often on a lot of threads with people from his company (LangChain) but often times he does not need to chime in. \
+  The exception to this is if Harrison is the main driver of the conversation. \
+  You can usually tell this by whether Harrison was the one who sent the last email
+  - Generally do not need to see emails from Ramp, Rewatch, Stripe
+  - Notifications of comments on Google Docs
+  - Automated calendar invitations
+triage_notify: |
+  - Google docs that were shared with him (do NOT notify him on comments, just net new ones)
+  - Docusign things that needs to sign. These are using from Docusign and start with "Complete with Docusign". \
+  Note: if the Docusign is already signed, you do NOT need to notify him. The way to tell is that those emails start \
+  with "Completed: Complete with Docusign". Note the "Completed". Do not notify him if "Completed", only if still needs to be completed.
+  - Anything that is pretty technically detailed about LangChain. Harrison sometimes gets asked questions about LangChain, \
+  while he may not always respond to those he likes getting notified about them
+  - Emails where there is a clear action item from Harrison based on a previous conversation, like adding people to a slack channel
+triage_email: |
+  - Emails from clients that explicitly ask Harrison a question
+  - Emails from clients where someone else has scheduled a meeting for Harrison, and Harrison has not already chimed in to express his excitement
+  - Emails from clients or potential customers where Harrison is the main driver of the conversation
+  - Emails from other LangChain team members that explicitly ask Harrison a question
+  - Emails where Harrison has gotten added to a thread with a customer and he hasn't yet said hello
+  - Emails where Harrison is introducing two people to each other. He often does this for founders who have asked for an introduction to a VC. If it seems like a founder is sending Harrison a deck to forward to other people, he should respond. If Harrison has already introduced the two parties, he should not respond unless they explicitly ask him a question.
+  - Email from clients where they are trying to set up a time to meet
+  - Any direct emails from Harrison's lawyers (Goodwin Law)
+  - Any direct emails related to the LangChain board
+  - Emails where LangChain is winning an award/being invited to a legitimate event
+  - Emails where it seems like Harrison has a pre-existing relationship with the sender. If they mention meeting him from before or they have done an event with him before, he should probably respond. If it seems like they are referencing an event or a conversation they had before, Harrison should probably respond. 
+  - Emails from friends - even these don't ask an explicit question, if it seems like something a good friend would respond to, Harrison should do so.
+
+  Reminder - automated calendar invites do NOT count as real emails
+memory: true
+
+
+
+================================================
+FILE: eaia/main/draft_response.py
+================================================
+"""Core agent responsible for drafting email."""
+
+from langchain_core.runnables import RunnableConfig
+from langchain_openai import ChatOpenAI
+from langgraph.store.base import BaseStore
+
+from eaia.schemas import (
+    State,
+    NewEmailDraft,
+    ResponseEmailDraft,
+    Question,
+    MeetingAssistant,
+    SendCalendarInvite,
+    Ignore,
+    email_template,
+)
+from eaia.main.config import get_config
+
+EMAIL_WRITING_INSTRUCTIONS = """You are {full_name}'s executive assistant. You are a top-notch executive assistant who cares about {name} performing as well as possible.
+
+{background}
+
+{name} gets lots of emails. This has been determined to be an email that is worth {name} responding to.
+
+Your job is to help {name} respond. You can do this in a few ways.
+
+# Using the `Question` tool
+
+First, get all required information to respond. You can use the Question tool to ask {name} for information if you do not know it.
+
+When drafting emails (either to response on thread or , if you do not have all the information needed to respond in the most appropriate way, call the `Question` tool until you have that information. Do not put placeholders for names or emails or information - get that directly from {name}!
+You can get this information by calling `Question`. Again - do not, under any circumstances, draft an email with placeholders or you will get fired.
+
+If people ask {name} if he can attend some event or meet with them, do not agree to do so unless he has explicitly okayed it!
+
+Remember, if you don't have enough information to respond, you can ask {name} for more information. Use the `Question` tool for this.
+Never just make things up! So if you do not know something, or don't know what {name} would prefer, don't hesitate to ask him.
+Never use the Question tool to ask {name} when they are free - instead, just ask the MeetingAssistant
+
+# Using the `ResponseEmailDraft` tool
+
+Next, if you have enough information to respond, you can draft an email for {name}. Use the `ResponseEmailDraft` tool for this.
+
+ALWAYS draft emails as if they are coming from {name}. Never draft them as "{name}'s assistant" or someone else.
+
+When adding new recipients - only do that if {name} explicitly asks for it and you know their emails. If you don't know the right emails to add in, then ask {name}. You do NOT need to add in people who are already on the email! Do NOT make up emails.
+
+{response_preferences}
+
+# Using the `SendCalendarInvite` tool
+
+Sometimes you will want to schedule a calendar event. You can do this with the `SendCalendarInvite` tool.
+If you are sure that {name} would want to schedule a meeting, and you know that {name}'s calendar is free, you can schedule a meeting by calling the `SendCalendarInvite` tool. {name} trusts you to pick good times for meetings. You shouldn't ask {name} for what meeting times are preferred, but you should make sure he wants to meet. 
+
+{schedule_preferences}
+
+# Using the `NewEmailDraft` tool
+
+Sometimes you will need to start a new email thread. If you have all the necessary information for this, use the `NewEmailDraft` tool for this.
+
+If {name} asks someone if it's okay to introduce them, and they respond yes, you should draft a new email with that introduction.
+
+# Using the `MeetingAssistant` tool
+
+If the email is from a legitimate person and is working to schedule a meeting, call the MeetingAssistant to get a response from a specialist!
+You should not ask {name} for meeting times (unless the Meeting Assistant is unable to find any).
+If they ask for times from {name}, first ask the MeetingAssistant by calling the `MeetingAssistant` tool.
+Note that you should only call this if working to schedule a meeting - if a meeting has already been scheduled, and they are referencing it, no need to call this.
+
+# Background information: information you may find helpful when responding to emails or deciding what to do.
+
+{random_preferences}"""
+draft_prompt = """{instructions}
+
+Remember to call a tool correctly! Use the specified names exactly - not add `functions::` to the start. Pass all required arguments.
+
+Here is the email thread. Note that this is the full email thread. Pay special attention to the most recent email.
+
+{email}"""
+
+
+async def draft_response(state: State, config: RunnableConfig, store: BaseStore):
+    """Write an email to a customer."""
+    model = config["configurable"].get("model", "gpt-4o")
+    llm = ChatOpenAI(
+        model=model,
+        temperature=0,
+        parallel_tool_calls=False,
+        tool_choice="required",
+    )
+    tools = [
+        NewEmailDraft,
+        ResponseEmailDraft,
+        Question,
+        MeetingAssistant,
+        SendCalendarInvite,
+    ]
+    messages = state.get("messages") or []
+    if len(messages) > 0:
+        tools.append(Ignore)
+    prompt_config = get_config(config)
+    namespace = (config["configurable"].get("assistant_id", "default"),)
+    key = "schedule_preferences"
+    result = await store.aget(namespace, key)
+    if result and "data" in result.value:
+        schedule_preferences = result.value["data"]
+    else:
+        await store.aput(namespace, key, {"data": prompt_config["schedule_preferences"]})
+        schedule_preferences = prompt_config["schedule_preferences"]
+    key = "random_preferences"
+    result = await store.aget(namespace, key)
+    if result and "data" in result.value:
+        random_preferences = result.value["data"]
+    else:
+        await store.aput(
+            namespace, key, {"data": prompt_config["background_preferences"]}
+        )
+        random_preferences = prompt_config["background_preferences"]
+    key = "response_preferences"
+    result = await store.aget(namespace, key)
+    if result and "data" in result.value:
+        response_preferences = result.value["data"]
+    else:
+        await store.aput(namespace, key, {"data": prompt_config["response_preferences"]})
+        response_preferences = prompt_config["response_preferences"]
+    _prompt = EMAIL_WRITING_INSTRUCTIONS.format(
+        schedule_preferences=schedule_preferences,
+        random_preferences=random_preferences,
+        response_preferences=response_preferences,
+        name=prompt_config["name"],
+        full_name=prompt_config["full_name"],
+        background=prompt_config["background"],
+    )
+    input_message = draft_prompt.format(
+        instructions=_prompt,
+        email=email_template.format(
+            email_thread=state["email"]["page_content"],
+            author=state["email"]["from_email"],
+            subject=state["email"]["subject"],
+            to=state["email"].get("to_email", ""),
+        ),
+    )
+
+    model = llm.bind_tools(tools)
+    messages = [{"role": "user", "content": input_message}] + messages
+    i = 0
+    while i < 5:
+        response = await model.ainvoke(messages)
+        if len(response.tool_calls) != 1:
+            i += 1
+            messages += [{"role": "user", "content": "Please call a valid tool call."}]
+        else:
+            break
+    return {"draft": response, "messages": [response]}
+
+
+
+================================================
+FILE: eaia/main/fewshot.py
+================================================
+"""Fetches few shot examples for triage step."""
+
+from langgraph.store.base import BaseStore
+from eaia.schemas import EmailData
+
+
+template = """Email Subject: {subject}
+Email From: {from_email}
+Email To: {to_email}
+Email Content: 
+```
+{content}
+```
+> Triage Result: {result}"""
+
+
+def format_similar_examples_store(examples):
+    strs = ["Here are some previous examples:"]
+    for eg in examples:
+        strs.append(
+            template.format(
+                subject=eg.value["input"]["subject"],
+                to_email=eg.value["input"]["to_email"],
+                from_email=eg.value["input"]["from_email"],
+                content=eg.value["input"]["page_content"][:400],
+                result=eg.value["triage"],
+            )
+        )
+    return "\n\n------------\n\n".join(strs)
+
+
+async def get_few_shot_examples(email: EmailData, store: BaseStore, config):
+    namespace = (
+        config["configurable"].get("assistant_id", "default"),
+        "triage_examples",
+    )
+    result = await store.asearch(namespace, query=str({"input": email}), limit=5)
+    if result is None:
+        return ""
+    return format_similar_examples_store(result)
+
+
+
+================================================
+FILE: eaia/main/find_meeting_time.py
+================================================
+"""Agent responsible for managing calendar and finding meeting time."""
+
+from datetime import datetime
+
+from langchain_core.messages import ToolMessage
+from langchain_core.runnables import RunnableConfig
+from langchain_openai import ChatOpenAI
+from langgraph.prebuilt import create_react_agent
+
+from eaia.gmail import get_events_for_days
+from eaia.schemas import State
+
+from eaia.main.config import get_config
+
+meeting_prompts = """You are {full_name}'s executive assistant. You are a top-notch executive assistant who cares about {name} performing as well as possible.
+
+The below email thread has been flagged as requesting time to meet. Your SOLE purpose is to survey {name}'s calendar and schedule meetings for {name}.
+
+If the email is suggesting some specific times, then check if {name} is available then.
+
+If the emails asks for time, use the tool to find valid times to meet (always suggest them in {tz}).
+
+If they express preferences in their email thread, try to abide by those. Do not suggest times they have already said won't work.
+
+Try to send available spots in as big of chunks as possible. For example, if {name} has 1pm-3pm open, send:
+
+```
+1pm-3pm
+```
+
+NOT
+
+```
+1-1:30pm
+1:30-2pm
+2-2:30pm
+2:30-3pm
+```
+
+Do not send time slots less than 15 minutes in length.
+
+Your response should be extremely high density. You should not respond directly to the email, but rather just say factually whether {name} is free, and what time slots. Do not give any extra commentary. Examples of good responses include:
+
+<examples>
+
+Example 1:
+
+> {name} is free 9:30-10
+
+Example 2:
+
+> {name} is not free then. But he is free at 10:30
+
+</examples>
+
+The current data is {current_date}
+
+Here is the email thread:
+
+From: {author}
+Subject: {subject}
+
+{email_thread}"""
+
+
+async def find_meeting_time(state: State, config: RunnableConfig):
+    """Write an email to a customer."""
+    model = config["configurable"].get("model", "gpt-4o")
+    llm = ChatOpenAI(model=model, temperature=0)
+    agent = create_react_agent(llm, [get_events_for_days])
+    current_date = datetime.now()
+    prompt_config = get_config(config)
+    input_message = meeting_prompts.format(
+        email_thread=state["email"]["page_content"],
+        author=state["email"]["from_email"],
+        subject=state["email"]["subject"],
+        current_date=current_date.strftime("%A %B %d, %Y"),
+        name=prompt_config["name"],
+        full_name=prompt_config["full_name"],
+        tz=prompt_config["timezone"],
+    )
+    messages = state.get("messages") or []
+    # we do this because theres currently a tool call just for routing
+    messages = messages[:-1]
+    result = await agent.ainvoke(
+        {"messages": [{"role": "user", "content": input_message}] + messages}
+    )
+    prediction = state["messages"][-1]
+    tool_call = prediction.tool_calls[0]
+    return {
+        "messages": [
+            ToolMessage(
+                content=result["messages"][-1].content, tool_call_id=tool_call["id"]
+            )
+        ]
+    }
+
+
+
+================================================
+FILE: eaia/main/graph.py
+================================================
+"""Overall agent."""
+import json
+from typing import TypedDict, Literal
+from langgraph.graph import END, StateGraph
+from langchain_core.messages import HumanMessage
+from eaia.main.triage import (
+    triage_input,
+)
+from eaia.main.draft_response import draft_response
+from eaia.main.find_meeting_time import find_meeting_time
+from eaia.main.rewrite import rewrite
+from eaia.main.config import get_config
+from langchain_core.messages import ToolMessage
+from eaia.main.human_inbox import (
+    send_message,
+    send_email_draft,
+    notify,
+    send_cal_invite,
+)
+from eaia.gmail import (
+    send_email,
+    mark_as_read,
+    send_calendar_invite,
+)
+from eaia.schemas import (
+    State,
+)
+
+
+def route_after_triage(
+    state: State,
+) -> Literal["draft_response", "mark_as_read_node", "notify"]:
+    if state["triage"].response == "email":
+        return "draft_response"
+    elif state["triage"].response == "no":
+        return "mark_as_read_node"
+    elif state["triage"].response == "notify":
+        return "notify"
+    elif state["triage"].response == "question":
+        return "draft_response"
+    else:
+        raise ValueError
+
+
+def take_action(
+    state: State,
+) -> Literal[
+    "send_message",
+    "rewrite",
+    "mark_as_read_node",
+    "find_meeting_time",
+    "send_cal_invite",
+    "bad_tool_name",
+]:
+    prediction = state["messages"][-1]
+    if len(prediction.tool_calls) != 1:
+        raise ValueError
+    tool_call = prediction.tool_calls[0]
+    if tool_call["name"] == "Question":
+        return "send_message"
+    elif tool_call["name"] == "ResponseEmailDraft":
+        return "rewrite"
+    elif tool_call["name"] == "Ignore":
+        return "mark_as_read_node"
+    elif tool_call["name"] == "MeetingAssistant":
+        return "find_meeting_time"
+    elif tool_call["name"] == "SendCalendarInvite":
+        return "send_cal_invite"
+    else:
+        return "bad_tool_name"
+
+
+def bad_tool_name(state: State):
+    tool_call = state["messages"][-1].tool_calls[0]
+    message = f"Could not find tool with name `{tool_call['name']}`. Make sure you are calling one of the allowed tools!"
+    last_message = state["messages"][-1]
+    last_message.tool_calls[0]["name"] = last_message.tool_calls[0]["name"].replace(
+        ":", ""
+    )
+    return {
+        "messages": [
+            last_message,
+            ToolMessage(content=message, tool_call_id=tool_call["id"]),
+        ]
+    }
+
+
+def enter_after_human(
+    state,
+) -> Literal[
+    "mark_as_read_node", "draft_response", "send_email_node", "send_cal_invite_node"
+]:
+    messages = state.get("messages") or []
+    if len(messages) == 0:
+        if state["triage"].response == "notify":
+            return "mark_as_read_node"
+        raise ValueError
+    else:
+        if isinstance(messages[-1], (ToolMessage, HumanMessage)):
+            return "draft_response"
+        else:
+            execute = messages[-1].tool_calls[0]
+            if execute["name"] == "ResponseEmailDraft":
+                return "send_email_node"
+            elif execute["name"] == "SendCalendarInvite":
+                return "send_cal_invite_node"
+            elif execute["name"] == "Ignore":
+                return "mark_as_read_node"
+            elif execute["name"] == "Question":
+                return "draft_response"
+            else:
+                raise ValueError
+
+
+def send_cal_invite_node(state, config):
+    tool_call = state["messages"][-1].tool_calls[0]
+    _args = tool_call["args"]
+    email = get_config(config)["email"]
+    try:
+        send_calendar_invite(
+            _args["emails"],
+            _args["title"],
+            _args["start_time"],
+            _args["end_time"],
+            email,
+        )
+        message = "Sent calendar invite!"
+    except Exception as e:
+        message = f"Got the following error when sending a calendar invite: {e}"
+    return {"messages": [ToolMessage(content=message, tool_call_id=tool_call["id"])]}
+
+
+def send_email_node(state, config):
+    tool_call = state["messages"][-1].tool_calls[0]
+    _args = tool_call["args"]
+    email = get_config(config)["email"]
+    new_receipients = _args["new_recipients"]
+    if isinstance(new_receipients, str):
+        new_receipients = json.loads(new_receipients)
+    send_email(
+        state["email"]["id"],
+        _args["content"],
+        email,
+        addn_receipients=new_receipients,
+    )
+
+
+def mark_as_read_node(state):
+    mark_as_read(state["email"]["id"])
+
+
+def human_node(state: State):
+    pass
+
+
+class ConfigSchema(TypedDict):
+    db_id: int
+    model: str
+
+
+graph_builder = StateGraph(State, config_schema=ConfigSchema)
+graph_builder.add_node(human_node)
+graph_builder.add_node(triage_input)
+graph_builder.add_node(draft_response)
+graph_builder.add_node(send_message)
+graph_builder.add_node(rewrite)
+graph_builder.add_node(mark_as_read_node)
+graph_builder.add_node(send_email_draft)
+graph_builder.add_node(send_email_node)
+graph_builder.add_node(bad_tool_name)
+graph_builder.add_node(notify)
+graph_builder.add_node(send_cal_invite_node)
+graph_builder.add_node(send_cal_invite)
+graph_builder.add_conditional_edges("triage_input", route_after_triage)
+graph_builder.set_entry_point("triage_input")
+graph_builder.add_conditional_edges("draft_response", take_action)
+graph_builder.add_edge("send_message", "human_node")
+graph_builder.add_edge("send_cal_invite", "human_node")
+graph_builder.add_node(find_meeting_time)
+graph_builder.add_edge("find_meeting_time", "draft_response")
+graph_builder.add_edge("bad_tool_name", "draft_response")
+graph_builder.add_edge("send_cal_invite_node", "draft_response")
+graph_builder.add_edge("send_email_node", "mark_as_read_node")
+graph_builder.add_edge("rewrite", "send_email_draft")
+graph_builder.add_edge("send_email_draft", "human_node")
+graph_builder.add_edge("mark_as_read_node", END)
+graph_builder.add_edge("notify", "human_node")
+graph_builder.add_conditional_edges("human_node", enter_after_human)
+graph = graph_builder.compile()
+
+
+
+================================================
+FILE: eaia/main/human_inbox.py
+================================================
+"""Parts of the graph that require human input."""
+
+import uuid
+
+from langsmith import traceable
+from eaia.schemas import State, email_template
+from langgraph.types import interrupt
+from langgraph.store.base import BaseStore
+from typing import TypedDict, Literal, Union, Optional
+from langgraph_sdk import get_client
+from eaia.main.config import get_config
+
+LGC = get_client()
+
+
+class HumanInterruptConfig(TypedDict):
+    allow_ignore: bool
+    allow_respond: bool
+    allow_edit: bool
+    allow_accept: bool
+
+
+class ActionRequest(TypedDict):
+    action: str
+    args: dict
+
+
+class HumanInterrupt(TypedDict):
+    action_request: ActionRequest
+    config: HumanInterruptConfig
+    description: Optional[str]
+
+
+class HumanResponse(TypedDict):
+    type: Literal["accept", "ignore", "response", "edit"]
+    args: Union[None, str, ActionRequest]
+
+
+TEMPLATE = """# {subject}
+
+[Click here to view the email]({url})
+
+**To**: {to}
+**From**: {_from}
+
+{page_content}
+"""
+
+
+def _generate_email_markdown(state: State):
+    contents = state["email"]
+    return TEMPLATE.format(
+        subject=contents["subject"],
+        url=f"https://mail.google.com/mail/u/0/#inbox/{contents['id']}",
+        to=contents["to_email"],
+        _from=contents["from_email"],
+        page_content=contents["page_content"],
+    )
+
+
+async def save_email(state: State, config, store: BaseStore, status: str):
+    namespace = (
+        config["configurable"].get("assistant_id", "default"),
+        "triage_examples",
+    )
+    key = state["email"]["id"]
+    response = await store.aget(namespace, key)
+    if response is None:
+        data = {"input": state["email"], "triage": status}
+        await store.aput(namespace, str(uuid.uuid4()), data)
+
+
+@traceable
+async def send_message(state: State, config, store):
+    prompt_config = get_config(config)
+    memory = prompt_config["memory"]
+    user = prompt_config['name']
+    tool_call = state["messages"][-1].tool_calls[0]
+    request: HumanInterrupt = {
+        "action_request": {"action": tool_call["name"], "args": tool_call["args"]},
+        "config": {
+            "allow_ignore": True,
+            "allow_respond": True,
+            "allow_edit": False,
+            "allow_accept": False,
+        },
+        "description": _generate_email_markdown(state),
+    }
+    response = interrupt([request])[0]
+    _email_template = email_template.format(
+        email_thread=state["email"]["page_content"],
+        author=state["email"]["from_email"],
+        subject=state["email"]["subject"],
+        to=state["email"].get("to_email", ""),
+    )
+    if response["type"] == "response":
+        msg = {
+            "type": "tool",
+            "name": tool_call["name"],
+            "content": response["args"],
+            "tool_call_id": tool_call["id"],
+        }
+        if memory:
+            await save_email(state, config, store, "email")
+            rewrite_state = {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": f"Draft a response to this email:\n\n{_email_template}",
+                    }
+                ]
+                + state["messages"],
+                "feedback": f"{user} responded in this way: {response['args']}",
+                "prompt_types": ["background"],
+                "assistant_key": config["configurable"].get("assistant_id", "default"),
+            }
+            await LGC.runs.create(None, "multi_reflection_graph", input=rewrite_state)
+    elif response["type"] == "ignore":
+        msg = {
+            "role": "assistant",
+            "content": "",
+            "id": state["messages"][-1].id,
+            "tool_calls": [
+                {
+                    "id": tool_call["id"],
+                    "name": "Ignore",
+                    "args": {"ignore": True},
+                }
+            ],
+        }
+        if memory:
+            await save_email(state, config, store, "no")
+    else:
+        raise ValueError(f"Unexpected response: {response}")
+
+    return {"messages": [msg]}
+
+
+@traceable
+async def send_email_draft(state: State, config, store):
+    prompt_config = get_config(config)
+    memory = prompt_config["memory"]
+    user = prompt_config['name']
+    tool_call = state["messages"][-1].tool_calls[0]
+    request: HumanInterrupt = {
+        "action_request": {"action": tool_call["name"], "args": tool_call["args"]},
+        "config": {
+            "allow_ignore": True,
+            "allow_respond": True,
+            "allow_edit": True,
+            "allow_accept": True,
+        },
+        "description": _generate_email_markdown(state),
+    }
+    response = interrupt([request])[0]
+    _email_template = email_template.format(
+        email_thread=state["email"]["page_content"],
+        author=state["email"]["from_email"],
+        subject=state["email"]["subject"],
+        to=state["email"].get("to_email", ""),
+    )
+    if response["type"] == "response":
+        msg = {
+            "type": "tool",
+            "name": tool_call["name"],
+            "content": f"Error, {user} interrupted and gave this feedback: {response['args']}",
+            "tool_call_id": tool_call["id"],
+        }
+        if memory:
+            await save_email(state, config, store, "email")
+            rewrite_state = {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": f"Draft a response to this email:\n\n{_email_template}",
+                    }
+                ]
+                + state["messages"],
+                "feedback": f"Error, {user} interrupted and gave this feedback: {response['args']}",
+                "prompt_types": ["tone", "email", "background", "calendar"],
+                "assistant_key": config["configurable"].get("assistant_id", "default"),
+            }
+            await LGC.runs.create(None, "multi_reflection_graph", input=rewrite_state)
+    elif response["type"] == "ignore":
+        msg = {
+            "role": "assistant",
+            "content": "",
+            "id": state["messages"][-1].id,
+            "tool_calls": [
+                {
+                    "id": tool_call["id"],
+                    "name": "Ignore",
+                    "args": {"ignore": True},
+                }
+            ],
+        }
+        if memory:
+            await save_email(state, config, store, "no")
+    elif response["type"] == "edit":
+        msg = {
+            "role": "assistant",
+            "content": state["messages"][-1].content,
+            "id": state["messages"][-1].id,
+            "tool_calls": [
+                {
+                    "id": tool_call["id"],
+                    "name": tool_call["name"],
+                    "args": response["args"]["args"],
+                }
+            ],
+        }
+        if memory:
+            corrected = response["args"]["args"]["content"]
+            await save_email(state, config, store, "email")
+            rewrite_state = {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": f"Draft a response to this email:\n\n{_email_template}",
+                    },
+                    {
+                        "role": "assistant",
+                        "content": state["messages"][-1].tool_calls[0]["args"]["content"],
+                    },
+                ],
+                "feedback": f"A better response would have been: {corrected}",
+                "prompt_types": ["tone", "email", "background", "calendar"],
+                "assistant_key": config["configurable"].get("assistant_id", "default"),
+            }
+            await LGC.runs.create(None, "multi_reflection_graph", input=rewrite_state)
+    elif response["type"] == "accept":
+        if memory:
+            await save_email(state, config, store, "email")
+        return None
+    else:
+        raise ValueError(f"Unexpected response: {response}")
+    return {"messages": [msg]}
+
+
+@traceable
+async def notify(state: State, config, store):
+    prompt_config = get_config(config)
+    memory = prompt_config["memory"]
+    user = prompt_config['name']
+    request: HumanInterrupt = {
+        "action_request": {"action": "Notify", "args": {}},
+        "config": {
+            "allow_ignore": True,
+            "allow_respond": True,
+            "allow_edit": False,
+            "allow_accept": False,
+        },
+        "description": _generate_email_markdown(state),
+    }
+    response = interrupt([request])[0]
+    _email_template = email_template.format(
+        email_thread=state["email"]["page_content"],
+        author=state["email"]["from_email"],
+        subject=state["email"]["subject"],
+        to=state["email"].get("to_email", ""),
+    )
+    if response["type"] == "response":
+        msg = {"type": "user", "content": response["args"]}
+        if memory:
+            await save_email(state, config, store, "email")
+            rewrite_state = {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": f"Draft a response to this email:\n\n{_email_template}",
+                    }
+                ]
+                + state["messages"],
+                "feedback": f"{user} gave these instructions: {response['args']}",
+                "prompt_types": ["email", "background", "calendar"],
+                "assistant_key": config["configurable"].get("assistant_id", "default"),
+            }
+            await LGC.runs.create(None, "multi_reflection_graph", input=rewrite_state)
+    elif response["type"] == "ignore":
+        msg = {
+            "role": "assistant",
+            "content": "",
+            "id": str(uuid.uuid4()),
+            "tool_calls": [
+                {
+                    "id": "foo",
+                    "name": "Ignore",
+                    "args": {"ignore": True},
+                }
+            ],
+        }
+        if memory:
+            await save_email(state, config, store, "no")
+    else:
+        raise ValueError(f"Unexpected response: {response}")
+
+    return {"messages": [msg]}
+
+
+@traceable
+async def send_cal_invite(state: State, config, store):
+    prompt_config = get_config(config)
+    memory = prompt_config["memory"]
+    user = prompt_config['name']
+    tool_call = state["messages"][-1].tool_calls[0]
+    request: HumanInterrupt = {
+        "action_request": {"action": tool_call["name"], "args": tool_call["args"]},
+        "config": {
+            "allow_ignore": True,
+            "allow_respond": True,
+            "allow_edit": True,
+            "allow_accept": True,
+        },
+        "description": _generate_email_markdown(state),
+    }
+    response = interrupt([request])[0]
+    _email_template = email_template.format(
+        email_thread=state["email"]["page_content"],
+        author=state["email"]["from_email"],
+        subject=state["email"]["subject"],
+        to=state["email"].get("to_email", ""),
+    )
+    if response["type"] == "response":
+        msg = {
+            "type": "tool",
+            "name": tool_call["name"],
+            "content": f"Error, {user} interrupted and gave this feedback: {response['args']}",
+            "tool_call_id": tool_call["id"],
+        }
+        if memory:
+            await save_email(state, config, store, "email")
+            rewrite_state = {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": f"Draft a response to this email:\n\n{_email_template}",
+                    }
+                ]
+                + state["messages"],
+                "feedback": f"{user} interrupted gave these instructions: {response['args']}",
+                "prompt_types": ["email", "background", "calendar"],
+                "assistant_key": config["configurable"].get("assistant_id", "default"),
+            }
+            await LGC.runs.create(None, "multi_reflection_graph", input=rewrite_state)
+    elif response["type"] == "ignore":
+        msg = {
+            "role": "assistant",
+            "content": "",
+            "id": state["messages"][-1].id,
+            "tool_calls": [
+                {
+                    "id": tool_call["id"],
+                    "name": "Ignore",
+                    "args": {"ignore": True},
+                }
+            ],
+        }
+        if memory:
+            await save_email(state, config, store, "no")
+    elif response["type"] == "edit":
+        msg = {
+            "role": "assistant",
+            "content": state["messages"][-1].content,
+            "id": state["messages"][-1].id,
+            "tool_calls": [
+                {
+                    "id": tool_call["id"],
+                    "name": tool_call["name"],
+                    "args": response["args"]["args"],
+                }
+            ],
+        }
+        if memory:
+            await save_email(state, config, store, "email")
+            rewrite_state = {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": f"Draft a response to this email:\n\n{_email_template}",
+                    }
+                ]
+                + state["messages"],
+                "feedback": f"{user} interrupted gave these instructions: {response['args']}",
+                "prompt_types": ["email", "background", "calendar"],
+                "assistant_key": config["configurable"].get("assistant_id", "default"),
+            }
+            await LGC.runs.create(None, "multi_reflection_graph", input=rewrite_state)
+    elif response["type"] == "accept":
+        if memory:
+            await save_email(state, config, store, "email")
+        return None
+    else:
+        raise ValueError(f"Unexpected response: {response}")
+
+    return {"messages": [msg]}
+
+
+
+================================================
+FILE: eaia/main/rewrite.py
+================================================
+"""Agent responsible for rewriting the email in a better tone."""
+
+from langchain_openai import ChatOpenAI
+
+from eaia.schemas import State, ReWriteEmail
+
+from eaia.main.config import get_config
+
+
+rewrite_prompt = """You job is to rewrite an email draft to sound more like {name}.
+
+{name}'s assistant just drafted an email. It is factually correct, but it may not sound like {name}. \
+Your job is to rewrite the email keeping the information the same (do not add anything that is made up!) \
+but adjusting the tone. 
+
+{instructions}
+
+Here is the assistant's current draft:
+
+<draft>
+{draft}
+</draft>
+
+Here is the email thread:
+
+From: {author}
+To: {to}
+Subject: {subject}
+
+{email_thread}"""
+
+
+async def rewrite(state: State, config, store):
+    model = config["configurable"].get("model", "gpt-4o")
+    llm = ChatOpenAI(model=model, temperature=0)
+    prev_message = state["messages"][-1]
+    draft = prev_message.tool_calls[0]["args"]["content"]
+    namespace = (config["configurable"].get("assistant_id", "default"),)
+    result = await store.aget(namespace, "rewrite_instructions")
+    prompt_config = get_config(config)
+    if result and "data" in result.value:
+        _prompt = result.value["data"]
+    else:
+        await store.aput(
+            namespace,
+            "rewrite_instructions",
+            {"data": prompt_config["rewrite_preferences"]},
+        )
+        _prompt = prompt_config["rewrite_preferences"]
+    input_message = rewrite_prompt.format(
+        email_thread=state["email"]["page_content"],
+        author=state["email"]["from_email"],
+        subject=state["email"]["subject"],
+        to=state["email"]["to_email"],
+        draft=draft,
+        instructions=_prompt,
+        name=prompt_config["name"],
+    )
+    model = llm.with_structured_output(ReWriteEmail).bind(
+        tool_choice={"type": "function", "function": {"name": "ReWriteEmail"}}
+    )
+    response = await model.ainvoke(input_message)
+    tool_calls = [
+        {
+            "id": prev_message.tool_calls[0]["id"],
+            "name": prev_message.tool_calls[0]["name"],
+            "args": {
+                **prev_message.tool_calls[0]["args"],
+                **{"content": response.rewritten_content},
+            },
+        }
+    ]
+    prev_message = {
+        "role": "assistant",
+        "id": prev_message.id,
+        "content": prev_message.content,
+        "tool_calls": tool_calls,
+    }
+    return {"messages": [prev_message]}
+
+
+
+================================================
+FILE: eaia/main/triage.py
+================================================
+"""Agent responsible for triaging the email, can either ignore it, try to respond, or notify user."""
+
+from langchain_core.runnables import RunnableConfig
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import RemoveMessage
+from langgraph.store.base import BaseStore
+
+from eaia.schemas import (
+    State,
+    RespondTo,
+)
+from eaia.main.fewshot import get_few_shot_examples
+from eaia.main.config import get_config
+
+
+triage_prompt = """You are {full_name}'s executive assistant. You are a top-notch executive assistant who cares about {name} performing as well as possible.
+
+{background}. 
+
+{name} gets lots of emails. Your job is to categorize the below email to see whether is it worth responding to.
+
+Emails that are not worth responding to:
+{triage_no}
+
+Emails that are worth responding to:
+{triage_email}
+
+There are also other things that {name} should know about, but don't require an email response. For these, you should notify {name} (using the `notify` response). Examples of this include:
+{triage_notify}
+
+For emails not worth responding to, respond `no`. For something where {name} should respond over email, respond `email`. If it's important to notify {name}, but no email is required, respond `notify`. \
+
+If unsure, opt to `notify` {name} - you will learn from this in the future.
+
+{fewshotexamples}
+
+Please determine how to handle the below email thread:
+
+From: {author}
+To: {to}
+Subject: {subject}
+
+{email_thread}"""
+
+
+async def triage_input(state: State, config: RunnableConfig, store: BaseStore):
+    model = config["configurable"].get("model", "gpt-4o")
+    llm = ChatOpenAI(model=model, temperature=0)
+    examples = await get_few_shot_examples(state["email"], store, config)
+    prompt_config = get_config(config)
+    input_message = triage_prompt.format(
+        email_thread=state["email"]["page_content"],
+        author=state["email"]["from_email"],
+        to=state["email"].get("to_email", ""),
+        subject=state["email"]["subject"],
+        fewshotexamples=examples,
+        name=prompt_config["name"],
+        full_name=prompt_config["full_name"],
+        background=prompt_config["background"],
+        triage_no=prompt_config["triage_no"],
+        triage_email=prompt_config["triage_email"],
+        triage_notify=prompt_config["triage_notify"],
+    )
+    model = llm.with_structured_output(RespondTo).bind(
+        tool_choice={"type": "function", "function": {"name": "RespondTo"}}
+    )
+    response = await model.ainvoke(input_message)
+    if len(state["messages"]) > 0:
+        delete_messages = [RemoveMessage(id=m.id) for m in state["messages"]]
+        return {"triage": response, "messages": delete_messages}
+    else:
+        return {"triage": response}
+
+
+
+================================================
+FILE: scripts/run_ingest.py
+================================================
+import argparse
+import asyncio
+from typing import Optional
+from eaia.gmail import fetch_group_emails
+from eaia.main.config import get_config
+from langgraph_sdk import get_client
+import httpx
+import uuid
+import hashlib
+
+
+async def main(
+    url: Optional[str] = None,
+    minutes_since: int = 60,
+    gmail_token: Optional[str] = None,
+    gmail_secret: Optional[str] = None,
+    early: bool = True,
+    rerun: bool = False,
+    email: Optional[str] = None,
+):
+    if email is None:
+        email_address = get_config({"configurable": {}})["email"]
+    else:
+        email_address = email
+    if url is None:
+        client = get_client(url="http://127.0.0.1:2024")
+    else:
+        client = get_client(
+            url=url
+        )
+
+    # TODO: This really should be async
+    for email in fetch_group_emails(
+        email_address,
+        minutes_since=minutes_since,
+        gmail_token=gmail_token,
+        gmail_secret=gmail_secret,
+    ):
+        thread_id = str(
+            uuid.UUID(hex=hashlib.md5(email["thread_id"].encode("UTF-8")).hexdigest())
+        )
+        try:
+            thread_info = await client.threads.get(thread_id)
+        except httpx.HTTPStatusError as e:
+            if "user_respond" in email:
+                continue
+            if e.response.status_code == 404:
+                thread_info = await client.threads.create(thread_id=thread_id)
+            else:
+                raise e
+        if "user_respond" in email:
+            await client.threads.update_state(thread_id, None, as_node="__end__")
+            continue
+        recent_email = thread_info["metadata"].get("email_id")
+        if recent_email == email["id"]:
+            if early:
+                break
+            else:
+                if rerun:
+                    pass
+                else:
+                    continue
+        await client.threads.update(thread_id, metadata={"email_id": email["id"]})
+
+        await client.runs.create(
+            thread_id,
+            "main",
+            input={"email": email},
+            multitask_strategy="rollback",
+        )
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--url",
+        type=str,
+        default=None,
+        help="URL to run against",
+    )
+    parser.add_argument(
+        "--early",
+        type=int,
+        default=1,
+        help="whether to break when encountering seen emails",
+    )
+    parser.add_argument(
+        "--rerun",
+        type=int,
+        default=0,
+        help="whether to rerun all emails",
+    )
+    parser.add_argument(
+        "--minutes-since",
+        type=int,
+        default=60,
+        help="Only process emails that are less than this many minutes old.",
+    )
+    parser.add_argument(
+        "--gmail-token",
+        type=str,
+        default=None,
+        help="The token to use in communicating with the Gmail API.",
+    )
+    parser.add_argument(
+        "--gmail-secret",
+        type=str,
+        default=None,
+        help="The creds to use in communicating with the Gmail API.",
+    )
+    parser.add_argument(
+        "--email",
+        type=str,
+        default=None,
+        help="The email address to use",
+    )
+
+    args = parser.parse_args()
+    asyncio.run(
+        main(
+            url=args.url,
+            minutes_since=args.minutes_since,
+            gmail_token=args.gmail_token,
+            gmail_secret=args.gmail_secret,
+            early=bool(args.early),
+            rerun=bool(args.rerun),
+            email=args.email,
+        )
+    )
+
+
+
+================================================
+FILE: scripts/run_single.py
+================================================
+"""Script for testing a single run through an agent."""
+
+import asyncio
+from langgraph_sdk import get_client
+import uuid
+import hashlib
+
+from eaia.schemas import EmailData
+
+
+async def main():
+    client = get_client(url="http://127.0.0.1:2024")
+
+    email: EmailData = {
+        "from_email": "Test",
+        "to_email": "test@gmail.com",
+        "subject": "Re: Hello!",
+        "page_content": "Test",
+        "id": "123",
+        "thread_id": "123",
+        "send_time": "2024-12-26T13:13:41-08:00",
+    }
+
+    thread_id = str(
+        uuid.UUID(hex=hashlib.md5(email["thread_id"].encode("UTF-8")).hexdigest())
+    )
+    try:
+        await client.threads.delete(thread_id)
+    except:
+        pass
+    await client.threads.create(thread_id=thread_id)
+    await client.runs.create(
+        thread_id,
+        "main",
+        input={"email": email},
+        multitask_strategy="rollback",
+    )
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+
+
+================================================
+FILE: scripts/setup_cron.py
+================================================
+"""Set up a cron job that runs every 10 minutes to check for emails"""
+import argparse
+import asyncio
+from typing import Optional
+from langgraph_sdk import get_client
+
+
+async def main(
+    url: Optional[str] = None,
+    minutes_since: int = 60,
+):
+    if url is None:
+        client = get_client(url="http://127.0.0.1:2024")
+    else:
+        client = get_client(
+            url=url
+        )
+    await client.crons.create("cron", schedule="*/10 * * * *", input={"minutes_since": minutes_since})
+
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--url",
+        type=str,
+        default=None,
+        help="URL to run against",
+    )
+    parser.add_argument(
+        "--minutes-since",
+        type=int,
+        default=60,
+        help="Only process emails that are less than this many minutes old.",
+    )
+
+    args = parser.parse_args()
+    asyncio.run(
+        main(
+            url=args.url,
+            minutes_since=args.minutes_since,
+        )
+    )
+
+
+================================================
+FILE: scripts/setup_gmail.py
+================================================
+from eaia.gmail import get_credentials
+
+if __name__ == "__main__":
+    get_credentials()
+
+

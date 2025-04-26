@@ -1,0 +1,1601 @@
+Directory structure:
+└── langchain-ai-company-researcher/
+    ├── README.md
+    ├── langgraph.json
+    ├── pyproject.toml
+    ├── .env.example
+    ├── eval/
+    │   ├── __init__.py
+    │   ├── create_dataset.py
+    │   └── run_eval.py
+    └── src/
+        └── agent/
+            ├── __init__.py
+            ├── configuration.py
+            ├── graph.py
+            ├── prompts.py
+            ├── state.py
+            └── utils.py
+
+================================================
+FILE: README.md
+================================================
+# Company Researcher Agent
+
+Company Researcher Agent searches the web for information about a user-supplied company and returns it in a structured format defined by user-supplied JSON schema.
+
+## 🚀 Quickstart with LangGraph server
+
+Set API keys for the LLM of choice (Anthropic is set by default in `src/agent/graph.py`) and [Tavily API](https://tavily.com/):
+```
+cp .env.example .env
+```
+
+Clone the repository and launch the assistant [using the LangGraph server](https://langchain-ai.github.io/langgraph/cloud/reference/cli/#dev):
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+git clone https://github.com/langchain-ai/company-researcher.git
+cd company-researcher
+uvx --refresh --from "langgraph-cli[inmem]" --with-editable . --python 3.11 langgraph dev
+```
+
+![company_people_researcher](https://github.com/user-attachments/assets/f651d18c-8cf8-4dde-87cb-3daed59c7fa0)
+
+## How it works
+
+Company Researcher Agent follows a multi-step research and extraction workflow that separates web research from schema extraction, allowing for better resource management and comprehensive data collection:
+
+   - **Research Phase**: The system performs intelligent web research on the input company:
+     - Uses an LLM to generate targeted search queries based on the schema requirements (up to `max_search_queries`)
+     - Executes concurrent web searches via [Tavily API](https://tavily.com/), retrieving up to `max_search_results` results per query
+     - Takes structured research notes focused on schema-relevant information
+   - **Extraction Phase**: After research is complete, the system:
+     - Consolidates all research notes
+     - Uses an LLM to extract and format the information according to the user-defined schema
+     - Returns the structured data in the exact format requested
+   - **Reflection Phase**: The system evaluates the quality of extracted information:
+     - Analyzes completeness of required fields
+     - Identifies any missing or incomplete information
+     - Generates targeted follow-up search queries if needed
+     - Continues research until information is satisfactory or max reflection steps reached
+
+## Configuration
+
+The configuration for Company Researcher Agent is defined in the `src/agent/configuration.py` file: 
+* `max_search_queries`: int = 3 # Max search queries per company
+* `max_search_results`: int = 3 # Max search results per query
+* `max_reflection_steps`: int = 1 # Max reflection steps
+
+## Inputs 
+
+The user inputs are: 
+
+```
+* company: str - A company to research
+* extraction_schema: Optional[dict] - A JSON schema for the output
+* user_notes: Optional[str] - Any additional notes about the company from the user
+```
+
+If a schema is not provided, the system will use a default schema (`DEFAULT_EXTRACTION_SCHEMA`) defined in `src/agent/state.py`.
+
+### Schemas  
+
+> ⚠️ **WARNING:** JSON schemas require `title` and `description` fields for [extraction](https://python.langchain.com/docs/how_to/structured_output/#typeddict-or-json-schema).
+> ⚠️ **WARNING:** Avoid JSON objects with nesting; LLMs have challenges performing structured extraction from nested objects. See examples below that we have tested. 
+
+Here is an example schema that can be supplied to research a company:  
+
+* See the trace [here](https://smith.langchain.com/public/9f51fb8b-9486-4cd2-90ed-895f7932304e/r).
+
+    <details>
+    <summary>Example schema</summary>
+
+    ```
+    {
+        "title": "CompanyInfo",
+        "description": "Basic information about a company",
+        "type": "object",
+        "properties": {
+            "company_name": {
+                "type": "string",
+                "description": "Official name of the company"
+            },
+            "founding_year": {
+                "type": "integer",
+                "description": "Year the company was founded"
+            },
+            "founder_names": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Names of the founding team members"
+            },
+            "product_description": {
+                "type": "string",
+                "description": "Brief description of the company's main product or service"
+            },
+            "funding_summary": {
+                "type": "string",
+                "description": "Summary of the company's funding history"
+            }
+        },
+        "required": ["company_name"]
+    }
+    ```
+    </details>
+
+Here is an example of a more complex schema: 
+
+* See the reflections steps in the trace [here](https://smith.langchain.com/public/36f0d917-4edd-4d55-8dbf-6d6ec8a25754/r).
+
+    <details>
+    <summary>Example complex schema</summary>
+
+    ```
+    HARD_EXTRACTION_SCHEMA = {
+        "title": "CompanyInfo",
+        "description": "Comprehensive information about a company with confidence tracking",
+        "type": "object",
+        "properties": {
+            "company_name": {
+                "type": "string",
+                "description": "Official name of the company"
+            },
+            "verified_company": {
+                "type": "boolean",
+                "description": "Confirmation this is the intended company, not a similarly named one"
+            },
+            "similar_companies": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "List of similarly named companies that could be confused with the target"
+            },
+            "distinguishing_features": {
+                "type": "string",
+                "description": "Key features that distinguish this company from similarly named ones"
+            },
+            "key_executives": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "title": {"type": "string"},
+                        "verification_date": {"type": "string"},
+                        "confidence_level": {
+                            "type": "string",
+                            "enum": ["high", "medium", "low", "uncertain"]
+                        },
+                        "source": {"type": "string"}
+                    }
+                }
+            },
+            "org_chart_summary": {
+                "type": "string",
+                "description": "Brief description of organizational structure"
+            },
+            "leadership_caveats": {
+                "type": "string",
+                "description": "Any uncertainties or caveats about leadership information"
+            },
+            "main_products": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "description": {"type": "string"},
+                        "launch_date": {"type": "string"},
+                        "current_status": {"type": "string"}
+                    }
+                }
+            },
+            "services": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "description": {"type": "string"},
+                        "target_market": {"type": "string"}
+                    }
+                }
+            },
+            "recent_developments": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "date": {"type": "string"},
+                        "title": {"type": "string"},
+                        "summary": {"type": "string"},
+                        "source_url": {"type": "string"},
+                        "significance": {"type": "string"}
+                    }
+                },
+                "description": "Major news and developments from the last 6 months"
+            },
+            "historical_challenges": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "issue_type": {"type": "string"},
+                        "description": {"type": "string"},
+                        "date_period": {"type": "string"},
+                        "resolution": {"type": "string"},
+                        "current_status": {"type": "string"}
+                    }
+                },
+                "description": "Past challenges, issues, or controversies"
+            },
+            "sources": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string"},
+                        "title": {"type": "string"},
+                        "date_accessed": {"type": "string"},
+                        "information_type": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Types of information sourced from this link (e.g., leadership, products, news)"
+                        }
+                    }
+                }
+            },
+            "company_summary": {
+                "type": "string",
+                "description": "Concise, dense summary of the most important company information (max 250 words)"
+            }
+        },
+        "required": [
+            "company_name",
+            "verified_company",
+            "company_summary",
+            "key_executives",
+            "main_products",
+            "sources"
+        ]
+    }
+    ```
+    </details>
+
+
+## Evaluation
+
+Prior to engaging in any optimization, it is important to establish a baseline performance. This repository includes:
+
+1. A dataset consisting of a list of companies and the expected structured information to be extracted for each company.
+2. An evaluation script that can be used to evaluate the agent on this dataset.
+
+### Set up
+
+Make sure you have the LangSmith CLI installed:
+
+```shell
+pip install langsmith
+```
+
+And set your API key:
+
+```shell
+export LANGSMITH_API_KEY=<your_langsmith_api_key>
+export ANTHROPIC_API_KEY=<your_anthropic_api_key>
+```
+
+### Evaluation metric
+
+A score between 0 and 1 is assigned to each extraction result by an LLM model that acts
+as a judge.
+
+The model assigns the score based on how closely the extracted information matches the expected information.
+
+### Get the dataset
+
+Create a new dataset in LangSmith using the code in the `eval` folder:
+
+```shell
+python eval/create_dataset.py
+```
+
+### Run the evaluation
+
+To run the evaluation, you can use the `run_eval.py` script in the `eval` folder. This will create a new experiment in LangSmith for the dataset you created in the previous step.
+
+```shell
+python eval/run_eval.py --experiment-prefix "My custom prefix" --agent-url http://localhost:2024
+```
+
+
+
+================================================
+FILE: langgraph.json
+================================================
+{
+    "dockerfile_lines": [],
+    "graphs": {
+      "company_researcher": "./src/agent/graph.py:graph"
+    },
+    "python_version": "3.11",
+    "env": "./.env",
+    "dependencies": [
+      "."
+    ]
+  }
+
+
+================================================
+FILE: pyproject.toml
+================================================
+[project]
+name = "company-researcher"
+version = "0.0.1"
+description = "Researcher agent that searches information about a company and returns it in a structured format."
+authors = [
+    { name = "Vadym Barda" },
+    { name = "Lance Martin" }
+]
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+dependencies = [
+    "langgraph>=0.2.52",
+    "langsmith>=0.1.147",
+    "langchain-community>=0.3.8",
+    "tavily-python>=0.5.0",
+    "langchain_anthropic>=0.3.0",
+]
+
+[project.optional-dependencies]
+dev = ["mypy>=1.11.1", "ruff>=0.6.1"]
+
+[build-system]
+requires = ["setuptools>=73.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["agent"]
+[tool.setuptools.package-dir]
+"agent" = "src/agent"
+
+
+[tool.setuptools.package-data]
+"*" = ["py.typed"]
+
+[tool.ruff]
+lint.select = [
+    "E",    # pycodestyle
+    "F",    # pyflakes
+    "I",    # isort
+    "D",    # pydocstyle
+    "D401", # First line should be in imperative mood
+    "T201",
+    "UP",
+]
+lint.ignore = [
+    "UP006",
+    "UP007",
+    # We actually do want to import from typing_extensions
+    "UP035",
+    # Relax the convention by _not_ requiring documentation for every function parameter.
+    "D417",
+    "E501",
+]
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["D", "UP"]
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[dependency-groups]
+dev = [
+    "langgraph-cli[inmem]>=0.1.61",
+]
+
+
+
+================================================
+FILE: .env.example
+================================================
+ANTHROPIC_API_KEY=sk-xxx
+TAVILY_API_KEY=xxx
+
+
+================================================
+FILE: eval/__init__.py
+================================================
+
+
+
+================================================
+FILE: eval/create_dataset.py
+================================================
+EXAMPLES = [
+    {
+        "company": "LangChain",
+        "info": {
+            "name": "LangChain, Inc.",
+            "description": "LangChain helps developers to build applications powered by large language models (LLMs). It provides tools and frameworks to integrate LLMs with external data sources and APIs, facilitating the creation of advanced AI applications.",
+            "website": "https://www.langchain.com",
+            "crunchbase_profile": "https://www.crunchbase.com/organization/langchain",
+            "year_founded": 2022,
+            "ceo": "Harrison Chase",
+            "total_funding_mm_usd": 35.0,
+            "latest_round": "Series A",
+            "latest_round_date": "2024-02-15",
+            "latest_round_amount_mm_usd": 25.0,
+        },
+    },
+    {
+        "company": "Kensho",
+        "info": {
+            "name": "Kensho Technologies, LLC.",
+            "description": "Kensho Technologies, a subsidiary of S&P Global, specializes in developing advanced analytics and machine learning solutions for the financial industry. Their products include tools for natural language processing, data extraction, and linking, enabling clients to derive actionable insights from complex data sets.",
+            "website": "https://kensho.com/",
+            "crunchbase_profile": "https://www.crunchbase.com/organization/kensho",
+            "year_founded": 2013,
+            "ceo": "Bhavesh Dayalji",
+            "total_funding_mm_usd": 81.1,
+            "latest_round": "Series B",
+            "latest_round_date": "2017-02-28",
+            "latest_round_amount_mm_usd": 50.0,
+        },
+    },
+    {
+        "company": "Robust Intelligence",
+        "info": {
+            "name": "Robust Intelligence, Inc.",
+            "description": "Robust Intelligence offers an AI application security platform designed to protect machine learning models from various threats, including data poisoning and adversarial attacks. Their solutions ensure the integrity and reliability of AI systems across diverse industries.",
+            "website": "https://www.robustintelligence.com/",
+            "crunchbase_profile": "https://www.crunchbase.com/organization/robust-intelligence",
+            "year_founded": 2019,
+            "ceo": "Yaron Singer",
+            "total_funding_mm_usd": 44.0,
+            "latest_round": "Series B",
+            "latest_round_date": "2021-12-09",
+            "latest_round_amount_mm_usd": 30.0,
+        },
+    },
+    {
+        "company": "Perplexity.ai",
+        "info": {
+            "name": "Perplexity AI, Inc.",
+            "description": "Perplexity.ai is an AI-powered search engine that delivers concise and accurate answers to user queries. It leverages advanced natural language processing to provide direct responses, enhancing the search experience.",
+            "website": "https://www.perplexity.ai",
+            "crunchbase_profile": "https://www.crunchbase.com/organization/perplexity-ai",
+            "year_founded": 2022,
+            "ceo": "Aravind Srinivas",
+            "total_funding_mm_usd": 165.0,
+            "latest_round": "Series B",
+            "latest_round_date": "2024-04-23",
+            "latest_round_amount_mm_usd": 62.7,
+        },
+    },
+    {
+        "company": "Physical Intelligence.ai",
+        "info": {
+            "name": "Physical Intelligence.ai",
+            "description": "Physical Intelligence.ai specializes in developing AI solutions that enhance human physical capabilities. Their technologies focus on improving physical performance and health through intelligent systems.",
+            "website": "https://www.physicalintelligence.company/",
+            "crunchbase_profile": "https://www.crunchbase.com/organization/physical-intelligence-834b",
+            "year_founded": 2023,
+            "ceo": "Karol Hausman",
+            "total_funding_mm_usd": 470.0,
+            "latest_round": "Series A",
+            "latest_round_date": "2024-11-04",
+            "latest_round_amount_mm_usd": 400.0,
+        },
+    },
+    {
+        "company": "Galileo.ai",
+        "info": {
+            "name": "Galileo AI, Inc.",
+            "description": "Galileo.ai offers AI-driven design tools that assist in creating user interfaces and experiences. Their platform automates design processes, enabling rapid prototyping and iteration for designers and developers.",
+            "website": "https://www.usegalileo.ai/",
+            "crunchbase_profile": "https://www.crunchbase.com/organization/galileo-ai",
+            "year_founded": 2022,
+            "ceo": "Arnaud Benard",
+            "total_funding_mm_usd": 4.8,
+            "latest_round": "Seed",
+            "latest_round_date": "2024-02-06",
+            "latest_round_amount_mm_usd": 4.4,
+        },
+    },
+    {
+        "company": "Sierra.ai",
+        "info": {
+            "name": "Sierra Technologies, Inc.",
+            "description": "Sierra.ai develops AI-powered safety and compliance solutions for the trucking industry. Their technology aims to enhance driver safety, ensure regulatory compliance, and improve operational efficiency.",
+            "website": "https://sierra.ai/",
+            "crunchbase_profile": "https://www.crunchbase.com/organization/sierra-1124",
+            "year_founded": 2023,
+            "ceo": "Clay Bavor",
+            "total_funding_mm_usd": 285.0,
+            "latest_round": "Series B",
+            "latest_round_date": "2024-10-28",
+            "latest_round_amount_mm_usd": 175.0,
+        },
+    },
+    {
+        "company": "Rad AI",
+        "info": {
+            "name": "Rad AI, Inc.",
+            "description": "Rad AI provides artificial intelligence solutions for radiology, aiming to improve diagnostic accuracy and efficiency. Their platform assists radiologists by automating routine tasks and enhancing image analysis.",
+            "website": "https://www.radai.com",
+            "crunchbase_profile": "https://www.crunchbase.com/organization/radai",
+            "year_founded": 2018,
+            "ceo": "Doktor Gurson",
+            "total_funding_mm_usd": 83.0,
+            "latest_round": "Series B",
+            "latest_round_date": "2024-05-07",
+            "latest_round_amount_mm_usd": 50.0,
+        },
+    },
+    {
+        "company": "Together AI",
+        "info": {
+            "name": "Together, Inc.",
+            "description": "Together AI focuses on building open-source models and tools for natural language processing. They aim to make advanced AI technologies accessible and collaborative for researchers and developers.",
+            "website": "https://www.together.ai/",
+            "crunchbase_profile": "https://www.crunchbase.com/organization/together-ai",
+            "year_founded": 2022,
+            "ceo": "Vipul Ved Prakash",
+            "total_funding_mm_usd": 228.5,
+            "latest_round": "Series A",
+            "latest_round_date": "2024-03-13",
+            "latest_round_amount_mm_usd": 106.0,
+        },
+    },
+    {
+        "company": "Omneky",
+        "info": {
+            "name": "Omneky Inc.",
+            "description": "Omneky utilizes AI to create personalized advertising content across digital platforms. Their platform analyzes data to generate targeted ads, optimizing marketing strategies for businesses.",
+            "website": "https://www.omneky.com",
+            "crunchbase_profile": "https://www.crunchbase.com/organization/omneky",
+            "year_founded": 2018,
+            "ceo": "Hikari Senju",
+            "total_funding_mm_usd": 13.0,
+            "latest_round": "Seed",
+            "latest_round_date": "2022-11-15",
+            "latest_round_amount_mm_usd": 10.0,
+        },
+    },
+    {
+        "company": "Curai Health",
+        "info": {
+            "name": "Curai, Inc.",
+            "description": "Curai Health offers AI-assisted primary care services, combining artificial intelligence with medical expertise to provide accessible and affordable healthcare solutions.",
+            "website": "https://www.curaihealth.com",
+            "crunchbase_profile": "https://www.crunchbase.com/organization/curai",
+            "year_founded": 2017,
+            "ceo": "Neal Khosla",
+            "total_funding_mm_usd": 38.2,
+            "latest_round": "Series B",
+            "latest_round_date": "2020-12-16",
+            "latest_round_amount_mm_usd": 27.5,
+        },
+    },
+    {
+        "company": "Decagon.ai",
+        "info": {
+            "name": "Decagon AI, Inc.",
+            "description": "Decagon.ai develops enterprise-grade generative AI agents for customer support, enabling businesses to provide efficient and personalized customer service experiences.",
+            "website": "https://decagon.ai",
+            "crunchbase_profile": "https://www.crunchbase.com/organization/decagon-485e",
+            "year_founded": 2023,
+            "ceo": "Jesse Zhang",
+            "total_funding_mm_usd": 100.0,
+            "latest_round": "Series B",
+            "latest_round_date": "2024-10-15",
+            "latest_round_amount_mm_usd": 65.0,
+        },
+    },
+    {
+        "company": "Xaira Therapeutics",
+        "info": {
+            "name": "Xaira Therapeutics",
+            "description": "Xaira Therapeutics is a biotechnology company leveraging artificial intelligence for drug discovery and development, aiming to deliver transformative medicines.",
+            "website": "https://xaira.com/",
+            "crunchbase_profile": "https://www.crunchbase.com/organization/xaira-therapeutics",
+            "year_founded": 2023,
+            "ceo": "Marc Tessier-Lavigne",
+            "total_funding_mm_usd": 1000.0,
+            "latest_round": "Series A",
+            "latest_round_date": "2024-04-23",
+            "latest_round_amount_mm_usd": 1000.0,
+        },
+    },
+    {
+        "company": "Regie.ai",
+        "info": {
+            "name": "Regie.ai",
+            "description": "Regie.ai provides generative AI tools for sales teams, automating content creation and streamlining communication processes to enhance sales efficiency.",
+            "website": "https://www.regie.ai/",
+            "crunchbase_profile": "https://www.crunchbase.com/organization/regie-da23",
+            "year_founded": 2020,
+            "ceo": "Srinath Sridhar",
+            "total_funding_mm_usd": 20.8,
+            "latest_round": "Series A",
+            "latest_round_date": "2023-02-09",
+            "latest_round_amount_mm_usd": 6.0,
+        },
+    },
+    {
+        "company": "Bifrost AI",
+        "info": {
+            "name": "Bifrost AI, Inc.",
+            "description": "Bifrost AI specializes in generating synthetic data for AI and robotics, enabling faster training and validation of models without the need for real-world data.",
+            "website": "https://www.bifrost.ai",
+            "crunchbase_profile": "https://www.crunchbase.com/organization/bifrost",
+            "year_founded": 2020,
+            "ceo": "Charles Wong",
+            "total_funding_mm_usd": 13.1,
+            "latest_round": "Series A",
+            "latest_round_date": "2024-10-30",
+            "latest_round_amount_mm_usd": 8.0,
+        },
+    },
+    {
+        "company": "Recraft",
+        "info": {
+            "name": "Recraft, Inc",
+            "description": "Recraft offers an AI-powered design tool for creating and editing images, providing features like image generation, vectorization, and mockup creation for professional designers.",
+            "website": "https://www.recraft.ai",
+            "crunchbase_profile": "https://www.crunchbase.com/organization/recraft",
+            "year_founded": 2022,
+            "ceo": "Anna Veronika Dorogush",
+            "total_funding_mm_usd": 12.0,
+            "latest_round": "Series A",
+            "latest_round_date": "2024-01-18",
+            "latest_round_amount_mm_usd": 12.0,
+        },
+    },
+    {
+        "company": "Brightseed",
+        "info": {
+            "name": "Brightseed, Inc",
+            "description": "Brightseed utilizes artificial intelligence to discover bioactive compounds in nature that can restore human health, focusing on the intersection of nature, science, and humanity.",
+            "website": "https://www.brightseedbio.com",
+            "crunchbase_profile": "https://www.crunchbase.com/organization/brightseed",
+            "year_founded": 2017,
+            "ceo": "Jim Flatt",
+            "total_funding_mm_usd": 120.8,
+            "latest_round": "Series B",
+            "latest_round_date": "2022-05-09",
+            "latest_round_amount_mm_usd": 68.0,
+        },
+    },
+    {
+        "company": "Etched.ai",
+        "info": {
+            "name": "Etched.ai, Inc.",
+            "description": "Etched.ai is developing the world's first transformer ASIC, a specialized chip designed to run AI models faster and more efficiently than traditional GPUs.",
+            "website": "https://www.etched.com",
+            "crunchbase_profile": "https://www.crunchbase.com/organization/etched-ai",
+            "year_founded": 2022,
+            "ceo": "Gavin Uberti",
+            "total_funding_mm_usd": 125.4,
+            "latest_round": "Series A",
+            "latest_round_date": "2024-06-25",
+            "latest_round_amount_mm_usd": 120.0,
+        },
+    },
+    {
+        "company": "World Labs",
+        "info": {
+            "name": "World Labs Technologies",
+            "description": "World Labs is an AI-focused company dedicated to advancing artificial intelligence technologies and applications across various sectors.",
+            "website": "https://www.worldlabs.ai",
+            "crunchbase_profile": "https://www.crunchbase.com/organization/world-labs",
+            "year_founded": 2024,
+            "ceo": "Fei-Fei Li",
+            "total_funding_mm_usd": 230.0,
+            "latest_round": "Series A",
+            "latest_round_date": "2024-09-13",
+            "latest_round_amount_mm_usd": 230.0,
+        },
+    },
+    {
+        "company": "Sight Machine",
+        "info": {
+            "name": "Sight Machine Inc.",
+            "description": "Sight Machine provides manufacturing analytics powered by AI, offering real-time insights to improve production efficiency and quality.",
+            "website": "https://sightmachine.com",
+            "crunchbase_profile": "https://www.crunchbase.com/organization/sight-machine",
+            "year_founded": 2011,
+            "ceo": "Jon Sobel",
+            "total_funding_mm_usd": 80.4,
+            "latest_round": "Series C",
+            "latest_round_date": "2019-04-23",
+            "latest_round_amount_mm_usd": 29.4,
+        },
+    },
+    {
+        "company": "Ambience Healthcare",
+        "info": {
+            "name": "Ambience Healthcare, Inc.",
+            "description": "Ambience Healthcare offers AI-powered scribe solutions for healthcare providers, automating clinical documentation to reduce clinician burnout and improve care quality.",
+            "website": "https://www.ambiencehealthcare.com",
+            "crunchbase_profile": "https://www.crunchbase.com/organization/ambience-healthcare",
+            "year_founded": 2020,
+            "ceo": "Mike Ng",
+            "total_funding_mm_usd": 76.3,
+            "latest_round": "Series B",
+            "latest_round_date": "2024-02-06",
+            "latest_round_amount_mm_usd": 70.0,
+        },
+    },
+    {
+        "company": "Safely You",
+        "info": {
+            "name": "SafelyYou, Inc.",
+            "description": "Safely You utilizes AI technology to reduce falls and associated risks in senior living communities, enhancing resident safety and care.",
+            "website": "https://www.safely-you.com",
+            "crunchbase_profile": "https://www.crunchbase.com/organization/safely-you",
+            "year_founded": 2016,
+            "ceo": "George Netscher",
+            "total_funding_mm_usd": 71.3,
+            "latest_round": "Debt",
+            "latest_round_date": "2023-05-25",
+            "latest_round_amount_mm_usd": 10.0,
+        },
+    },
+    {
+        "company": "Kintsugi.AI",
+        "info": {
+            "name": "KintsugiAI, Inc.",
+            "description": "Kintsugi.AI provides sales tax automation solutions for companies globally, streamlining compliance processes and reducing errors.",
+            "website": "trykintsugi.com",
+            "crunchbase_profile": "https://www.crunchbase.com/organization/kintsugi-0524",
+            "year_founded": 2022,
+            "ceo": "Pujun Bhatnagar",
+            "total_funding_mm_usd": 12.2,
+            "latest_round": "Series A",
+            "latest_round_date": "2024-11-19",
+            "latest_round_amount_mm_usd": 4.0,
+        },
+    },
+]
+
+EXTRACTION_SCHEMA = {
+    "type": "object",
+    "title": "company_info",
+    "properties": {
+        "name": {"type": "string", "description": "Official company name"},
+        "description": {
+            "type": "string",
+            "description": "Brief description of the company and its activities",
+        },
+        "website": {
+            "type": "string",
+            "format": "uri",
+            "description": "Company's official website URL",
+        },
+        "crunchbase_profile": {
+            "type": "string",
+            "format": "uri",
+            "description": "Company's Crunchbase profile URL",
+        },
+        "year_founded": {
+            "type": "integer",
+            "minimum": 1800,
+            "description": "Year when the company was founded",
+        },
+        "ceo": {"type": "string", "description": "Name of the company's CEO"},
+        "total_funding_mm_usd": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Total funding raised in millions of USD",
+        },
+        "latest_round": {
+            "type": "string",
+            "description": "Type of the most recent funding round (e.g., Series A, Seed, etc.)",
+        },
+        "latest_round_date": {
+            "type": "string",
+            "format": "date",
+            "description": "Date of the most recent funding round (YYYY-MM-DD)",
+        },
+        "latest_round_amount_mm_usd": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Amount raised in the most recent funding round in millions of USD",
+        },
+    },
+    "required": [
+        "name",
+        "description",
+        "website",
+        "crunchbase_profile",
+        "year_founded",
+        "ceo",
+        "total_funding_mm_usd",
+        "latest_round",
+        "latest_round_date",
+        "latest_round_amount_mm_usd",
+    ],
+    "description": "Company information",
+}
+
+if __name__ == "__main__":
+    from langsmith import Client
+    from langsmith.utils import LangSmithNotFoundError
+
+    client = Client()
+    dataset_name = "Startup Data Enrichment"
+
+    # Storing inputs in a dataset lets us
+    # run chains and LLMs over a shared set of examples.
+    try:
+        exists_dataset = client.read_dataset(dataset_name=dataset_name)
+        print(f"Dataset '{dataset_name}' already exists.")
+        print("You can access the dataset via the URL: ", exists_dataset.url)
+        exit(1)
+    except LangSmithNotFoundError:
+        # Then let's create the dataset if it doesn't exist
+        pass
+
+    dataset = client.create_dataset(
+        dataset_name=dataset_name,
+        description="Evaluate ability to research information about startups (e.g., latest round, total funding, year founded etc.)",
+    )
+
+    # Prepare inputs, outputs, and metadata for bulk creation
+    inputs = [
+        {"company": record["company"], "extraction_schema": EXTRACTION_SCHEMA}
+        for record in EXAMPLES
+    ]
+    outputs = [{"info": record["info"]} for record in EXAMPLES]
+
+    client.create_examples(
+        inputs=inputs,
+        outputs=outputs,
+        dataset_id=dataset.id,
+    )
+    print(f"Dataset '{dataset_name}' created with {len(EXAMPLES)} examples.")
+    print("You can access the dataset via the URL: ", dataset.url)
+
+
+
+================================================
+FILE: eval/run_eval.py
+================================================
+import argparse
+from typing import Optional
+
+from langchain_anthropic import ChatAnthropic
+from langsmith import Client, evaluate
+from langsmith.evaluation import EvaluationResults
+from pydantic import BaseModel, Field
+
+from langgraph.pregel.remote import RemoteGraph
+
+
+client = Client()
+
+NUMERIC_FIELDS = (
+    "total_funding_mm_usd",
+    "latest_round_amount_mm_usd",
+)
+EXACT_MATCH_FIELDS = (
+    "website",
+    "crunchbase_profile",
+    "headquarters",
+    "year_founded",
+    "latest_round",
+    "latest_round_date",
+)
+FUZZY_MATCH_FIELDS = ("name", "ceo", "description")
+
+DEFAULT_DATASET_NAME = "Startup Data Enrichment"
+DEFAULT_GRAPH_ID = "company_researcher"
+DEFAULT_AGENT_URL = "http://localhost:2024"
+
+judge_llm = ChatAnthropic(model="claude-3-5-sonnet-latest", temperature=0)
+
+EVALUATION_PROMPT = f"""You are an evaluator tasked with assessing the accuracy of an agent's output compared to the expected output. Follow these instructions:
+
+1. **Numeric Fields Evaluation**: For fields {NUMERIC_FIELDS}, check if the agent's output is within 10% of the expected value. Score 1 if yes, 0 if no.
+2. **Exact Match Evaluation**: For fields {EXACT_MATCH_FIELDS}, check if the agent's output matches the expected output EXACTLY. Score 1 if yes, 0 if no.
+3. **Fuzzy Match Evaluation**: For fields {FUZZY_MATCH_FIELDS}, check if the agent's output matches the expected output APPROXIMATELY. Score 1 if yes, 0 if no.
+4. **Overall Evaluation**: Return final score that is a fraction of fields that have score of 1. For example, if 1/5 fields has score of 1, the final score is 0.2."""
+
+
+def evaluate_agent(outputs: dict, reference_outputs: dict):
+    if "info" not in outputs:
+        raise ValueError("Agent output must contain 'info' key")
+
+    class Score(BaseModel):
+        """Evaluate the agent's output against the expected output."""
+
+        score: float = Field(
+            description="A score between 0 and 1 indicating the accuracy of the agent's output compared to the expected output. 1 is a perfect match."
+        )
+        reason: str = Field(
+            description="A brief explanation for why you scored the agent's output as you did."
+        )
+
+    score = judge_llm.with_structured_output(Score).invoke(
+        [
+            {
+                "role": "system",
+                "content": EVALUATION_PROMPT,
+            },
+            {
+                "role": "user",
+                "content": f'Actual output: {outputs["info"]}\nExpected output: {reference_outputs["info"]}',
+            },
+        ]
+    )
+    return score.score
+
+
+# PUBLIC API
+
+
+def transform_dataset_inputs(inputs: dict) -> dict:
+    """Transform LangSmith dataset inputs to match the agent's input schema before invoking the agent."""
+    # see the `Example input` in the README for reference on what `inputs` dict should look like
+    # the dataset inputs already match the agent's input schema, but you can add any additional processing here
+    return inputs
+
+
+def transform_agent_outputs(outputs: dict) -> dict:
+    """Transform agent outputs to match the LangSmith dataset output schema."""
+    # see the `Example output` in the README for reference on what the output should look like
+    return {"info": outputs["info"]}
+
+
+def make_agent_runner(graph_id: str, agent_url: str):
+    """Wrapper that transforms inputs/outputs to match the expected eval schema and invokes the agent."""
+    agent_graph = RemoteGraph(graph_id, url=agent_url)
+
+    def run_agent(inputs: dict) -> dict:
+        """Run the agent on the inputs from the LangSmith dataset record, return outputs conforming to the LangSmith dataset output schema."""
+        transformed_inputs = transform_dataset_inputs(inputs)
+        response = agent_graph.invoke(transformed_inputs)
+        return transform_agent_outputs(response)
+
+    return run_agent
+
+
+def run_eval(
+    *,
+    dataset_name: str,
+    graph_id: str = DEFAULT_GRAPH_ID,
+    agent_url: str = DEFAULT_AGENT_URL,
+    experiment_prefix: Optional[str] = None,
+) -> EvaluationResults:
+    dataset = client.read_dataset(dataset_name=dataset_name)
+    run_agent = make_agent_runner(graph_id, agent_url)
+    results = evaluate(
+        run_agent,
+        data=dataset,
+        evaluators=[evaluate_agent],
+        experiment_prefix=experiment_prefix,
+    )
+    return results
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--dataset-name",
+        type=str,
+        default=DEFAULT_DATASET_NAME,
+        help="Name of the dataset to evaluate against",
+    )
+    parser.add_argument(
+        "--graph-id",
+        type=str,
+        default=DEFAULT_GRAPH_ID,
+        help="ID of the graph to evaluate",
+    )
+    parser.add_argument(
+        "--agent-url",
+        type=str,
+        default=DEFAULT_AGENT_URL,
+        help="URL of the deployed agent to evaluate",
+    )
+    parser.add_argument(
+        "--experiment-prefix",
+        type=str,
+        help="Experiment prefix for the evaluation",
+    )
+    args = parser.parse_args()
+
+    run_eval(
+        dataset_name=args.dataset_name,
+        graph_id=args.graph_id,
+        agent_url=args.agent_url,
+        experiment_prefix=args.experiment_prefix,
+    )
+
+
+
+================================================
+FILE: src/agent/__init__.py
+================================================
+
+
+
+================================================
+FILE: src/agent/configuration.py
+================================================
+import os
+from dataclasses import dataclass, fields
+from typing import Any, Optional
+
+from langchain_core.runnables import RunnableConfig
+
+
+@dataclass(kw_only=True)
+class Configuration:
+    """The configurable fields for the chatbot."""
+
+    max_search_queries: int = 3  # Max search queries per company
+    max_search_results: int = 3  # Max search results per query
+    max_reflection_steps: int = 0  # Max reflection steps
+    include_search_results: bool = (
+        False  # Whether to include search results in the output
+    )
+
+    @classmethod
+    def from_runnable_config(
+        cls, config: Optional[RunnableConfig] = None
+    ) -> "Configuration":
+        """Create a Configuration instance from a RunnableConfig."""
+        configurable = (
+            config["configurable"] if config and "configurable" in config else {}
+        )
+        values: dict[str, Any] = {
+            f.name: os.environ.get(f.name.upper(), configurable.get(f.name))
+            for f in fields(cls)
+            if f.init
+        }
+        return cls(**{k: v for k, v in values.items() if v})
+
+
+
+================================================
+FILE: src/agent/graph.py
+================================================
+import asyncio
+from typing import cast, Any, Literal
+import json
+
+from tavily import AsyncTavilyClient
+from langchain_anthropic import ChatAnthropic
+from langchain_core.rate_limiters import InMemoryRateLimiter
+from langchain_core.runnables import RunnableConfig
+from langgraph.graph import START, END, StateGraph
+from pydantic import BaseModel, Field
+
+from agent.configuration import Configuration
+from agent.state import InputState, OutputState, OverallState
+from agent.utils import deduplicate_sources, format_sources, format_all_notes
+from agent.prompts import (
+    EXTRACTION_PROMPT,
+    REFLECTION_PROMPT,
+    INFO_PROMPT,
+    QUERY_WRITER_PROMPT,
+)
+
+# LLMs
+
+rate_limiter = InMemoryRateLimiter(
+    requests_per_second=4,
+    check_every_n_seconds=0.1,
+    max_bucket_size=10,  # Controls the maximum burst size.
+)
+claude_3_5_sonnet = ChatAnthropic(
+    model="claude-3-5-sonnet-latest", temperature=0, rate_limiter=rate_limiter
+)
+
+# Search
+
+tavily_async_client = AsyncTavilyClient()
+
+
+class Queries(BaseModel):
+    queries: list[str] = Field(
+        description="List of search queries.",
+    )
+
+
+class ReflectionOutput(BaseModel):
+    is_satisfactory: bool = Field(
+        description="True if all required fields are well populated, False otherwise"
+    )
+    missing_fields: list[str] = Field(
+        description="List of field names that are missing or incomplete"
+    )
+    search_queries: list[str] = Field(
+        description="If is_satisfactory is False, provide 1-3 targeted search queries to find the missing information"
+    )
+    reasoning: str = Field(description="Brief explanation of the assessment")
+
+
+def generate_queries(state: OverallState, config: RunnableConfig) -> dict[str, Any]:
+    """Generate search queries based on the user input and extraction schema."""
+    # Get configuration
+    configurable = Configuration.from_runnable_config(config)
+    max_search_queries = configurable.max_search_queries
+
+    # Generate search queries
+    structured_llm = claude_3_5_sonnet.with_structured_output(Queries)
+
+    # Format system instructions
+    query_instructions = QUERY_WRITER_PROMPT.format(
+        company=state.company,
+        info=json.dumps(state.extraction_schema, indent=2),
+        user_notes=state.user_notes,
+        max_search_queries=max_search_queries,
+    )
+
+    # Generate queries
+    results = cast(
+        Queries,
+        structured_llm.invoke(
+            [
+                {"role": "system", "content": query_instructions},
+                {
+                    "role": "user",
+                    "content": "Please generate a list of search queries related to the schema that you want to populate.",
+                },
+            ]
+        ),
+    )
+
+    # Queries
+    query_list = [query for query in results.queries]
+    return {"search_queries": query_list}
+
+
+async def research_company(
+    state: OverallState, config: RunnableConfig
+) -> dict[str, Any]:
+    """Execute a multi-step web search and information extraction process.
+
+    This function performs the following steps:
+    1. Executes concurrent web searches using the Tavily API
+    2. Deduplicates and formats the search results
+    """
+
+    # Get configuration
+    configurable = Configuration.from_runnable_config(config)
+    max_search_results = configurable.max_search_results
+
+    # Search tasks
+    search_tasks = []
+    for query in state.search_queries:
+        search_tasks.append(
+            tavily_async_client.search(
+                query,
+                max_results=max_search_results,
+                include_raw_content=True,
+                topic="general",
+            )
+        )
+
+    # Execute all searches concurrently
+    search_docs = await asyncio.gather(*search_tasks)
+
+    # Deduplicate and format sources
+    deduplicated_search_docs = deduplicate_sources(search_docs)
+    source_str = format_sources(
+        deduplicated_search_docs, max_tokens_per_source=1000, include_raw_content=True
+    )
+
+    # Generate structured notes relevant to the extraction schema
+    p = INFO_PROMPT.format(
+        info=json.dumps(state.extraction_schema, indent=2),
+        content=source_str,
+        company=state.company,
+        user_notes=state.user_notes,
+    )
+    result = await claude_3_5_sonnet.ainvoke(p)
+    state_update = {
+        "completed_notes": [str(result.content)],
+    }
+    if configurable.include_search_results:
+        state_update["search_results"] = deduplicated_search_docs
+
+    return state_update
+
+
+def gather_notes_extract_schema(state: OverallState) -> dict[str, Any]:
+    """Gather notes from the web search and extract the schema fields."""
+
+    # Format all notes
+    notes = format_all_notes(state.completed_notes)
+
+    # Extract schema fields
+    system_prompt = EXTRACTION_PROMPT.format(
+        info=json.dumps(state.extraction_schema, indent=2), notes=notes
+    )
+    structured_llm = claude_3_5_sonnet.with_structured_output(state.extraction_schema)
+    result = structured_llm.invoke(
+        [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": "Produce a structured output from these notes.",
+            },
+        ]
+    )
+    return {"info": result}
+
+
+def reflection(state: OverallState) -> dict[str, Any]:
+    """Reflect on the extracted information and generate search queries to find missing information."""
+    structured_llm = claude_3_5_sonnet.with_structured_output(ReflectionOutput)
+
+    # Format reflection prompt
+    system_prompt = REFLECTION_PROMPT.format(
+        schema=json.dumps(state.extraction_schema, indent=2),
+        info=state.info,
+    )
+
+    # Invoke
+    result = cast(
+        ReflectionOutput,
+        structured_llm.invoke(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": "Produce a structured reflection output."},
+            ]
+        ),
+    )
+
+    if result.is_satisfactory:
+        return {"is_satisfactory": result.is_satisfactory}
+    else:
+        return {
+            "is_satisfactory": result.is_satisfactory,
+            "search_queries": result.search_queries,
+            "reflection_steps_taken": state.reflection_steps_taken + 1,
+        }
+
+
+def route_from_reflection(
+    state: OverallState, config: RunnableConfig
+) -> Literal[END, "research_company"]:  # type: ignore
+    """Route the graph based on the reflection output."""
+    # Get configuration
+    configurable = Configuration.from_runnable_config(config)
+
+    # If we have satisfactory results, end the process
+    if state.is_satisfactory:
+        return END
+
+    # If results aren't satisfactory but we haven't hit max steps, continue research
+    if state.reflection_steps_taken <= configurable.max_reflection_steps:
+        return "research_company"
+
+    # If we've exceeded max steps, end even if not satisfactory
+    return END
+
+
+# Add nodes and edges
+builder = StateGraph(
+    OverallState,
+    input=InputState,
+    output=OutputState,
+    config_schema=Configuration,
+)
+builder.add_node("gather_notes_extract_schema", gather_notes_extract_schema)
+builder.add_node("generate_queries", generate_queries)
+builder.add_node("research_company", research_company)
+builder.add_node("reflection", reflection)
+
+builder.add_edge(START, "generate_queries")
+builder.add_edge("generate_queries", "research_company")
+builder.add_edge("research_company", "gather_notes_extract_schema")
+builder.add_edge("gather_notes_extract_schema", "reflection")
+builder.add_conditional_edges("reflection", route_from_reflection)
+
+# Compile
+graph = builder.compile()
+
+
+
+================================================
+FILE: src/agent/prompts.py
+================================================
+EXTRACTION_PROMPT = """Your task is to take notes gathered from web research and extract them into the following schema.
+
+<schema>
+{info}
+</schema>
+
+Here are all the notes from research:
+
+<web_research_notes>
+{notes}
+</web_research_notes>
+"""
+
+QUERY_WRITER_PROMPT = """You are a search query generator tasked with creating targeted search queries to gather specific company information.
+
+Here is the company you are researching: {company}
+
+Generate at most {max_search_queries} search queries that will help gather the following information:
+
+<schema>
+{info}
+</schema>
+
+<user_notes>
+{user_notes}
+</user_notes>
+
+Your query should:
+1. Focus on finding factual, up-to-date company information
+2. Target official sources, news, and reliable business databases
+3. Prioritize finding information that matches the schema requirements
+4. Include the company name and relevant business terms
+5. Be specific enough to avoid irrelevant results
+
+Create a focused query that will maximize the chances of finding schema-relevant information."""
+
+INFO_PROMPT = """You are doing web research on a company, {company}. 
+
+The following schema shows the type of information we're interested in:
+
+<schema>
+{info}
+</schema>
+
+You have just scraped website content. Your task is to take clear, organized notes about the company, focusing on topics relevant to our interests.
+
+<Website contents>
+{content}
+</Website contents>
+
+Here are any additional notes from the user:
+<user_notes>
+{user_notes}
+</user_notes>
+
+Please provide detailed research notes that:
+1. Are well-organized and easy to read
+2. Focus on topics mentioned in the schema
+3. Include specific facts, dates, and figures when available
+4. Maintain accuracy of the original content
+5. Note when important information appears to be missing or unclear
+
+Remember: Don't try to format the output to match the schema - just take clear notes that capture all relevant information."""
+
+REFLECTION_PROMPT = """You are a research analyst tasked with reviewing the quality and completeness of extracted company information.
+
+Compare the extracted information with the required schema:
+
+<Schema>
+{schema}
+</Schema>
+
+Here is the extracted information:
+<extracted_info>
+{info}
+</extracted_info>
+
+Analyze if all required fields are present and sufficiently populated. Consider:
+1. Are any required fields missing?
+2. Are any fields incomplete or containing uncertain information?
+3. Are there fields with placeholder values or "unknown" markers?
+"""
+
+
+
+================================================
+FILE: src/agent/state.py
+================================================
+from dataclasses import dataclass, field
+from typing import Any, Optional, Annotated
+import operator
+
+
+DEFAULT_EXTRACTION_SCHEMA = {
+    "title": "CompanyInfo",
+    "description": "Basic information about a company",
+    "type": "object",
+    "properties": {
+        "company_name": {
+            "type": "string",
+            "description": "Official name of the company",
+        },
+        "founding_year": {
+            "type": "integer",
+            "description": "Year the company was founded",
+        },
+        "founder_names": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Names of the founding team members",
+        },
+        "product_description": {
+            "type": "string",
+            "description": "Brief description of the company's main product or service",
+        },
+        "funding_summary": {
+            "type": "string",
+            "description": "Summary of the company's funding history",
+        },
+    },
+    "required": ["company_name"],
+}
+
+
+@dataclass(kw_only=True)
+class InputState:
+    """Input state defines the interface between the graph and the user (external API)."""
+
+    company: str
+    "Company to research provided by the user."
+
+    extraction_schema: dict[str, Any] = field(
+        default_factory=lambda: DEFAULT_EXTRACTION_SCHEMA
+    )
+    "The json schema defines the information the agent is tasked with filling out."
+
+    user_notes: Optional[dict[str, Any]] = field(default=None)
+    "Any notes from the user to start the research process."
+
+
+@dataclass(kw_only=True)
+class OverallState:
+    """Input state defines the interface between the graph and the user (external API)."""
+
+    company: str
+    "Company to research provided by the user."
+
+    extraction_schema: dict[str, Any] = field(
+        default_factory=lambda: DEFAULT_EXTRACTION_SCHEMA
+    )
+    "The json schema defines the information the agent is tasked with filling out."
+
+    user_notes: str = field(default=None)
+    "Any notes from the user to start the research process."
+
+    search_queries: list[str] = field(default=None)
+    "List of generated search queries to find relevant information"
+
+    search_results: list[dict] = field(default=None)
+    "List of search results"
+
+    completed_notes: Annotated[list, operator.add] = field(default_factory=list)
+    "Notes from completed research related to the schema"
+
+    info: dict[str, Any] = field(default=None)
+    """
+    A dictionary containing the extracted and processed information
+    based on the user's query and the graph's execution.
+    This is the primary output of the enrichment process.
+    """
+
+    is_satisfactory: bool = field(default=None)
+    "True if all required fields are well populated, False otherwise"
+
+    reflection_steps_taken: int = field(default=0)
+    "Number of times the reflection node has been executed"
+
+
+@dataclass(kw_only=True)
+class OutputState:
+    """The response object for the end user.
+
+    This class defines the structure of the output that will be provided
+    to the user after the graph's execution is complete.
+    """
+
+    info: dict[str, Any]
+    """
+    A dictionary containing the extracted and processed information
+    based on the user's query and the graph's execution.
+    This is the primary output of the enrichment process.
+    """
+
+    search_results: list[dict] = field(default=None)
+    "List of search results"
+
+
+
+================================================
+FILE: src/agent/utils.py
+================================================
+def deduplicate_sources(search_response: dict | list[dict]) -> list[dict]:
+    """
+    Takes either a single search response or list of responses from Tavily API and de-duplicates them based on the URL.
+
+    Args:
+        search_response: Either:
+            - A dict with a 'results' key containing a list of search results
+            - A list of dicts, each containing search results
+
+    Returns:
+        str: Formatted string with deduplicated sources
+    """
+    # Convert input to list of results
+    if isinstance(search_response, dict):
+        sources_list = search_response["results"]
+    elif isinstance(search_response, list):
+        sources_list = []
+        for response in search_response:
+            if isinstance(response, dict) and "results" in response:
+                sources_list.extend(response["results"])
+            else:
+                sources_list.extend(response)
+    else:
+        raise ValueError(
+            "Input must be either a dict with 'results' or a list of search results"
+        )
+
+    # Deduplicate by URL
+    unique_urls = set()
+    unique_sources_list = []
+    for source in sources_list:
+        if source["url"] not in unique_urls:
+            unique_urls.add(source["url"])
+            unique_sources_list.append(source)
+
+    return unique_sources_list
+
+
+def format_sources(
+    sources_list: list[dict],
+    include_raw_content: bool = True,
+    max_tokens_per_source: int = 1000,
+) -> str:
+    """
+    Takes a list of unique results from Tavily API and formats them.
+    Limits the raw_content to approximately max_tokens_per_source.
+    include_raw_content specifies whether to include the raw_content from Tavily in the formatted string.
+
+    Args:
+        sources_list: list of unique results from Tavily API
+        max_tokens_per_source: int, maximum number of tokens per each search result to include in the formatted string
+        include_raw_content: bool, whether to include the raw_content from Tavily in the formatted string
+
+    Returns:
+        str: Formatted string with deduplicated sources
+    """
+    # Format output
+    formatted_text = "Sources:\n\n"
+    for source in sources_list:
+        formatted_text += f"Source {source['title']}:\n===\n"
+        formatted_text += f"URL: {source['url']}\n===\n"
+        formatted_text += (
+            f"Most relevant content from source: {source['content']}\n===\n"
+        )
+        if include_raw_content:
+            # Using rough estimate of 4 characters per token
+            char_limit = max_tokens_per_source * 4
+            # Handle None raw_content
+            raw_content = source.get("raw_content", "")
+            if raw_content is None:
+                raw_content = ""
+                print(f"Warning: No raw_content found for source {source['url']}")
+            if len(raw_content) > char_limit:
+                raw_content = raw_content[:char_limit] + "... [truncated]"
+            formatted_text += f"Full source content limited to {max_tokens_per_source} tokens: {raw_content}\n\n"
+
+    return formatted_text.strip()
+
+
+def format_all_notes(completed_notes: list[str]) -> str:
+    """Format a list of notes into a string"""
+    formatted_str = ""
+    for idx, company_notes in enumerate(completed_notes, 1):
+        formatted_str += f"""
+{'='*60}
+Note: {idx}:
+{'='*60}
+Notes from research:
+{company_notes}"""
+    return formatted_str
+
+
