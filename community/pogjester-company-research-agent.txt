@@ -1,0 +1,3611 @@
+Directory structure:
+└── backend/
+    ├── __init__.py
+    ├── graph.py
+    ├── classes/
+    │   ├── __init__.py
+    │   └── state.py
+    ├── nodes/
+    │   ├── __init__.py
+    │   ├── briefing.py
+    │   ├── collector.py
+    │   ├── curator.py
+    │   ├── editor.py
+    │   ├── enricher.py
+    │   ├── grounding.py
+    │   └── researchers/
+    │       ├── __init__.py
+    │       ├── base.py
+    │       ├── company.py
+    │       ├── financial.py
+    │       ├── industry.py
+    │       └── news.py
+    ├── services/
+    │   ├── mongodb.py
+    │   ├── pdf_service.py
+    │   └── websocket_manager.py
+    └── utils/
+        ├── __init__.py
+        ├── references.py
+        └── utils.py
+
+================================================
+FILE: backend/__init__.py
+================================================
+"""Backend package for tavily-company-research."""
+
+import os
+import sys
+from pathlib import Path
+import logging
+from dotenv import load_dotenv
+
+# Set up logging
+logger = logging.getLogger(__name__)
+
+# Load environment variables from .env file
+env_path = Path(__file__).parent.parent / '.env'
+if env_path.exists():
+    logger.info(f"Loading environment variables from {env_path}")
+    load_dotenv(dotenv_path=env_path, override=True)
+else:
+    logger.warning(f".env file not found at {env_path}. Using system environment variables.")
+
+# Check for critical environment variables
+if not os.getenv("TAVILY_API_KEY"):
+    logger.warning("TAVILY_API_KEY environment variable is not set.")
+
+if not os.getenv("OPENAI_API_KEY"):
+    logger.warning("OPENAI_API_KEY environment variable is not set.")
+
+if not os.getenv("GEMINI_API_KEY"):
+    logger.warning("GEMINI_API_KEY environment variable is not set.")
+
+from .graph import Graph
+
+__all__ = ["Graph"]
+
+
+
+================================================
+FILE: backend/graph.py
+================================================
+from langchain_core.messages import SystemMessage
+from langgraph.graph import StateGraph
+from typing import Dict, Any, AsyncIterator
+import logging
+
+from .classes.state import InputState
+from .nodes import GroundingNode
+from .nodes.researchers import (FinancialAnalyst, NewsScanner, 
+                               IndustryAnalyzer, CompanyAnalyzer)
+from .nodes.collector import Collector
+from .nodes.curator import Curator
+from .nodes.enricher import Enricher
+from .nodes.briefing import Briefing
+from .nodes.editor import Editor
+
+logger = logging.getLogger(__name__)
+
+class Graph:
+    def __init__(self, company=None, url=None, hq_location=None, industry=None,
+                 websocket_manager=None, job_id=None):
+        self.websocket_manager = websocket_manager
+        self.job_id = job_id
+        
+        # Initialize InputState
+        self.input_state = InputState(
+            company=company,
+            company_url=url,
+            hq_location=hq_location,
+            industry=industry,
+            websocket_manager=websocket_manager,
+            job_id=job_id,
+            messages=[
+                SystemMessage(content="Expert researcher starting investigation")
+            ]
+        )
+
+        # Initialize nodes with WebSocket manager and job ID
+        self._init_nodes()
+        self._build_workflow()
+
+    def _init_nodes(self):
+        """Initialize all workflow nodes"""
+        self.ground = GroundingNode()
+        self.financial_analyst = FinancialAnalyst()
+        self.news_scanner = NewsScanner()
+        self.industry_analyst = IndustryAnalyzer()
+        self.company_analyst = CompanyAnalyzer()
+        self.collector = Collector()
+        self.curator = Curator()
+        self.enricher = Enricher()
+        self.briefing = Briefing()
+        self.editor = Editor()
+
+    def _build_workflow(self):
+        """Configure the state graph workflow"""
+        self.workflow = StateGraph(InputState)
+        
+        # Add nodes with their respective processing functions
+        self.workflow.add_node("grounding", self.ground.run)
+        self.workflow.add_node("financial_analyst", self.financial_analyst.run)
+        self.workflow.add_node("news_scanner", self.news_scanner.run)
+        self.workflow.add_node("industry_analyst", self.industry_analyst.run)
+        self.workflow.add_node("company_analyst", self.company_analyst.run)
+        self.workflow.add_node("collector", self.collector.run)
+        self.workflow.add_node("curator", self.curator.run)
+        self.workflow.add_node("enricher", self.enricher.run)
+        self.workflow.add_node("briefing", self.briefing.run)
+        self.workflow.add_node("editor", self.editor.run)
+
+        # Configure workflow edges
+        self.workflow.set_entry_point("grounding")
+        self.workflow.set_finish_point("editor")
+        
+        research_nodes = [
+            "financial_analyst", 
+            "news_scanner",
+            "industry_analyst", 
+            "company_analyst"
+        ]
+
+        # Connect grounding to all research nodes
+        for node in research_nodes:
+            self.workflow.add_edge("grounding", node)
+            self.workflow.add_edge(node, "collector")
+
+        # Connect remaining nodes
+        self.workflow.add_edge("collector", "curator")
+        self.workflow.add_edge("curator", "enricher")
+        self.workflow.add_edge("enricher", "briefing")
+        self.workflow.add_edge("briefing", "editor")
+
+    async def run(self, thread: Dict[str, Any]) -> AsyncIterator[Dict[str, Any]]:
+        """Execute the research workflow"""
+        compiled_graph = self.workflow.compile()
+        
+        async for state in compiled_graph.astream(
+            self.input_state,
+            thread
+        ):
+            if self.websocket_manager and self.job_id:
+                await self._handle_ws_update(state)
+            yield state
+
+    async def _handle_ws_update(self, state: Dict[str, Any]):
+        """Handle WebSocket updates based on state changes"""
+        update = {
+            "type": "state_update",
+            "data": {
+                "current_node": state.get("current_node", "unknown"),
+                "progress": state.get("progress", 0),
+                "keys": list(state.keys())
+            }
+        }
+        await self.websocket_manager.broadcast_to_job(
+            self.job_id,
+            update
+        )
+    
+    def compile(self):
+        graph = self.workflow.compile()
+        return graph
+
+
+================================================
+FILE: backend/classes/__init__.py
+================================================
+from .state import InputState, ResearchState
+
+__all__ = ["InputState", "ResearchState"] 
+
+
+================================================
+FILE: backend/classes/state.py
+================================================
+from typing import TypedDict, NotRequired, Required, Dict, List, Any
+from backend.services.websocket_manager import WebSocketManager
+
+#Define the input state
+class InputState(TypedDict, total=False):
+    company: Required[str]
+    company_url: NotRequired[str]
+    hq_location: NotRequired[str]
+    industry: NotRequired[str]
+    websocket_manager: NotRequired[WebSocketManager]
+    job_id: NotRequired[str]
+
+class ResearchState(InputState):
+    site_scrape: Dict[str, Any]
+    messages: List[Any]
+    financial_data: Dict[str, Any]
+    news_data: Dict[str, Any]
+    industry_data: Dict[str, Any]
+    company_data: Dict[str, Any]
+    curated_financial_data: Dict[str, Any]
+    curated_news_data: Dict[str, Any]
+    curated_industry_data: Dict[str, Any]
+    curated_company_data: Dict[str, Any]
+    financial_briefing: str
+    news_briefing: str
+    industry_briefing: str
+    company_briefing: str
+    references: List[str]
+    briefings: Dict[str, Any]
+    report: str
+
+
+================================================
+FILE: backend/nodes/__init__.py
+================================================
+from .grounding import GroundingNode
+
+__all__ = ["GroundingNode"] 
+
+
+================================================
+FILE: backend/nodes/briefing.py
+================================================
+import google.generativeai as genai
+from typing import Dict, Any, Union, List
+import os
+import logging
+from ..classes import ResearchState
+import asyncio
+
+logger = logging.getLogger(__name__)
+
+class Briefing:
+    """Creates briefings for each research category and updates the ResearchState."""
+    
+    def __init__(self) -> None:
+        self.max_doc_length = 8000  # Maximum document content length
+        self.gemini_key = os.getenv("GEMINI_API_KEY")
+        if not self.gemini_key:
+            raise ValueError("GEMINI_API_KEY environment variable is not set")
+        
+        # Configure Gemini
+        genai.configure(api_key=self.gemini_key)
+        self.gemini_model = genai.GenerativeModel('gemini-2.0-flash')
+
+    async def generate_category_briefing(
+        self, docs: Union[Dict[str, Any], List[Dict[str, Any]]], 
+        category: str, context: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        company = context.get('company', 'Unknown')
+        industry = context.get('industry', 'Unknown')
+        hq_location = context.get('hq_location', 'Unknown')
+        logger.info(f"Generating {category} briefing for {company} using {len(docs)} documents")
+
+        # Send category start status
+        if websocket_manager := context.get('websocket_manager'):
+            if job_id := context.get('job_id'):
+                await websocket_manager.send_status_update(
+                    job_id=job_id,
+                    status="briefing_start",
+                    message=f"Generating {category} briefing",
+                    result={
+                        "step": "Briefing",
+                        "category": category,
+                        "total_docs": len(docs)
+                    }
+                )
+
+        prompts = {
+            'company': f"""Create a focused company briefing for {company}, a {industry} company based in {hq_location}.
+Key requirements:
+1. Start with: "{company} is a [what] that [does what] for [whom]"
+2. Structure using these exact headers and bullet points:
+
+### Core Product/Service
+* List distinct products/features
+* Include only verified technical capabilities
+
+### Leadership Team
+* List key leadership team members
+* Include their roles and expertise
+
+### Target Market
+* List specific target audiences
+* List verified use cases
+* List confirmed customers/partners
+
+### Key Differentiators
+* List unique features
+* List proven advantages
+
+### Business Model
+* Discuss product / service pricing
+* List distribution channels
+
+3. Each bullet must be a single, complete fact
+4. Never mention "no information found" or "no data available"
+5. No paragraphs, only bullet points
+6. Provide only the briefing. No explanations or commentary.""",
+
+            'industry': f"""Create a focused industry briefing for {company}, a {industry} company based in {hq_location}.
+Key requirements:
+1. Structure using these exact headers and bullet points:
+
+### Market Overview
+* State {company}'s exact market segment
+* List market size with year
+* List growth rate with year range
+
+### Direct Competition
+* List named direct competitors
+* List specific competing products
+* List market positions
+
+### Competitive Advantages
+• List unique technical features
+• List proven advantages
+
+### Market Challenges
+• List specific verified challenges
+
+2. Each bullet must be a single, complete news event.
+3. No paragraphs, only bullet points
+4. Never mention "no information found" or "no data available"
+5. Provide only the briefing. No explanation.""",
+
+            'financial': f"""Create a focused financial briefing for {company}, a {industry} company based in {hq_location}.
+Key requirements:
+1. Structure using these headers and bullet points:
+
+### Funding & Investment
+* Total funding amount with date
+* List each funding round with date
+* List named investors
+
+### Revenue Model
+* Discuss product / service pricing if applicable
+
+2. Include specific numbers when possible
+3. No paragraphs, only bullet points
+4. Never mention "no information found" or "no data available"
+5. NEVER repeat the same round of funding multiple times. ALWAYS assume that multiple funding rounds in the same month are the same round.
+6. NEVER include a range of funding amounts. Use your best judgement to determine the exact amount based on the information provided.
+6. Provide only the briefing. No explanation or commentary.""",
+
+            'news': f"""Create a focused news briefing for {company}, a {industry} company based in {hq_location}.
+Key requirements:
+1. Structure into these categories using bullet points:
+
+### Major Announcements
+* Product / service launches
+* New initiatives
+
+### Partnerships
+* Integrations
+* Collaborations
+
+### Recognition
+* Awards
+* Press coverage
+
+2. Sort newest to oldest
+3. One event per bullet point
+4. Do not mention "no information found" or "no data available"
+5. Never use ### headers, only bullet points
+6. Provide only the briefing. Do not provide explanations or commentary.""",
+        }
+        
+        # Normalize docs to a list of (url, doc) tuples
+        items = list(docs.items()) if isinstance(docs, dict) else [
+            (doc.get('url', f'doc_{i}'), doc) for i, doc in enumerate(docs)
+        ]
+        # Sort documents by evaluation score (highest first)
+        sorted_items = sorted(
+            items, 
+            key=lambda x: float(x[1].get('evaluation', {}).get('overall_score', '0')), 
+            reverse=True
+        )
+        
+        doc_texts = []
+        total_length = 0
+        for _ , doc in sorted_items:
+            title = doc.get('title', '')
+            content = doc.get('raw_content') or doc.get('content', '')
+            if len(content) > self.max_doc_length:
+                content = content[:self.max_doc_length] + "... [content truncated]"
+            doc_entry = f"Title: {title}\n\nContent: {content}"
+            if total_length + len(doc_entry) < 120000:  # Keep under limit
+                doc_texts.append(doc_entry)
+                total_length += len(doc_entry)
+            else:
+                break
+        
+        separator = "\n" + "-" * 40 + "\n"
+        prompt = f"""{prompts.get(category, 'Create a focused, informative and insightful research briefing on the company: {company} in the {industry} industry based on the provided documents.')}
+
+Analyze the following documents and extract key information. Provide only the briefing, no explanations or commentary:
+
+{separator}{separator.join(doc_texts)}{separator}
+
+"""
+        
+        try:
+            logger.info("Sending prompt to LLM")
+            response = self.gemini_model.generate_content(prompt)
+            content = response.text.strip()
+            if not content:
+                logger.error(f"Empty response from LLM for {category} briefing")
+                return {'content': ''}
+
+            # Send completion status
+            if websocket_manager := context.get('websocket_manager'):
+                if job_id := context.get('job_id'):
+                    await websocket_manager.send_status_update(
+                        job_id=job_id,
+                        status="briefing_complete",
+                        message=f"Completed {category} briefing",
+                        result={
+                            "step": "Briefing",
+                            "category": category
+                        }
+                    )
+
+            return {'content': content}
+        except Exception as e:
+            logger.error(f"Error generating {category} briefing: {e}")
+            return {'content': ''}
+
+    async def create_briefings(self, state: ResearchState) -> ResearchState:
+        """Create briefings for all categories in parallel."""
+        company = state.get('company', 'Unknown Company')
+        websocket_manager = state.get('websocket_manager')
+        job_id = state.get('job_id')
+        
+        # Send initial briefing status
+        if websocket_manager and job_id:
+            await websocket_manager.send_status_update(
+                job_id=job_id,
+                status="processing",
+                message="Starting research briefings",
+                result={"step": "Briefing"}
+            )
+
+        context = {
+            "company": company,
+            "industry": state.get('industry', 'Unknown'),
+            "hq_location": state.get('hq_location', 'Unknown'),
+            "websocket_manager": websocket_manager,
+            "job_id": job_id
+        }
+        logger.info(f"Creating section briefings for {company}")
+        
+        # Mapping of curated data fields to briefing categories
+        categories = {
+            'financial_data': ("financial", "financial_briefing"),
+            'news_data': ("news", "news_briefing"),
+            'industry_data': ("industry", "industry_briefing"),
+            'company_data': ("company", "company_briefing")
+        }
+        
+        briefings = {}
+
+        # Create tasks for parallel processing
+        briefing_tasks = []
+        for data_field, (cat, briefing_key) in categories.items():
+            curated_key = f'curated_{data_field}'
+            curated_data = state.get(curated_key, {})
+            
+            if curated_data:
+                logger.info(f"Processing {data_field} with {len(curated_data)} documents")
+                
+                # Create task for this category
+                briefing_tasks.append({
+                    'category': cat,
+                    'briefing_key': briefing_key,
+                    'data_field': data_field,
+                    'curated_data': curated_data
+                })
+            else:
+                logger.info(f"No data available for {data_field}")
+                state[briefing_key] = ""
+
+        # Process briefings in parallel with rate limiting
+        if briefing_tasks:
+            # Rate limiting semaphore for LLM API
+            briefing_semaphore = asyncio.Semaphore(2)  # Limit to 2 concurrent briefings
+            
+            async def process_briefing(task: Dict[str, Any]) -> Dict[str, Any]:
+                """Process a single briefing with rate limiting."""
+                async with briefing_semaphore:
+                    result = await self.generate_category_briefing(
+                        task['curated_data'],
+                        task['category'],
+                        context
+                    )
+                    
+                    if result['content']:
+                        briefings[task['category']] = result['content']
+                        state[task['briefing_key']] = result['content']
+                        logger.info(f"Completed {task['data_field']} briefing ({len(result['content'])} characters)")
+                    else:
+                        logger.error(f"Failed to generate briefing for {task['data_field']}")
+                        state[task['briefing_key']] = ""
+                    
+                    return {
+                        'category': task['category'],
+                        'success': bool(result['content']),
+                        'length': len(result['content']) if result['content'] else 0
+                    }
+
+            # Process all briefings in parallel
+            results = await asyncio.gather(*[
+                process_briefing(task) 
+                for task in briefing_tasks
+            ])
+            
+            # Log completion statistics
+            successful_briefings = sum(1 for r in results if r['success'])
+            total_length = sum(r['length'] for r in results)
+            logger.info(f"Generated {successful_briefings}/{len(briefing_tasks)} briefings with total length {total_length}")
+
+        state['briefings'] = briefings
+        return state
+
+    async def run(self, state: ResearchState) -> ResearchState:
+        return await self.create_briefings(state)
+
+
+================================================
+FILE: backend/nodes/collector.py
+================================================
+from langchain_core.messages import AIMessage
+from ..classes import ResearchState
+
+class Collector:
+    """Collects and organizes all research data before curation."""
+
+    async def collect(self, state: ResearchState) -> ResearchState:
+        """Collect and verify all research data is present."""
+        company = state.get('company', 'Unknown Company')
+        msg = [f"📦 Collecting research data for {company}:"]
+
+        if websocket_manager := state.get('websocket_manager'):
+            if job_id := state.get('job_id'):
+                await websocket_manager.send_status_update(
+                    job_id=job_id,
+                    status="processing",
+                    message=f"Collecting research data for {company}",
+                    result={"step": "Collecting"}
+                )
+        
+        # Check each type of research data
+        research_types = {
+            'financial_data': '💰 Financial',
+            'news_data': '📰 News',
+            'industry_data': '🏭 Industry',
+            'company_data': '🏢 Company'
+        }
+        
+        for data_field, label in research_types.items():
+            data = state.get(data_field, {})
+            if data:
+                msg.append(f"• {label}: {len(data)} documents collected")
+            else:
+                msg.append(f"• {label}: No data found")
+        
+        # Update state with collection message
+        messages = state.get('messages', [])
+        messages.append(AIMessage(content="\n".join(msg)))
+        state['messages'] = messages
+        
+        return state
+
+    async def run(self, state: ResearchState) -> ResearchState:
+        return await self.collect(state)
+
+
+================================================
+FILE: backend/nodes/curator.py
+================================================
+from langchain_core.messages import AIMessage
+from typing import Dict
+from ..classes import ResearchState
+from urllib.parse import urlparse, urljoin
+import logging
+from ..utils.references import process_references_from_search_results
+
+logger = logging.getLogger(__name__)
+
+class Curator:
+    def __init__(self) -> None:
+        self.relevance_threshold = 0.4  # Fixed initialization of class attribute
+        logger.info("Curator initialized with relevance threshold: {relevance_threshhold}")
+
+    async def evaluate_documents(self, state: ResearchState, docs: list, context: Dict[str, str]) -> list:
+        """Evaluate documents based on Tavily's scoring."""
+        if websocket_manager := state.get('websocket_manager'):
+            if job_id := state.get('job_id'):
+                logger.info(f"Sending initial curation status update for job {job_id}")
+                await websocket_manager.send_status_update(
+                    job_id=job_id,
+                    status="processing",
+                    message=f"Evaluating documents",
+                    result={
+                        "step": "Curation",
+                    }
+                )
+        
+        if not docs:
+            return []
+
+        logger.info(f"Evaluating {len(docs)} documents")
+        
+        evaluated_docs = []
+        try:
+            # Evaluate each document using Tavily's score
+            for doc in docs:
+                try:
+                    # Ensure score is a valid float
+                    tavily_score = float(doc.get('score', 0))  # Default to 0 if no score
+                    
+                    # Keep documents with good Tavily score
+                    if tavily_score >= self.relevance_threshold:
+                        logger.info(f"Document passed threshold with score {tavily_score:.4f} for '{doc.get('title', 'No title')}'")
+                        
+                        evaluated_doc = {
+                            **doc,
+                            "evaluation": {
+                                "overall_score": tavily_score,  # Store as float
+                                "query": doc.get('query', '')
+                            }
+                        }
+                        evaluated_docs.append(evaluated_doc)
+                        
+                        # Send incremental update for kept document
+                        if websocket_manager := state.get('websocket_manager'):
+                            if job_id := state.get('job_id'):
+                                await websocket_manager.send_status_update(
+                                    job_id=job_id,
+                                    status="document_kept",
+                                    message=f"Kept document: {doc.get('title', 'No title')}",
+                                    result={
+                                        "step": "Curation",
+                                        "doc_type": doc.get('doc_type', 'unknown'),
+                                        "title": doc.get('title', 'No title'),
+                                        "score": tavily_score
+                                    }
+                                )
+                    else:
+                        logger.info(f"Document below threshold with score {tavily_score:.4f} for '{doc.get('title', 'No title')}'")
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"Error processing score for document: {e}")
+                    continue
+                    
+        except Exception as e:
+            logger.error(f"Error during document evaluation: {e}")
+            return []
+
+        # Sort evaluated docs by score before returning
+        evaluated_docs.sort(key=lambda x: float(x['evaluation']['overall_score']), reverse=True)
+        logger.info(f"Returning {len(evaluated_docs)} evaluated documents")
+        
+        return evaluated_docs
+
+    async def curate_data(self, state: ResearchState) -> ResearchState:
+        """Curate all collected data based on Tavily scores."""
+        company = state.get('company', 'Unknown Company')
+        logger.info(f"Starting curation for company: {company}")
+        
+        # Send initial status update through WebSocket
+        if websocket_manager := state.get('websocket_manager'):
+            if job_id := state.get('job_id'):
+                logger.info(f"Sending initial curation status update for job {job_id}")
+                await websocket_manager.send_status_update(
+                    job_id=job_id,
+                    status="processing",
+                    message=f"Starting document curation for {company}",
+                    result={
+                        "step": "Curation",
+                        "doc_counts": {
+                            "company": {"initial": 0, "kept": 0},
+                            "industry": {"initial": 0, "kept": 0},
+                            "financial": {"initial": 0, "kept": 0},
+                            "news": {"initial": 0, "kept": 0}
+                        }
+                    }
+                )
+
+        industry = state.get('industry', 'Unknown')
+        context = {
+            "company": company,
+            "industry": industry,
+            "hq_location": state.get('hq_location', 'Unknown')
+        }
+
+        msg = [f"🔍 Curating research data for {company}"]
+        
+        data_types = {
+            'financial_data': ('💰 Financial', 'financial'),
+            'news_data': ('📰 News', 'news'),
+            'industry_data': ('🏭 Industry', 'industry'),
+            'company_data': ('🏢 Company', 'company')
+        }
+
+        # Create all evaluation tasks upfront
+        curation_tasks = []
+        for data_field, (emoji, doc_type) in data_types.items():
+            data = state.get(data_field, {})
+            if not data:
+                continue
+
+            # Filter and normalize URLs
+            unique_docs = {}
+            for url, doc in data.items():
+                try:
+                    parsed = urlparse(url)
+                    if not parsed.scheme:
+                        url = urljoin('https://', url)
+                    clean_url = parsed._replace(query='', fragment='').geturl()
+                    if clean_url not in unique_docs:
+                        doc['url'] = clean_url
+                        doc['doc_type'] = doc_type
+                        unique_docs[clean_url] = doc
+                except Exception as e:
+                    continue
+
+            docs = list(unique_docs.values())
+            curation_tasks.append((data_field, emoji, doc_type, unique_docs.keys(), docs))
+
+        # Track document counts for each type
+        doc_counts = {}
+
+        for data_field, emoji, doc_type, urls, docs in curation_tasks:
+            msg.append(f"\n{emoji}: Found {len(docs)} documents")
+
+            if websocket_manager := state.get('websocket_manager'):
+                if job_id := state.get('job_id'):
+                    await websocket_manager.send_status_update(
+                        job_id=job_id,
+                        status="category_start",
+                        message=f"Processing {doc_type} documents",
+                        result={
+                            "step": "Curation",
+                            "doc_type": doc_type,
+                            "initial_count": len(docs)
+                        }
+                    )
+
+            evaluated_docs = await self.evaluate_documents(state, docs, context)
+
+            if not evaluated_docs:
+                msg.append(f"  ⚠️ No relevant documents found")
+                doc_counts[data_field] = {"initial": len(docs), "kept": 0}
+                continue
+
+            # Filter and sort by Tavily score
+            relevant_docs = {url: doc for url, doc in zip(urls, evaluated_docs)}
+            sorted_items = sorted(relevant_docs.items(), key=lambda item: item[1]['evaluation']['overall_score'], reverse=True)
+            
+            # Limit to top 30 documents per category
+            if len(sorted_items) > 30:
+                sorted_items = sorted_items[:30]
+            relevant_docs = dict(sorted_items)
+
+            doc_counts[data_field] = {
+                "initial": len(docs),
+                "kept": len(relevant_docs)
+            }
+
+            if relevant_docs:
+                msg.append(f"  ✓ Kept {len(relevant_docs)} relevant documents")
+                logger.info(f"Kept {len(relevant_docs)} documents for {doc_type} with scores above threshold")
+            else:
+                msg.append(f"  ⚠️ No documents met relevance threshold")
+                logger.info(f"No documents met relevance threshold for {doc_type}")
+
+            # Store curated documents in state
+            state[f'curated_{data_field}'] = relevant_docs
+            
+        # Process references using the references module
+        top_reference_urls, reference_titles, reference_info = process_references_from_search_results(state)
+        logger.info(f"Selected top {len(top_reference_urls)} references for the report")
+        
+        # Update state with references and their titles
+        messages = state.get('messages', [])
+        messages.append(AIMessage(content="\n".join(msg)))
+        state['messages'] = messages
+        state['references'] = top_reference_urls
+        state['reference_titles'] = reference_titles
+        state['reference_info'] = reference_info
+
+        # Send final curation stats
+        if websocket_manager := state.get('websocket_manager'):
+            if job_id := state.get('job_id'):
+                await websocket_manager.send_status_update(
+                    job_id=job_id,
+                    status="curation_complete",
+                    message="Document curation complete",
+                    result={
+                        "step": "Curation",
+                        "doc_counts": {
+                            "company": doc_counts.get('company_data', {"initial": 0, "kept": 0}),
+                            "industry": doc_counts.get('industry_data', {"initial": 0, "kept": 0}),
+                            "financial": doc_counts.get('financial_data', {"initial": 0, "kept": 0}),
+                            "news": doc_counts.get('news_data', {"initial": 0, "kept": 0})
+                        }
+                    }
+                )
+
+        return state
+
+    async def run(self, state: ResearchState) -> ResearchState:
+        return await self.curate_data(state)
+
+
+
+================================================
+FILE: backend/nodes/editor.py
+================================================
+from langchain_core.messages import AIMessage
+from typing import Dict, Any
+from openai import AsyncOpenAI
+import os
+import logging
+
+logger = logging.getLogger(__name__)
+
+from ..classes import ResearchState
+from ..utils.references import format_references_section
+
+class Editor:
+    """Compiles individual section briefings into a cohesive final report."""
+    
+    def __init__(self) -> None:
+        self.openai_key = os.getenv("OPENAI_API_KEY")
+        if not self.openai_key:
+            raise ValueError("OPENAI_API_KEY environment variable is not set")
+        
+        # Configure OpenAI
+        self.openai_client = AsyncOpenAI(api_key=self.openai_key)
+        
+        # Initialize context dictionary for use across methods
+        self.context = {
+            "company": "Unknown Company",
+            "industry": "Unknown",
+            "hq_location": "Unknown"
+        }
+
+    async def compile_briefings(self, state: ResearchState) -> ResearchState:
+        """Compile individual briefing categories from state into a final report."""
+        company = state.get('company', 'Unknown Company')
+        
+        # Update context with values from state
+        self.context = {
+            "company": company,
+            "industry": state.get('industry', 'Unknown'),
+            "hq_location": state.get('hq_location', 'Unknown')
+        }
+        
+        # Send initial compilation status
+        if websocket_manager := state.get('websocket_manager'):
+            if job_id := state.get('job_id'):
+                await websocket_manager.send_status_update(
+                    job_id=job_id,
+                    status="processing",
+                    message=f"Starting report compilation for {company}",
+                    result={
+                        "step": "Editor",
+                        "substep": "initialization"
+                    }
+                )
+
+        context = {
+            "company": company,
+            "industry": state.get('industry', 'Unknown'),
+            "hq_location": state.get('hq_location', 'Unknown')
+        }
+        
+        msg = [f"📑 Compiling final report for {company}..."]
+        
+        # Pull individual briefings from dedicated state keys
+        briefing_keys = {
+            'company': 'company_briefing',
+            'industry': 'industry_briefing',
+            'financial': 'financial_briefing',
+            'news': 'news_briefing'
+        }
+
+        # Send briefing collection status
+        if websocket_manager := state.get('websocket_manager'):
+            if job_id := state.get('job_id'):
+                await websocket_manager.send_status_update(
+                    job_id=job_id,
+                    status="processing",
+                    message="Collecting section briefings",
+                    result={
+                        "step": "Editor",
+                        "substep": "collecting_briefings"
+                    }
+                )
+
+        individual_briefings = {}
+        for category, key in briefing_keys.items():
+            if content := state.get(key):
+                individual_briefings[category] = content
+                msg.append(f"Found {category} briefing ({len(content)} characters)")
+            else:
+                msg.append(f"No {category} briefing available")
+                logger.error(f"Missing state key: {key}")
+        
+        if not individual_briefings:
+            msg.append("\n⚠️ No briefing sections available to compile")
+            logger.error("No briefings found in state")
+        else:
+            try:
+                compiled_report = await self.edit_report(state, individual_briefings, context)
+                if not compiled_report or not compiled_report.strip():
+                    logger.error("Compiled report is empty!")
+                else:
+                    logger.info(f"Successfully compiled report with {len(compiled_report)} characters")
+            except Exception as e:
+                logger.error(f"Error during report compilation: {e}")
+        state.setdefault('messages', []).append(AIMessage(content="\n".join(msg)))
+        return state
+    
+    async def edit_report(self, state: ResearchState, briefings: Dict[str, str], context: Dict[str, Any]) -> str:
+        """Compile section briefings into a final report and update the state."""
+        try:
+            company = self.context["company"]
+            
+            # Step 1: Initial Compilation
+            if websocket_manager := state.get('websocket_manager'):
+                if job_id := state.get('job_id'):
+                    await websocket_manager.send_status_update(
+                        job_id=job_id,
+                        status="processing",
+                        message="Compiling initial research report",
+                        result={
+                            "step": "Editor",
+                            "substep": "compilation"
+                        }
+                    )
+
+            edited_report = await self.compile_content(state, briefings, company)
+            if not edited_report:
+                logger.error("Initial compilation failed")
+                return ""
+
+            # Step 2: Deduplication and Cleanup
+            if websocket_manager := state.get('websocket_manager'):
+                if job_id := state.get('job_id'):
+                    await websocket_manager.send_status_update(
+                        job_id=job_id,
+                        status="processing",
+                        message="Cleaning up and organizing report",
+                        result={
+                            "step": "Editor",
+                            "substep": "cleanup"
+                        }
+                    )
+
+            # Step 3: Formatting Final Report
+            if websocket_manager := state.get('websocket_manager'):
+                if job_id := state.get('job_id'):
+                    await websocket_manager.send_status_update(
+                        job_id=job_id,
+                        status="processing",
+                        message="Formatting final report",
+                        result={
+                            "step": "Editor",
+                            "substep": "format"
+                        }
+                    )
+            final_report = await self.content_sweep(state, edited_report, company)
+            
+            final_report = final_report or ""
+            
+            logger.info(f"Final report compiled with {len(final_report)} characters")
+            if not final_report.strip():
+                logger.error("Final report is empty!")
+                return ""
+            
+            logger.info("Final report preview:")
+            logger.info(final_report[:500])
+            
+            # Update state with the final report in two locations
+            state['report'] = final_report
+            state['status'] = "editor_complete"
+            if 'editor' not in state or not isinstance(state['editor'], dict):
+                state['editor'] = {}
+            state['editor']['report'] = final_report
+            logger.info(f"Report length in state: {len(state.get('report', ''))}")
+            
+            if websocket_manager := state.get('websocket_manager'):
+                if job_id := state.get('job_id'):
+                    await websocket_manager.send_status_update(
+                        job_id=job_id,
+                        status="editor_complete",
+                        message="Research report completed",
+                        result={
+                            "step": "Editor",
+                            "report": final_report,
+                            "company": company,
+                            "is_final": True,
+                            "status": "completed"
+                        }
+                    )
+            
+            return final_report
+        except Exception as e:
+            logger.error(f"Error in edit_report: {e}")
+            return ""
+    
+    async def compile_content(self, state: ResearchState, briefings: Dict[str, str], company: str) -> str:
+        """Initial compilation of research sections."""
+        combined_content = "\n\n".join(content for content in briefings.values())
+        
+        references = state.get('references', [])
+        reference_text = ""
+        if references:
+            logger.info(f"Found {len(references)} references to add during compilation")
+            
+            # Get pre-processed reference info from curator
+            reference_info = state.get('reference_info', {})
+            reference_titles = state.get('reference_titles', {})
+            
+            logger.info(f"Reference info from state: {reference_info}")
+            logger.info(f"Reference titles from state: {reference_titles}")
+            
+            # Use the references module to format the references section
+            reference_text = format_references_section(references, reference_info, reference_titles)
+            logger.info(f"Added {len(references)} references during compilation")
+        
+        # Use values from centralized context
+        company = self.context["company"]
+        industry = self.context["industry"]
+        hq_location = self.context["hq_location"]
+        
+        prompt = f"""You are compiling a comprehensive research report about {company}.
+
+Compiled briefings:
+{combined_content}
+
+Create a comprehensive and focused report on {company}, a {industry} company headquartered in {hq_location} that:
+1. Integrates information from all sections into a cohesive non-repetitive narrative
+2. Maintains important details from each section
+3. Logically organizes information and removes transitional commentary / explanations
+4. Uses clear section headers and structure
+
+Formatting rules:
+Strictly enforce this EXACT document structure:
+
+# {company} Research Report
+
+## Company Overview
+[Company content with ### subsections]
+
+## Industry Overview
+[Industry content with ### subsections]
+
+## Financial Overview
+[Financial content with ### subsections]
+
+## News
+[News content with ### subsections]
+
+Return the report in clean markdown format. No explanations or commentary."""
+        
+        try:
+            response = await self.openai_client.chat.completions.create(
+                model="gpt-4.1",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are an expert report editor that compiles research briefings into comprehensive company reports."
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                temperature=0,
+                stream=False
+            )
+            initial_report = response.choices[0].message.content.strip()
+            
+            # Append the references section after LLM processing
+            if reference_text:
+                initial_report = f"{initial_report}\n\n{reference_text}"
+            
+            return initial_report
+        except Exception as e:
+            logger.error(f"Error in initial compilation: {e}")
+            return (combined_content or "").strip()
+        
+    async def content_sweep(self, state: ResearchState, content: str, company: str) -> str:
+        """Sweep the content for any redundant information."""
+        # Use values from centralized context
+        company = self.context["company"]
+        industry = self.context["industry"]
+        hq_location = self.context["hq_location"]
+        
+        prompt = f"""You are an expert briefing editor. You are given a report on {company}.
+
+Current report:
+{content}
+
+1. Remove redundant or repetitive information
+2. Remove information that is not relevant to {company}, the {industry} company headquartered in {hq_location}.
+3. Remove sections lacking substantial content
+4. Remove any meta-commentary (e.g. "Here is the news...")
+
+Strictly enforce this EXACT document structure:
+
+## Company Overview
+[Company content with ### subsections]
+
+## Industry Overview
+[Industry content with ### subsections]
+
+## Financial Overview
+[Financial content with ### subsections]
+
+## News
+[News content with ### subsections]
+
+## References
+[References in MLA format - PRESERVE EXACTLY AS PROVIDED]
+
+Critical rules:
+1. The document MUST start with "# {company} Research Report"
+2. The document MUST ONLY use these exact ## headers in this order:
+   - ## Company Overview
+   - ## Industry Overview
+   - ## Financial Overview
+   - ## News
+   - ## References
+3. NO OTHER ## HEADERS ARE ALLOWED
+4. Use ### for subsections in Company/Industry/Financial sections
+5. News section should only use bullet points (*), never headers
+6. Never use code blocks (```)
+7. Never use more than one blank line between sections
+8. Format all bullet points with *
+9. Add one blank line before and after each section/list
+10. DO NOT CHANGE the format of the references section
+
+Return the polished report in flawless markdown format. No explanation.
+
+Return the cleaned report in flawless markdown format. No explanations or commentary."""
+        
+        try:
+            response = await self.openai_client.chat.completions.create(
+                model="gpt-4.1-mini", 
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are an expert markdown formatter that ensures consistent document structure."
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                temperature=0,
+                stream=True
+            )
+            
+            accumulated_text = ""
+            buffer = ""
+            
+            async for chunk in response:
+                if chunk.choices[0].finish_reason == "stop":
+                    websocket_manager = state.get('websocket_manager')
+                    if websocket_manager and buffer:
+                        job_id = state.get('job_id')
+                        if job_id:
+                            await websocket_manager.send_status_update(
+                                job_id=job_id,
+                                status="report_chunk",
+                                message="Formatting final report",
+                                result={
+                                    "chunk": buffer,
+                                    "step": "Editor"
+                                }
+                            )
+                    break
+                    
+                chunk_text = chunk.choices[0].delta.content
+                if chunk_text:
+                    accumulated_text += chunk_text
+                    buffer += chunk_text
+                    
+                    if any(char in buffer for char in ['.', '!', '?', '\n']) and len(buffer) > 10:
+                        if websocket_manager := state.get('websocket_manager'):
+                            if job_id := state.get('job_id'):
+                                await websocket_manager.send_status_update(
+                                    job_id=job_id,
+                                    status="report_chunk",
+                                    message="Formatting final report",
+                                    result={
+                                        "chunk": buffer,
+                                        "step": "Editor"
+                                    }
+                                )
+                        buffer = ""
+            
+            return (accumulated_text or "").strip()
+        except Exception as e:
+            logger.error(f"Error in formatting: {e}")
+            return (content or "").strip()
+
+    async def run(self, state: ResearchState) -> ResearchState:
+        state = await self.compile_briefings(state)
+        # Ensure the Editor node's output is stored both top-level and under "editor"
+        if 'report' in state:
+            if 'editor' not in state or not isinstance(state['editor'], dict):
+                state['editor'] = {}
+            state['editor']['report'] = state['report']
+        return state
+
+
+
+================================================
+FILE: backend/nodes/enricher.py
+================================================
+from langchain_core.messages import AIMessage
+from typing import Dict, List
+import os
+from tavily import AsyncTavilyClient
+import asyncio
+from ..classes import ResearchState
+
+class Enricher:
+    """Enriches curated documents with raw content."""
+    
+    def __init__(self) -> None:
+        tavily_key = os.getenv("TAVILY_API_KEY")
+        if not tavily_key:
+            raise ValueError("TAVILY_API_KEY environment variable is not set")
+        self.tavily_client = AsyncTavilyClient(api_key=tavily_key)
+        self.batch_size = 20
+
+    async def fetch_single_content(self, url: str, websocket_manager=None, job_id=None, category=None) -> Dict[str, str]:
+        """Fetch raw content for a single URL."""
+        try:
+            if websocket_manager and job_id:
+                await websocket_manager.send_status_update(
+                    job_id=job_id,
+                    status="extracting",
+                    message=f"Extracting content from {url}",
+                    result={
+                        "step": "Enriching",
+                        "url": url,
+                        "category": category
+                    }
+                )
+
+            result = await self.tavily_client.extract(url)
+            if result and result.get('results'):
+                if websocket_manager and job_id:
+                    await websocket_manager.send_status_update(
+                        job_id=job_id,
+                        status="extracted",
+                        message=f"Successfully extracted content from {url}",
+                        result={
+                            "step": "Enriching",
+                            "url": url,
+                            "category": category,
+                            "success": True
+                        }
+                    )
+                return {url: result['results'][0].get('raw_content', '')}
+        except Exception as e:
+            print(f"Error fetching raw content for {url}: {e}")
+            error_msg = str(e)
+            if websocket_manager and job_id:
+                await websocket_manager.send_status_update(
+                    job_id=job_id,
+                    status="extraction_error",
+                    message=f"Failed to extract content from {url}: {error_msg}",
+                    result={
+                        "step": "Enriching",
+                        "url": url,
+                        "category": category,
+                        "success": False,
+                        "error": error_msg
+                    }
+                )
+            return {url: '', "error": error_msg}
+        return {url: ''}
+
+    async def fetch_raw_content(self, urls: List[str], websocket_manager=None, job_id=None, category=None) -> Dict[str, str]:
+        """Fetch raw content for multiple URLs in parallel."""
+        raw_contents = {}
+        total_batches = (len(urls) + self.batch_size - 1) // self.batch_size
+
+        # Create batches
+        batches = [urls[i:i + self.batch_size] for i in range(0, len(urls), self.batch_size)]
+        
+        # Process batches in parallel with rate limiting
+        semaphore = asyncio.Semaphore(3)  # Limit concurrent batches to 3
+        
+        async def process_batch(batch_num: int, batch_urls: List[str]) -> Dict[str, str]:
+            async with semaphore:
+                if websocket_manager and job_id:
+                    await websocket_manager.send_status_update(
+                        job_id=job_id,
+                        status="batch_start",
+                        message=f"Processing batch {batch_num + 1}/{total_batches}",
+                        result={
+                            "step": "Enriching",
+                            "batch": batch_num + 1,
+                            "total_batches": total_batches,
+                            "category": category
+                        }
+                    )
+
+                # Process URLs in batch concurrently
+                tasks = [self.fetch_single_content(url, websocket_manager, job_id, category) for url in batch_urls]
+                results = await asyncio.gather(*tasks)
+                
+                # Combine results from batch
+                batch_contents = {}
+                for result in results:
+                    batch_contents.update(result)
+                
+                return batch_contents
+
+        # Process all batches
+        batch_results = await asyncio.gather(*[
+            process_batch(i, batch) 
+            for i, batch in enumerate(batches)
+        ])
+
+        # Combine results from all batches
+        for batch_result in batch_results:
+            raw_contents.update(batch_result)
+
+        return raw_contents
+
+    async def enrich_data(self, state: ResearchState) -> ResearchState:
+        """Enrich curated documents with raw content."""
+        company = state.get('company', 'Unknown Company')
+        websocket_manager = state.get('websocket_manager')
+        job_id = state.get('job_id')
+
+        if websocket_manager and job_id:
+            await websocket_manager.send_status_update(
+                job_id=job_id,
+                status="processing",
+                message=f"Starting content enrichment for {company}",
+                result={
+                    "step": "Enriching",
+                    "substep": "initialization"
+                }
+            )
+
+        msg = [f"📚 Enriching curated data for {company}:"]
+
+        # Process each type of curated data
+        data_types = {
+            'financial_data': ('💰 Financial', 'financial'),
+            'news_data': ('📰 News', 'news'),
+            'industry_data': ('🏭 Industry', 'industry'),
+            'company_data': ('🏢 Company', 'company')
+        }
+
+        # Create tasks for parallel processing
+        enrichment_tasks = []
+        for data_field, (label, category) in data_types.items():
+            curated_field = f'curated_{data_field}'
+            curated_docs = state.get(curated_field, {})
+            
+            if not curated_docs:
+                msg.append(f"\n• No curated {label} documents to enrich")
+                continue
+
+            # Find documents needing enrichment
+            docs_needing_content = {url: doc for url, doc in curated_docs.items() 
+                                  if not doc.get('raw_content')}
+            
+            if not docs_needing_content:
+                msg.append(f"\n• All {label} documents already have raw content")
+                continue
+            
+            msg.append(f"\n• Enriching {len(docs_needing_content)} {label} documents...")
+
+            if websocket_manager and job_id:
+                await websocket_manager.send_status_update(
+                    job_id=job_id,
+                    status="category_start",
+                    message=f"Processing {label} documents",
+                    result={
+                        "step": "Enriching",
+                        "category": category,
+                        "count": len(docs_needing_content)
+                    }
+                )
+
+            # Create task for this category
+            enrichment_tasks.append({
+                'field': curated_field,
+                'category': category,
+                'label': label,
+                'docs': docs_needing_content,
+                'curated_docs': curated_docs
+            })
+
+        # Process all categories in parallel
+        if enrichment_tasks:
+            async def process_category(task):
+                try:
+                    raw_contents = await self.fetch_raw_content(
+                        list(task['docs'].keys()),
+                        websocket_manager,
+                        job_id,
+                        task['category']
+                    )
+                    
+                    enriched_count = 0
+                    error_count = 0
+                    
+                    for url, content_or_error in raw_contents.items():
+                        if isinstance(content_or_error, dict) and content_or_error.get('error'):
+                            # This is an error result - just skip it
+                            error_count += 1
+                        elif content_or_error:
+                            # This is a successful content
+                            task['curated_docs'][url]['raw_content'] = content_or_error
+                            enriched_count += 1
+
+                    # Update state with enriched documents
+                    state[task['field']] = task['curated_docs']
+                    
+                    if websocket_manager and job_id:
+                        await websocket_manager.send_status_update(
+                            job_id=job_id,
+                            status="category_complete",
+                            message=f"Completed {task['label']} documents",
+                            result={
+                                "step": "Enriching",
+                                "category": task['category'],
+                                "enriched": enriched_count,
+                                "total": len(task['docs'])
+                            }
+                        )
+                    
+                    return {
+                        'category': task['category'],
+                        'enriched': enriched_count,
+                        'total': len(task['docs']),
+                        'errors': error_count
+                    }
+                except Exception as e:
+                    # Log the error but don't fail the entire process
+                    print(f"Error processing category {task['category']}: {e}")
+                    return {
+                        'category': task['category'],
+                        'enriched': 0,
+                        'total': len(task['docs']),
+                        'errors': len(task['docs'])
+                    }
+
+            # Process all categories in parallel
+            results = await asyncio.gather(*[process_category(task) for task in enrichment_tasks])
+            
+            # Calculate totals
+            total_enriched = sum(r['enriched'] for r in results)
+            total_documents = sum(r['total'] for r in results)
+            total_errors = sum(r.get('errors', 0) for r in results)
+
+            # Send final status update
+            if websocket_manager and job_id:
+                status_message = f"Content enrichment complete. Successfully enriched {total_enriched}/{total_documents} documents"
+                if total_errors > 0:
+                    status_message += f". Skipped {total_errors} documents."
+                
+                await websocket_manager.send_status_update(
+                    job_id=job_id,
+                    status="enrichment_complete",
+                    message=status_message,
+                    result={
+                        "step": "Enriching",
+                        "total_enriched": total_enriched,
+                        "total_documents": total_documents,
+                        "total_errors": total_errors
+                    }
+                )
+
+        # Update state with enrichment message
+        messages = state.get('messages', [])
+        messages.append(AIMessage(content="\n".join(msg)))
+        state['messages'] = messages
+        
+        return state
+
+    async def run(self, state: ResearchState) -> ResearchState:
+        try:
+            return await self.enrich_data(state)
+        except Exception as e:
+            # Log the error but don't fail the research process
+            print(f"Error in enrichment process: {e}")
+            # Return the original state without any enrichment
+            return state 
+
+
+================================================
+FILE: backend/nodes/grounding.py
+================================================
+from langchain_core.messages import AIMessage
+from tavily import AsyncTavilyClient
+import os
+import logging
+from ..classes import InputState, ResearchState
+
+logger = logging.getLogger(__name__)
+
+class GroundingNode:
+    """Gathers initial grounding data about the company."""
+    
+    def __init__(self) -> None:
+        self.tavily_client = AsyncTavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
+
+    async def initial_search(self, state: InputState) -> ResearchState:
+        # Add debug logging at the start to check websocket manager
+        if websocket_manager := state.get('websocket_manager'):
+            logger.info("Websocket manager found in state")
+        else:
+            logger.warning("No websocket manager found in state")
+        
+        company = state.get('company', 'Unknown Company')
+        msg = f"🎯 Initiating research for {company}...\n"
+        
+        if websocket_manager := state.get('websocket_manager'):
+            if job_id := state.get('job_id'):
+                await websocket_manager.send_status_update(
+                    job_id=job_id,
+                    status="processing",
+                    message=f"🎯 Initiating research for {company}",
+                    result={"step": "Initializing"}
+                )
+
+        site_scrape = {}
+
+        # Only attempt extraction if we have a URL
+        if url := state.get('company_url'):
+            msg += f"\n🌐 Analyzing company website: {url}"
+            logger.info(f"Starting website analysis for {url}")
+            
+            # Send initial briefing status
+            if websocket_manager := state.get('websocket_manager'):
+                if job_id := state.get('job_id'):
+                    await websocket_manager.send_status_update(
+                        job_id=job_id,
+                        status="processing",
+                        message="Analyzing company website",
+                        result={"step": "Initial Site Scrape"}
+                    )
+
+            try:
+                logger.info("Initiating Tavily extraction")
+                site_extraction = await self.tavily_client.extract(url, extract_depth="basic")
+                
+                raw_contents = []
+                for item in site_extraction.get("results", []):
+                    if content := item.get("raw_content"):
+                        raw_contents.append(content)
+                
+                if raw_contents:
+                    site_scrape = {
+                        'title': company,
+                        'raw_content': "\n\n".join(raw_contents)
+                    }
+                    logger.info(f"Successfully extracted {len(raw_contents)} content sections")
+                    msg += f"\n✅ Successfully extracted content from website"
+                    if websocket_manager := state.get('websocket_manager'):
+                        if job_id := state.get('job_id'):
+                            await websocket_manager.send_status_update(
+                                job_id=job_id,
+                                status="processing",
+                                message="Successfully extracted content from website",
+                                result={"step": "Initial Site Scrape"}
+                            )
+                else:
+                    logger.warning("No content found in extraction results")
+                    msg += f"\n⚠️ No content found in website extraction"
+                    if websocket_manager := state.get('websocket_manager'):
+                        if job_id := state.get('job_id'):
+                            await websocket_manager.send_status_update(
+                                job_id=job_id,
+                                status="processing",
+                                message="⚠️ No content found in provided URL",
+                                result={"step": "Initial Site Scrape"}
+                            )
+            except Exception as e:
+                error_str = str(e)
+                logger.error(f"Website extraction error: {error_str}", exc_info=True)
+                error_msg = f"⚠️ Error extracting website content: {error_str}"
+                print(error_msg)
+                msg += f"\n{error_msg}"
+                if websocket_manager := state.get('websocket_manager'):
+                    if job_id := state.get('job_id'):
+                        await websocket_manager.send_status_update(
+                            job_id=job_id,
+                            status="website_error",
+                            message=error_msg,
+                            result={
+                                "step": "Initial Site Scrape", 
+                                "error": error_str,
+                                "continue_research": True  # Continue with research even if website extraction fails
+                            }
+                        )
+        else:
+            msg += "\n⏩ No company URL provided, proceeding directly to research phase"
+            if websocket_manager := state.get('websocket_manager'):
+                if job_id := state.get('job_id'):
+                    await websocket_manager.send_status_update(
+                        job_id=job_id,
+                        status="processing",
+                        message="No company URL provided, proceeding directly to research phase",
+                        result={"step": "Initializing"}
+                    )
+        # Add context about what information we have
+        context_data = {}
+        if hq := state.get('hq_location'):
+            msg += f"\n📍 Company HQ: {hq}"
+            context_data["hq_location"] = hq
+        if industry := state.get('industry'):
+            msg += f"\n🏭 Industry: {industry}"
+            context_data["industry"] = industry
+        
+        # Initialize ResearchState with input information
+        research_state = {
+            # Copy input fields
+            "company": state.get('company'),
+            "company_url": state.get('company_url'),
+            "hq_location": state.get('hq_location'),
+            "industry": state.get('industry'),
+            # Initialize research fields
+            "messages": [AIMessage(content=msg)],
+            "site_scrape": site_scrape,
+            # Pass through websocket info
+            "websocket_manager": state.get('websocket_manager'),
+            "job_id": state.get('job_id')
+        }
+
+        # If there was an error in the initial extraction, store it in the state
+        if "⚠️ Error extracting website content:" in msg:
+            research_state["error"] = error_str
+
+        return research_state
+
+    async def run(self, state: InputState) -> ResearchState:
+        return await self.initial_search(state)
+
+
+
+================================================
+FILE: backend/nodes/researchers/__init__.py
+================================================
+from .financial import FinancialAnalyst
+from .news import NewsScanner
+from .industry import IndustryAnalyzer
+from .company import CompanyAnalyzer
+
+__all__ = ["FinancialAnalyst", "NewsScanner", "IndustryAnalyzer", "CompanyAnalyzer"] 
+
+
+================================================
+FILE: backend/nodes/researchers/base.py
+================================================
+import os
+from datetime import datetime
+from openai import AsyncOpenAI
+from tavily import AsyncTavilyClient
+from ...classes import ResearchState
+from typing import Dict, Any, List
+import logging
+from ...utils.references import clean_title
+import asyncio
+
+logger = logging.getLogger(__name__)
+
+class BaseResearcher:
+    def __init__(self):
+        tavily_key = os.getenv("TAVILY_API_KEY")
+        openai_key = os.getenv("OPENAI_API_KEY")
+        
+        if not tavily_key or not openai_key:
+            raise ValueError("Missing API keys")
+            
+        self.tavily_client = AsyncTavilyClient(api_key=tavily_key)
+        self.openai_client = AsyncOpenAI(api_key=openai_key)
+        self.analyst_type = "base_researcher"  # Default type
+
+    @property
+    def analyst_type(self) -> str:
+        if not hasattr(self, '_analyst_type'):
+            raise ValueError("Analyst type not set by subclass")
+        return self._analyst_type
+
+    @analyst_type.setter
+    def analyst_type(self, value: str):
+        self._analyst_type = value
+
+    async def generate_queries(self, state: Dict, prompt: str) -> List[str]:
+        company = state.get("company", "Unknown Company")
+        industry = state.get("industry", "Unknown Industry")
+        hq = state.get("hq", "Unknown HQ")
+        current_year = datetime.now().year
+        websocket_manager = state.get('websocket_manager')
+        job_id = state.get('job_id')
+        
+        try:
+            logger.info(f"Generating queries for {company} as {self.analyst_type}")
+            
+            response = await self.openai_client.chat.completions.create(
+                model="gpt-4.1-mini",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": f"You are researching {company}, a company in the {industry} industry."
+                    },
+                    {
+                        "role": "user",
+                        "content": f"""Researching {company} on {datetime.now().strftime("%B %d, %Y")}.
+{self._format_query_prompt(prompt, company, hq, current_year)}"""
+                    }
+                ],
+                temperature=0,
+                max_tokens=4096,
+                stream=True
+            )
+            
+            queries = []
+            current_query = ""
+            current_query_number = 1
+
+            async for chunk in response:
+                if chunk.choices[0].finish_reason == "stop":
+                    break
+                    
+                content = chunk.choices[0].delta.content
+                if content:
+                    current_query += content
+                    
+                    # Stream the current state to the UI.
+                    if websocket_manager and job_id:
+                        await websocket_manager.send_status_update(
+                            job_id=job_id,
+                            status="query_generating",
+                            message="Generating research query",
+                            result={
+                                "query": current_query,
+                                "query_number": current_query_number,
+                                "category": self.analyst_type,
+                                "is_complete": False
+                            }
+                        )
+                    
+                    # If a newline is detected, treat it as a complete query.
+                    if '\n' in current_query:
+                        parts = current_query.split('\n')
+                        current_query = parts[-1]  # The last part is the start of the next query.
+                        
+                        for query in parts[:-1]:
+                            query = query.strip()
+                            if query:
+                                queries.append(query)
+                                if websocket_manager and job_id:
+                                    await websocket_manager.send_status_update(
+                                        job_id=job_id,
+                                        status="query_generated",
+                                        message="Generated new research query",
+                                        result={
+                                            "query": query,
+                                            "query_number": len(queries),
+                                            "category": self.analyst_type,
+                                            "is_complete": True
+                                        }
+                                    )
+                                current_query_number += 1
+
+            # Add any remaining query (even if not newline terminated)
+            if current_query.strip():
+                query = current_query.strip()
+                queries.append(query)
+                if websocket_manager and job_id:
+                    await websocket_manager.send_status_update(
+                        job_id=job_id,
+                        status="query_generated",
+                        message="Generated final research query",
+                        result={
+                            "query": query,
+                            "query_number": len(queries),
+                            "category": self.analyst_type,
+                            "is_complete": True
+                        }
+                    )
+                current_query_number += 1
+            
+            logger.info(f"Generated {len(queries)} queries for {self.analyst_type}: {queries}")
+
+            if not queries:
+                raise ValueError(f"No queries generated for {company}")
+
+            # Limit to at most 4 queries.
+            queries = queries[:4]
+            logger.info(f"Final queries for {self.analyst_type}: {queries}")
+            
+            return queries
+            
+        except Exception as e:
+            logger.error(f"Error generating queries for {company}: {e}")
+            if websocket_manager and job_id:
+                await websocket_manager.send_status_update(
+                    job_id=job_id,
+                    status="error",
+                    message=f"Failed to generate research queries: {str(e)}",
+                    error=f"Query generation failed: {str(e)}"
+                )
+            return []
+
+    def _format_query_prompt(self, prompt, company, hq, year):
+        return f"""{prompt}
+
+        Important Guidelines:
+        - Focus ONLY on {company}-specific information
+        - Make queries very brief and to the point
+        - Provide exactly 4 search queries (one per line), with no hyphens or dashes
+        - DO NOT make assumptions about the industry - use only the provided industry information"""
+
+    def _fallback_queries(self, company, year):
+        return [
+            f"{company} overview {year}",
+            f"{company} recent news {year}",
+            f"{company} financial reports {year}",
+            f"{company} industry analysis {year}"
+        ]
+
+    async def search_single_query(self, query: str, websocket_manager=None, job_id=None) -> Dict[str, Any]:
+        """Execute a single search query with proper error handling."""
+        if not query or len(query.split()) < 3:
+            return {}
+
+        try:
+            if websocket_manager and job_id:
+                await websocket_manager.send_status_update(
+                    job_id=job_id,
+                    status="query_searching",
+                    message=f"Searching: {query}",
+                    result={
+                        "step": "Searching",
+                        "query": query
+                    }
+                )
+
+            # Add news topic for news analysts
+            search_params = {
+                "search_depth": "basic",
+                "include_raw_content": False,
+                "max_results": 5
+            }
+            
+            if self.analyst_type == "news_analyst":
+                search_params["topic"] = "news"
+            elif self.analyst_type == "financial_analyst":
+                search_params["topic"] = "finance"
+
+            results = await self.tavily_client.search(
+                query,
+                **search_params
+            )
+            
+            docs = {}
+            for result in results.get("results", []):
+                if not result.get("content") or not result.get("url"):
+                    continue
+                    
+                url = result.get("url")
+                title = result.get("title", "")
+                
+                # Clean up and validate the title using the references module
+                if title:
+                    title = clean_title(title)
+                    # If title is the same as URL or empty, set to empty to trigger extraction later
+                    if title.lower() == url.lower() or not title.strip():
+                        title = ""
+                
+                logger.info(f"Tavily search result for '{query}': URL={url}, Title='{title}'")
+                
+                docs[url] = {
+                    "title": title,
+                    "content": result.get("content", ""),
+                    "query": query,
+                    "url": url,
+                    "source": "web_search",
+                    "score": result.get("score", 0.0)
+                }
+
+            if websocket_manager and job_id:
+                await websocket_manager.send_status_update(
+                    job_id=job_id,
+                    status="query_searched",
+                    message=f"Found {len(docs)} results for: {query}",
+                    result={
+                        "step": "Searching",
+                        "query": query,
+                        "results_count": len(docs)
+                    }
+                )
+
+            return docs
+            
+        except Exception as e:
+            logger.error(f"Error searching query '{query}': {e}")
+            if websocket_manager and job_id:
+                await websocket_manager.send_status_update(
+                    job_id=job_id,
+                    status="query_error",
+                    message=f"Search failed for: {query}",
+                    result={
+                        "step": "Searching",
+                        "query": query,
+                        "error": str(e)
+                    }
+                )
+            return {}
+
+    async def search_documents(self, state: ResearchState, queries: List[str]) -> Dict[str, Any]:
+        """
+        Execute all Tavily searches in parallel at maximum speed
+        """
+        websocket_manager = state.get('websocket_manager')
+        job_id = state.get('job_id')
+
+        if not queries:
+            logger.error("No valid queries to search")
+            return {}
+
+        # Send status update for generated queries
+        if websocket_manager and job_id:
+            await websocket_manager.send_status_update(
+                job_id=job_id,
+                status="queries_generated",
+                message=f"Generated {len(queries)} queries for {self.analyst_type}",
+                result={
+                    "step": "Searching",
+                    "analyst": self.analyst_type,
+                    "queries": queries,
+                    "total_queries": len(queries)
+                }
+            )
+
+        # Prepare all search parameters upfront
+        search_params = {
+            "search_depth": "basic",
+            "include_raw_content": False,
+            "max_results": 5
+        }
+        
+        if self.analyst_type == "news_analyst":
+            search_params["topic"] = "news"
+        elif self.analyst_type == "financial_analyst":
+            search_params["topic"] = "finance"
+
+        if websocket_manager and job_id:
+            await websocket_manager.send_status_update(
+                job_id=job_id,
+                status="search_started",
+                message=f"Using Tavily to search for {len(queries)} queries",
+                result={
+                    "step": "Searching",
+                    "total_queries": len(queries)
+                }
+            )
+        # Create all API calls upfront - direct Tavily client calls without the extra wrapper
+        search_tasks = [
+            self.tavily_client.search(query, **search_params)
+            for query in queries
+        ]
+
+        # Execute all API calls in parallel
+        try:
+            results = await asyncio.gather(*search_tasks)
+        except Exception as e:
+            logger.error(f"Error during parallel search execution: {e}")
+            return {}
+
+        # Process results
+        merged_docs = {}
+        for query, result in zip(queries, results):
+            for item in result.get("results", []):
+                if not item.get("content") or not item.get("url"):
+                    continue
+                    
+                url = item.get("url")
+                title = item.get("title", "")
+                
+                if title:
+                    title = clean_title(title)
+                    if title.lower() == url.lower() or not title.strip():
+                        title = ""
+
+                merged_docs[url] = {
+                    "title": title,
+                    "content": item.get("content", ""),
+                    "query": query,
+                    "url": url,
+                    "source": "web_search",
+                    "score": item.get("score", 0.0)
+                }
+
+        # Send completion status
+        if websocket_manager and job_id:
+            await websocket_manager.send_status_update(
+                job_id=job_id,
+                status="search_complete",
+                message=f"Search completed with {len(merged_docs)} documents found",
+                result={
+                    "step": "Searching",
+                    "total_documents": len(merged_docs),
+                    "queries_processed": len(queries)
+                }
+            )
+
+        return merged_docs
+
+
+
+================================================
+FILE: backend/nodes/researchers/company.py
+================================================
+from langchain_core.messages import AIMessage
+from typing import Dict, Any
+
+from ...classes import ResearchState
+from .base import BaseResearcher
+
+class CompanyAnalyzer(BaseResearcher):
+    def __init__(self) -> None:
+        super().__init__()
+        self.analyst_type = "company_analyzer"
+
+    async def analyze(self, state: ResearchState) -> Dict[str, Any]:
+        company = state.get('company', 'Unknown Company')
+        msg = [f"🏢 Company Analyzer analyzing {company}"]
+        
+        # Generate search queries using LLM
+        queries = await self.generate_queries(state, """
+        Generate queries on the company fundamentals of {company} in the {industry} industry such as:
+        - Core products and services
+        - Company history and milestones
+        - Leadership team
+        - Business model and strategy
+        """)
+
+        # Add message to show subqueries with emojis
+        subqueries_msg = "🔍 Subqueries for company analysis:\n" + "\n".join([f"• {query}" for query in queries])
+        messages = state.get('messages', [])
+        messages.append(AIMessage(content=subqueries_msg))
+        state['messages'] = messages
+
+    # Send queries through WebSocket
+        if websocket_manager := state.get('websocket_manager'):
+            if job_id := state.get('job_id'):
+                await websocket_manager.send_status_update(
+                    job_id=job_id,
+                    status="processing",
+                    message=f"Company analysis queries generated",
+                    result={
+                        "step": "Company Analyst",
+                        "analyst_type": "Company Analyst",
+                        "queries": queries
+                    }
+                )
+        
+        company_data = {}
+        
+        # If we have site_scrape data, include it first
+        if site_scrape := state.get('site_scrape'):
+            msg.append("\n📊 Including site scrape data in company analysis...")
+            company_url = state.get('company_url', 'company-website')
+            company_data[company_url] = {
+                'title': state.get('company', 'Unknown Company'),
+                'raw_content': site_scrape,
+                'query': f'Company overview and information about {company}'  # Add a default query for site scrape
+            }
+        
+        # Perform additional research with comprehensive search
+        try:
+            # Store documents with their respective queries
+            for query in queries:
+                documents = await self.search_documents(state, [query])
+                if documents:  # Only process if we got results
+                    for url, doc in documents.items():
+                        doc['query'] = query  # Associate each document with its query
+                        company_data[url] = doc
+            
+            msg.append(f"\n✓ Found {len(company_data)} documents")
+            if websocket_manager := state.get('websocket_manager'):
+                if job_id := state.get('job_id'):
+                    await websocket_manager.send_status_update(
+                        job_id=job_id,
+                        status="processing",
+                        message=f"Used Tavily Search to find {len(company_data)} documents",
+                        result={
+                            "step": "Searching",
+                            "analyst_type": "Company Analyst",
+                            "queries": queries
+                        }
+                    )
+        except Exception as e:
+            msg.append(f"\n⚠️ Error during research: {str(e)}")
+        
+        # Update state with our findings
+        messages = state.get('messages', [])
+        messages.append(AIMessage(content="\n".join(msg)))
+        state['messages'] = messages
+        state['company_data'] = company_data
+        
+        return {
+            'message': msg,
+            'company_data': company_data
+        }
+
+    async def run(self, state: ResearchState) -> Dict[str, Any]:
+        return await self.analyze(state) 
+
+
+================================================
+FILE: backend/nodes/researchers/financial.py
+================================================
+from langchain_core.messages import AIMessage
+from typing import Dict, Any
+import logging
+from ...classes import ResearchState
+from .base import BaseResearcher
+
+logger = logging.getLogger(__name__)
+
+class FinancialAnalyst(BaseResearcher):
+    def __init__(self) -> None:
+        super().__init__()
+        self.analyst_type = "financial_analyzer"
+
+    async def analyze(self, state: ResearchState) -> Dict[str, Any]:
+        company = state.get('company', 'Unknown Company')
+        websocket_manager = state.get('websocket_manager')
+        job_id = state.get('job_id')
+        
+        try:
+            # Generate search queries
+            queries = await self.generate_queries(
+                state,
+                """
+                 Generate queries on the financial analysis of {company} in the {industry} industry such as:
+        - Fundraising history and valuation
+        - Financial statements and key metrics
+        - Revenue and profit sources
+        """)
+            
+            # Add message to show subqueries with emojis
+            subqueries_msg = "🔍 Subqueries for financial analysis:\n" + "\n".join([f"• {query}" for query in queries])
+            messages = state.get('messages', [])
+            messages.append(AIMessage(content=subqueries_msg))
+            state['messages'] = messages
+
+            # Send queries through WebSocket
+            if websocket_manager:
+                if job_id:
+                    await websocket_manager.send_status_update(
+                        job_id=job_id,
+                        status="processing",
+                        message=f"Financial analysis queries generated",
+                        result={
+                            "step": "Financial Analyst",
+                            "analyst_type": "Financial Analyst",
+                            "queries": queries
+                        }
+                    )
+            
+            # Process site scrape data
+            financial_data = {}
+            if site_scrape := state.get('site_scrape'):
+                company_url = state.get('company_url', 'company-website')
+                financial_data[company_url] = {
+                    'title': state.get('company', 'Unknown Company'),
+                    'raw_content': site_scrape,
+                    'query': f'Financial information on {company}'
+                }
+
+            for query in queries:
+                documents = await self.search_documents(state, [query])
+                for url, doc in documents.items():
+                    doc['query'] = query
+                    financial_data[url] = doc
+
+            # Final status update
+            completion_msg = f"Completed analysis with {len(financial_data)} documents"
+            
+            if websocket_manager:
+                if job_id:
+                    await websocket_manager.send_status_update(
+                        job_id=job_id,
+                        status="processing",
+                        message=f"Used Tavily Search to find {len(financial_data)} documents",
+                        result={
+                            "step": "Searching",
+                            "analyst_type": "Financial Analyst",
+                            "queries": queries
+                        }
+                    )
+            
+            # Update state
+            messages.append(AIMessage(content=completion_msg))
+            state['messages'] = messages
+            state['financial_data'] = financial_data
+
+            # Send completion status with final queries
+            if websocket_manager and job_id:
+                await websocket_manager.send_status_update(
+                    job_id=job_id,
+                    status="processing",
+                    message=completion_msg,
+                    result={
+                        "analyst_type": "Financial Analyst",
+                        "queries": queries,
+                        "documents_found": len(financial_data)
+                    }
+                )
+
+            return {
+                'message': completion_msg,
+                'financial_data': financial_data,
+                'analyst_type': self.analyst_type,
+                'queries': queries
+            }
+
+        except Exception as e:
+            error_msg = f"Financial analysis failed: {str(e)}"
+            # Send error status
+            if websocket_manager:
+                if job_id:
+                    await websocket_manager.send_status_update(
+                        job_id=job_id,
+                        status="error",
+                        message=error_msg,
+                        result={
+                            "analyst_type": "Financial Analyst",
+                            "error": str(e)
+                        }
+                    )
+            raise  # Re-raise to maintain error flow
+
+    async def run(self, state: ResearchState) -> Dict[str, Any]:
+        return await self.analyze(state)
+
+
+================================================
+FILE: backend/nodes/researchers/industry.py
+================================================
+from langchain_core.messages import AIMessage
+from typing import Dict, Any
+from ...classes import ResearchState
+from .base import BaseResearcher
+
+class IndustryAnalyzer(BaseResearcher):
+    def __init__(self) -> None:
+        super().__init__()
+        self.analyst_type = "industry_analyzer"
+
+    async def analyze(self, state: ResearchState) -> Dict[str, Any]:
+        company = state.get('company', 'Unknown Company')
+        industry = state.get('industry', 'Unknown Industry')
+        msg = [f"🏭 Industry Analyzer analyzing {company} in {industry}"]
+        
+        # Generate search queries using LLM
+        queries = await self.generate_queries(state, """
+        Generate queries on the industry analysis of {company} in the {industry} industry such as:
+        - Market position
+        - Competitors
+        - {industry} industry trends and challenges
+        - Market size and growth
+        """)
+
+        subqueries_msg = "🔍 Subqueries for industry analysis:\n" + "\n".join([f"• {query}" for query in queries])
+        messages = state.get('messages', [])
+        messages.append(AIMessage(content=subqueries_msg))
+        state['messages'] = messages
+
+        # Send queries through WebSocket
+        if websocket_manager := state.get('websocket_manager'):
+            if job_id := state.get('job_id'):
+                await websocket_manager.send_status_update(
+                    job_id=job_id,
+                    status="processing",
+                    message=f"Industry analysis queries generated",
+                    result={
+                        "step": "Industry Analyst",
+                        "analyst_type": "Industry Analyst",
+                        "queries": queries
+                    }
+                )
+        
+        industry_data = {}
+        
+        # If we have site_scrape data, include it first
+        if site_scrape := state.get('site_scrape'):
+            msg.append("\n📊 Including site scrape data in company analysis...")
+            company_url = state.get('company_url', 'company-website')
+            industry_data[company_url] = {
+                'title': state.get('company', 'Unknown Company'),
+                'raw_content': site_scrape,
+                'query': f'Industry analysis on {company}'  # Add a default query for site scrape
+            }
+        
+        # Perform additional research with increased search depth
+        try:
+            # Store documents with their respective queries
+            for query in queries:
+                documents = await self.search_documents(state, [query])
+                if documents:  # Only process if we got results
+                    for url, doc in documents.items():
+                        doc['query'] = query  # Associate each document with its query
+                        industry_data[url] = doc
+            
+            msg.append(f"\n✓ Found {len(industry_data)} documents")
+            if websocket_manager := state.get('websocket_manager'):
+                if job_id := state.get('job_id'):
+                    await websocket_manager.send_status_update(
+                        job_id=job_id,
+                        status="processing",
+                        message=f"Used Tavily Search to find {len(industry_data)} documents",
+                        result={
+                            "step": "Searching",
+                            "analyst_type": "Industry Analyst",
+                            "queries": queries
+                        }
+                    )
+        except Exception as e:
+            msg.append(f"\n⚠️ Error during research: {str(e)}")
+        
+        # Update state with our findings
+        messages = state.get('messages', [])
+        messages.append(AIMessage(content="\n".join(msg)))
+        state['messages'] = messages
+        state['industry_data'] = industry_data
+        
+        return {
+            'message': msg,
+            'industry_data': industry_data
+        }
+
+    async def run(self, state: ResearchState) -> Dict[str, Any]:
+        return await self.analyze(state) 
+
+
+================================================
+FILE: backend/nodes/researchers/news.py
+================================================
+from langchain_core.messages import AIMessage
+from typing import Dict, Any
+from ...classes import ResearchState
+from .base import BaseResearcher
+
+class NewsScanner(BaseResearcher):
+    def __init__(self) -> None:
+        super().__init__()
+        self.analyst_type = "news_analyzer"
+
+    async def analyze(self, state: ResearchState) -> Dict[str, Any]:
+        company = state.get('company', 'Unknown Company')
+        msg = [f"📰 News Scanner analyzing {company}"]
+        
+        # Generate search queries using LLM
+        queries = await self.generate_queries(state, """
+        Generate queries on the recent news coverage of {company} such as:
+        - Recent company announcements
+        - Press releases
+        - New partnerships
+        """)
+
+        subqueries_msg = "🔍 Subqueries for news analysis:\n" + "\n".join([f"• {query}" for query in queries])
+        messages = state.get('messages', [])
+        messages.append(AIMessage(content=subqueries_msg))
+        state['messages'] = messages
+        
+        news_data = {}
+        
+        # If we have site_scrape data, include it first
+        if site_scrape := state.get('site_scrape'):
+            msg.append("\n📊 Including site scrape data in company analysis...")
+            company_url = state.get('company_url', 'company-website')
+            news_data[company_url] = {
+                'title': state.get('company', 'Unknown Company'),
+                'raw_content': site_scrape,
+                'query': f'News and announcements about {company}'  # Add a default query for site scrape
+            }
+        
+        # Perform additional research with recent time filter
+        try:
+            # Store documents with their respective queries
+            for query in queries:
+                documents = await self.search_documents(state, [query])
+                if documents:  # Only process if we got results
+                    for url, doc in documents.items():
+                        doc['query'] = query  # Associate each document with its query
+                        news_data[url] = doc
+            
+            msg.append(f"\n✓ Found {len(news_data)} documents")
+            if websocket_manager := state.get('websocket_manager'):
+                if job_id := state.get('job_id'):
+                    await websocket_manager.send_status_update(
+                        job_id=job_id,
+                        status="processing",
+                        message=f"Used Tavily Search to find {len(news_data)} documents",
+                        result={
+                            "step": "Searching",
+                            "analyst_type": "News Scanner",
+                            "queries": queries
+                        }
+                    )
+        except Exception as e:
+            msg.append(f"\n⚠️ Error during research: {str(e)}")
+        
+        # Update state with our findings
+        messages = state.get('messages', [])
+        messages.append(AIMessage(content="\n".join(msg)))
+        state['messages'] = messages
+        state['news_data'] = news_data
+        
+        return {
+            'message': msg,
+            'news_data': news_data
+        }
+
+    async def run(self, state: ResearchState) -> Dict[str, Any]:
+        return await self.analyze(state) 
+
+
+================================================
+FILE: backend/services/mongodb.py
+================================================
+from pymongo import MongoClient
+from datetime import datetime
+from typing import Dict, Any, Optional
+import certifi
+
+class MongoDBService:
+    def __init__(self, uri: str):
+        # Use certifi for SSL certificate verification with updated options
+        self.client = MongoClient(
+            uri,
+            tlsCAFile=certifi.where(),
+            retryWrites=True,
+            w='majority'
+        )
+        self.db = self.client.get_database('tavily_research')
+        self.jobs = self.db.jobs
+        self.reports = self.db.reports
+
+    def create_job(self, job_id: str, inputs: Dict[str, Any]) -> None:
+        """Create a new research job record."""
+        self.jobs.insert_one({
+            "job_id": job_id,
+            "inputs": inputs,
+            "status": "pending",
+            "created_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow()
+        })
+
+    def update_job(self, job_id: str, 
+                  status: str = None,
+                  result: Dict[str, Any] = None,
+                  error: str = None) -> None:
+        """Update a research job with results or status."""
+        update_data = {"updated_at": datetime.utcnow()}
+        if status:
+            update_data["status"] = status
+        if result:
+            update_data["result"] = result
+        if error:
+            update_data["error"] = error
+
+        self.jobs.update_one(
+            {"job_id": job_id},
+            {"$set": update_data}
+        )
+
+    def get_job(self, job_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve a job by ID."""
+        return self.jobs.find_one({"job_id": job_id})
+
+    def store_report(self, job_id: str, report_data: Dict[str, Any]) -> None:
+        """Store the finalized research report."""
+        self.reports.insert_one({
+            "job_id": job_id,
+            "report_content": report_data.get("report", ""),
+            "references": report_data.get("references", []),
+            "sections": report_data.get("sections_completed", []),
+            "analyst_queries": report_data.get("analyst_queries", {}),
+            "created_at": datetime.utcnow()
+        })
+
+    def get_report(self, job_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve a report by job ID."""
+        return self.reports.find_one({"job_id": job_id}) 
+
+
+================================================
+FILE: backend/services/pdf_service.py
+================================================
+import logging
+import os
+import re
+from fastapi import HTTPException
+from backend.utils.utils import generate_pdf_from_md
+from fastapi.responses import StreamingResponse
+import io
+
+logger = logging.getLogger(__name__)
+
+class PDFService:
+    def __init__(self, config):
+        self.output_dir = config.get("pdf_output_dir", "pdfs")
+        # Create output directory if it doesn't exist
+        os.makedirs(self.output_dir, exist_ok=True)
+        
+    def _sanitize_company_name(self, company_name):
+        """Sanitize company name for use in filenames."""
+        # Replace spaces with underscores and remove special characters
+        sanitized = re.sub(r'[^\w\s-]', '', company_name).strip().replace(' ', '_')
+        return sanitized.lower()
+    
+    def _generate_pdf_filename(self, company_name):
+        """Generate a PDF filename based on the company name."""
+        sanitized_name = self._sanitize_company_name(company_name)
+        return f"{sanitized_name}_report.pdf"
+    
+    def generate_pdf_stream(self, markdown_content, company_name=None):
+        """
+        Generate a PDF from markdown content and return it as a stream.
+        
+        Args:
+            markdown_content (str): The markdown content to convert to PDF
+            company_name (str, optional): The company name to use in the filename
+            
+        Returns:
+            tuple: (success status, PDF stream or error message)
+        """
+        try:
+            # Extract company name from the first line if not provided
+            if not company_name:
+                first_line = markdown_content.split('\n')[0].strip()
+                if first_line.startswith('# '):
+                    company_name = first_line[2:].strip()
+                else:
+                    company_name = "Company Research"
+            
+            # Generate the output filename
+            pdf_filename = self._generate_pdf_filename(company_name)
+            
+            # Create a BytesIO object to store the PDF
+            pdf_buffer = io.BytesIO()
+            
+            # Generate the PDF directly to the buffer
+            generate_pdf_from_md(markdown_content, pdf_buffer)
+            
+            # Reset buffer position to start
+            pdf_buffer.seek(0)
+            
+            # Return success and the buffer
+            return True, (pdf_buffer, pdf_filename)
+            
+        except Exception as e:
+            error_msg = f"Error generating PDF: {str(e)}"
+            logger.error(error_msg)
+            return False, error_msg
+
+    def generate_pdf_from_job(self, job_id: str, job_status: dict, mongodb=None) -> dict:
+        """Generate a PDF from a job's report content."""
+        try:
+            # First try to get report from memory
+            report_content = None
+            if job_id in job_status:
+                result = job_status[job_id]
+                if isinstance(result, dict):
+                    report_content = result.get('report')
+
+            # If not in memory and MongoDB is available, try to get from MongoDB
+            if not report_content and mongodb:
+                try:
+                    report = mongodb.get_report(job_id)
+                    if report and isinstance(report, dict):
+                        report_content = report.get('report')
+                except Exception as e:
+                    logger.warning(f"Failed to get report from MongoDB: {e}")
+
+            if not report_content:
+                raise HTTPException(status_code=404, detail="No report content available")
+
+            # Get company name from memory or MongoDB
+            company_name = None
+            if job_id in job_status:
+                company_name = job_status[job_id].get('company')
+            if not company_name and mongodb:
+                try:
+                    job = mongodb.get_job(job_id)
+                    if job and isinstance(job, dict):
+                        company_name = job.get('company')
+                except Exception as e:
+                    logger.warning(f"Failed to get company name from MongoDB: {e}")
+
+            success, result = self.generate_pdf_stream(report_content, company_name)
+            if success:
+                pdf_buffer, filename = result
+                return StreamingResponse(
+                    pdf_buffer,
+                    media_type='application/pdf',
+                    headers={
+                        'Content-Disposition': f'attachment; filename="{filename}"'
+                    }
+                )
+            else:
+                raise HTTPException(status_code=500, detail=result)
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"PDF generation failed: {e}")
+            raise HTTPException(status_code=500, detail=str(e)) 
+
+
+================================================
+FILE: backend/services/websocket_manager.py
+================================================
+from fastapi import WebSocket
+from typing import Dict, Set
+from datetime import datetime
+import json
+import logging
+
+# Set up logging
+logger = logging.getLogger(__name__)
+
+class WebSocketManager:
+    def __init__(self):
+        # Store active connections for each job
+        self.active_connections: Dict[str, Set[WebSocket]] = {}
+        
+    async def connect(self, websocket: WebSocket, job_id: str):
+        """Connect a new client to a specific job."""
+        if job_id not in self.active_connections:
+            self.active_connections[job_id] = set()
+        self.active_connections[job_id].add(websocket)
+        logger.info(f"New WebSocket connection for job {job_id}")
+        logger.info(f"Total connections for job: {len(self.active_connections[job_id])}")
+        logger.info(f"All active jobs: {list(self.active_connections.keys())}")
+        
+    def disconnect(self, websocket: WebSocket, job_id: str):
+        """Disconnect a client from a specific job."""
+        if job_id in self.active_connections:
+            self.active_connections[job_id].discard(websocket)
+            if not self.active_connections[job_id]:
+                del self.active_connections[job_id]
+            logger.info(f"WebSocket disconnected for job {job_id}")
+            logger.info(f"Remaining connections for job: {len(self.active_connections.get(job_id, set()))}")
+            logger.info(f"Remaining active jobs: {list(self.active_connections.keys())}")
+                
+    async def broadcast_to_job(self, job_id: str, message: dict):
+        """Send a message to all clients connected to a specific job."""
+        if job_id not in self.active_connections:
+            logger.warning(f"No active connections for job {job_id}")
+            return
+            
+        # Add timestamp to message
+        message["timestamp"] = datetime.now().isoformat()
+        
+        # Convert message to JSON string
+        message_str = json.dumps(message)
+        logger.info(f"Message content: {message_str}")
+        
+        # Send to all connected clients for this job
+        success_count = 0
+        disconnected = set()
+        for connection in self.active_connections[job_id]:
+            try:
+                await connection.send_text(message_str)
+                success_count += 1
+            except Exception as e:
+                logger.error(f"Error sending message to client: {str(e)}", exc_info=True)
+                disconnected.add(connection)
+        
+        # Clean up disconnected clients
+        for connection in disconnected:
+            self.disconnect(connection, job_id)
+            
+    async def send_status_update(self, job_id: str, status: str, message: str = None, error: str = None, result: dict = None):
+        """Helper method to send formatted status updates."""
+        update = {
+            "type": "status_update",
+            "data": {
+                "status": status,
+                "message": message,
+                "error": error,
+                "result": result
+            }
+        }
+        #logger.info(f"Status: {status}, Message: {message}")
+        await self.broadcast_to_job(job_id, update)
+
+
+================================================
+FILE: backend/utils/__init__.py
+================================================
+from .utils import generate_pdf_from_md, clean_text
+from .references import (
+    extract_domain_name, 
+    extract_title_from_url_path, 
+    clean_title, 
+    normalize_url,
+    extract_website_name_from_domain,
+    process_references_from_search_results,
+    format_reference_for_markdown,
+    extract_link_info,
+    format_references_section
+) 
+
+
+================================================
+FILE: backend/utils/references.py
+================================================
+import logging
+import re
+from urllib.parse import urlparse
+from typing import Dict, Any, List, Tuple, Optional
+
+logger = logging.getLogger(__name__)
+
+def extract_domain_name(url: str) -> str:
+    """Extract a readable website name from a URL."""
+    try:
+        # Remove protocol and www
+        domain = url.lower()
+        for prefix in ['https://', 'http://', 'www.']:
+            if domain.startswith(prefix):
+                domain = domain[len(prefix):]
+        
+        # Get the main domain part (before first slash or query)
+        domain = domain.split('/')[0].split('?')[0]
+        
+        # Extract the main part (e.g., 'tavily' from 'tavily.com')
+        parts = domain.split('.')
+        if len(parts) >= 2:
+            main_name = parts[0]
+            # Capitalize the name
+            return main_name.capitalize()
+        return domain.capitalize()
+    except Exception as e:
+        logger.error(f"Error extracting domain name from {url}: {e}")
+        return "Website"
+
+def extract_title_from_url_path(url: str) -> str:
+    """Extract a meaningful title from the URL path."""
+    try:
+        # Remove protocol, www, and domain
+        path = url.lower()
+        for prefix in ['https://', 'http://', 'www.']:
+            if path.startswith(prefix):
+                path = path[len(prefix):]
+        
+        # Remove domain
+        if '/' in path:
+            path = path.split('/', 1)[1]
+        else:
+            path = ""
+            
+        # Clean up the path to create a title
+        if path:
+            # Remove file extensions and query parameters
+            path = path.split('?')[0].split('#')[0]
+            if path.endswith('/'):
+                path = path[:-1]
+                
+            # Replace hyphens and underscores with spaces
+            path = path.replace('-', ' ').replace('_', ' ').replace('/', ' - ')
+            
+            # Capitalize words
+            title = ' '.join(word.capitalize() for word in path.split())
+            
+            # If title is still too long, truncate it
+            if len(title) > 100:
+                title = title[:97] + "..."
+                
+            return title
+        return ""
+    except Exception as e:
+        logger.error(f"Error extracting title from URL path: {e}")
+        return ""
+
+def clean_title(title: str) -> str:
+    """Clean up a title by removing dates, trailing periods or quotes, and truncating if needed."""
+    if not title:
+        return ""
+    
+    original_title = title
+    
+    title = title.strip().rstrip('.').strip('"\'')
+    title = re.sub(r'^\d{4}[-\s]*\d{1,2}[-\s]*\d{1,2}[-\s]*', '', title)
+    title = title.strip('- ').strip()
+    
+    # If title became empty after cleaning, return empty string
+    if not title:
+        logger.warning(f"Title became empty after cleaning: '{original_title}'")
+        return ""
+    
+    # Log if we made changes to the title
+    if title != original_title:
+        logger.info(f"Cleaned title from '{original_title}' to '{title}'")
+    
+    return title
+
+def normalize_url(url: str) -> str:
+    """Normalize a URL by removing query parameters and fragments."""
+    try:
+        if not url:
+            return ""
+            
+        # Ensure URL has a scheme
+        if not url.startswith(('http://', 'https://')):
+            url = 'https://' + url
+            
+        parsed = urlparse(url)
+        normalized_url = parsed._replace(query='', fragment='').geturl().rstrip('/')
+        
+        return normalized_url
+    except Exception as e:
+        logger.error(f"Error normalizing URL {url}: {e}")
+        return url
+
+def extract_website_name_from_domain(domain: str) -> str:
+    """Extract a readable website name from a domain."""
+    if domain.startswith('www.'):
+        domain = domain[4:]  # Remove www. prefix
+    
+    # Extract the main part (e.g., 'tavily' from 'tavily.com')
+    website_name = domain.split('.')[0].capitalize()
+    
+    # Handle special cases
+    if website_name == "Com":
+        # Try to get a better name from the second part
+        parts = domain.split('.')
+        if len(parts) > 1:
+            website_name = parts[0].capitalize()
+    
+    return website_name
+
+def process_references_from_search_results(state: Dict[str, Any]) -> Tuple[List[str], Dict[str, str], Dict[str, Dict[str, Any]]]:
+    """Process references from search results and return top references, titles, and info."""
+    all_top_references = []
+    
+    # Collect references with scores from all data types
+    data_types = ['curated_company_data', 'curated_industry_data', 'curated_financial_data', 'curated_news_data']
+    
+    # Log the start of reference processing
+    logger.info("Starting to process references from search results")
+    
+    for data_type in data_types:
+        if curated_data := state.get(data_type, {}):
+            for url, doc in curated_data.items():
+                try:
+                    # Ensure we have a valid score
+                    if 'evaluation' in doc and 'overall_score' in doc['evaluation']:
+                        score = float(doc['evaluation']['overall_score'])
+                    else:
+                        # Fallback to raw score if available
+                        score = float(doc.get('score', 0))
+                    
+                    logger.info(f"Found reference in {data_type}: URL={url}, Score={score:.4f}")
+                    all_top_references.append((url, score))
+                except (KeyError, ValueError, TypeError) as e:
+                    logger.warning(f"Error processing score for {url} in {data_type}: {e}")
+                    continue
+    
+    logger.info(f"Collected a total of {len(all_top_references)} references before deduplication")
+    
+    # Sort references by score in descending order
+    all_top_references.sort(key=lambda x: float(x[1]), reverse=True)
+    
+    # Log top 20 references before deduplication to verify sorting
+    logger.info("Top 20 references by score before deduplication:")
+    for i, (url, score) in enumerate(all_top_references[:20]):
+        logger.info(f"{i+1}. Score: {score:.4f} - URL: {url}")
+    
+    # Use a set to store unique URLs, keeping only the highest scored version of each URL
+    seen_urls = set()
+    unique_references = []
+    reference_titles = {}  # Store titles for references
+    reference_info = {}  # Store additional information for MLA-style references
+    
+    for url, score in all_top_references:
+        # Skip if URL is not valid
+        if not url or not url.startswith(('http://', 'https://')):
+            logger.info(f"Skipping invalid URL: {url}")
+            continue
+
+        # Normalize URL
+        normalized_url = normalize_url(url)
+        
+        if normalized_url not in seen_urls:
+            seen_urls.add(normalized_url)
+            unique_references.append((normalized_url, score))
+            
+            # Extract domain name for website citation
+            parsed = urlparse(url)
+            domain = parsed.netloc
+            
+            # Find and store the title and other info for this URL
+            title = None
+            website_name = None
+            
+            # Look for the document info in all data types
+            for data_type in data_types:
+                if not title and (curated_data := state.get(data_type, {})):
+                    for doc in curated_data.values():
+                        if doc.get('url') == url:
+                            title = doc.get('title', '')
+                            if title:
+                                # Clean up the title
+                                title = clean_title(title)
+                                if title and title.strip() and title != url:
+                                    reference_titles[normalized_url] = title
+                                    logger.info(f"Found title for URL {url}: '{title}'")
+                                    break
+            
+            # If no title was found, log it
+            if not title:
+                logger.info(f"No valid title found for URL {url}")
+            
+            # Extract a better website name from the domain
+            website_name = extract_website_name_from_domain(domain)
+            
+            # Store additional information for MLA citation
+            reference_info[normalized_url] = {
+                'title': title or '',
+                'domain': domain,
+                'website': website_name,
+                'url': normalized_url,
+                'score': score
+            }
+            logger.info(f"Stored reference info for {normalized_url} with score {score:.4f}")
+    
+    # Sort unique references by score again to ensure proper ordering
+    unique_references.sort(key=lambda x: float(x[1]), reverse=True)
+    
+    # Log unique references by score to verify sorting
+    logger.info(f"Found {len(unique_references)} unique references after deduplication")
+    logger.info("Unique references by score (sorted):")
+    for i, (url, score) in enumerate(unique_references):
+        logger.info(f"{i+1}. Score: {score:.4f} - URL: {url}")
+    
+    # Take exactly 10 unique references (or all if less than 10)
+    top_references = unique_references[:10]
+    top_reference_urls = [url for url, _ in top_references]
+    
+    # Log final top 10 references
+    logger.info(f"Final top {len(top_reference_urls)} references selected:")
+    for i, url in enumerate(top_reference_urls):
+        score = next((s for u, s in unique_references if u == url), 0)
+        logger.info(f"{i+1}. Score: {score:.4f} - URL: {url}")
+    
+    return top_reference_urls, reference_titles, reference_info
+
+def format_reference_for_markdown(reference_entry: Dict[str, Any]) -> str:
+    """Format a reference entry for markdown output."""
+    website = reference_entry.get('website', '')
+    title = reference_entry.get('title', '')
+    url = reference_entry.get('url', '')
+    
+    # Ensure we have a website name
+    if not website or website.strip() == "":
+        website = extract_domain_name(url)
+    
+    # Ensure we have a title
+    if not title or title.strip() == "" or title == url:
+        # Try to extract a meaningful title from the URL
+        title = extract_title_from_url_path(url)
+        
+        # If still no title, use default format
+        if not title:
+            title = f"Information from {website}"
+    
+    # Format: * Website. "Title." URL
+    return f"* {website}. \"{title}.\" {url}"
+
+def extract_link_info(line: str) -> tuple[str, str]:
+    """Extract title and URL from markdown link."""
+    try:
+        # First clean any JSON artifacts that might interfere with link parsing
+        line = re.sub(r'",?\s*"pdf_url":.+$', '', line)
+        
+        # Check for MLA-style references with website and title before the link
+        # Format: * Website. "Title." [URL](URL)
+        mla_match = re.match(r'\*?\s*(.*?)\s*\.\s*"(.*?)\."\s*\[(.*?)\]\((.*?)\)', line)
+        if mla_match:
+            website = clean_title(mla_match.group(1))
+            title = clean_title(mla_match.group(2))
+            link_text = clean_title(mla_match.group(3))
+            url = clean_title(mla_match.group(4))
+            
+            # If website is empty or just a period, extract from URL
+            if not website or website == ".":
+                website = extract_domain_name(url)
+            
+            # Format for PDF: "Website. Title. URL"
+            return f"{website}. {title}. {link_text}", url
+        
+        # Fallback for standard markdown links
+        match = re.match(r'\[(.*?)\]\((.*?)\)', line)
+        if match:
+            title = clean_title(match.group(1))
+            url = clean_title(match.group(2))
+            # If the title is a URL and matches the URL, just use the URL
+            if title.startswith('http') and title == url:
+                return url, url
+            return title, url
+        
+        logger.debug(f"No link match found in line: {line}")
+        return '', ''
+    except Exception as e:
+        logger.error(f"Error extracting link info from line: {line}, error: {str(e)}")
+        return '', ''
+
+def format_references_section(references: List[str], reference_info: Dict[str, Dict[str, Any]], reference_titles: Dict[str, str]) -> str:
+    """Format the references section for the final report."""
+    if not references:
+        return ""
+    
+    logger.info(f"Formatting {len(references)} references for the report")
+    
+    # Create a list of reference entries with all the information needed
+    reference_entries = []
+    for ref in references:
+        info = reference_info.get(ref, {})
+        website = info.get('website', '')
+        title = info.get('title', '')
+        score = info.get('score', 0)
+        
+        # If title is not in reference_info, try to get it from reference_titles
+        if not title or title.strip() == "":
+            title = reference_titles.get(ref, '')
+            logger.info(f"Using title from reference_titles for {ref}: '{title}'")
+        
+        domain = info.get('domain', '')
+        
+        # If we don't have a title, use the URL
+        if not title or title.strip() == "" or title == ref:
+            title = ref
+            logger.info(f"No title found for {ref}, using URL as title")
+        
+        # If we don't have a website name, extract it from the URL
+        if not website or website.strip() == "":
+            website = extract_domain_name(ref)
+            logger.info(f"No website name found for {ref}, extracted: {website}")
+        
+        # Create a reference entry with all information
+        entry = {
+            'website': website,
+            'title': title,
+            'url': ref,
+            'domain': domain,
+            'score': score
+        }
+        logger.info(f"Created reference entry: {entry}")
+        reference_entries.append(entry)
+    
+    # Keep references in the same order they were provided (which should be by score)
+    # This preserves the top 10 scoring order from process_references_from_search_results
+    logger.info("Maintaining reference order based on scores")
+    
+    # Format references in MLA style
+    reference_lines = ["\n## References"]
+    for entry in reference_entries:
+        reference_line = format_reference_for_markdown(entry)
+        reference_lines.append(reference_line)
+        logger.info(f"Added reference: {reference_line}")
+    
+    reference_text = "\n".join(reference_lines)
+    logger.info(f"Completed references section with {len(reference_entries)} entries")
+    
+    return reference_text 
+
+
+================================================
+FILE: backend/utils/utils.py
+================================================
+import logging
+import os
+import re
+from typing import List, Dict
+from reportlab.lib.pagesizes import letter
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, ListFlowable, ListItem
+from .references import extract_domain_name
+
+
+def extract_title_from_url_path(url: str) -> str:
+    """Extract a title from a URL path."""
+    parts = url.rstrip('/').split('/')
+    return parts[-1] if parts else 'No title found'
+
+def extract_link_info(markdown_link: str) -> tuple[str, str]:
+    """Extract text and URL from a Markdown link [text](URL)."""
+    match = re.match(r'\[(.*?)\]\((.*?)\)', markdown_link)
+    if match:
+        return match.group(1), match.group(2)
+    return ("", "")
+
+logger = logging.getLogger(__name__)
+
+def clean_text(text: str) -> str:
+    """Clean up text by replacing escaped quotes and other special characters."""
+    text = re.sub(r'",?\s*"pdf_url":.+$', '', text)
+    text = text.replace('\\"', '"')
+    text = text.replace('\\n', '\n')
+    text = text.replace('<para>', '').replace('</para>', '')
+    return text.strip()
+
+def generate_pdf_from_md(markdown_content: str, output_pdf) -> None:
+    """Convert markdown content to PDF using a simplified ReportLab approach.
+    
+    Args:
+        markdown_content (str): The markdown content to convert to PDF
+        output_pdf: Either a file path string or a BytesIO object
+    """
+    try:
+        # If output_pdf is a string (file path), ensure directory exists
+        if isinstance(output_pdf, str):
+            os.makedirs(os.path.dirname(os.path.abspath(output_pdf)), exist_ok=True)
+            
+        markdown_content = markdown_content.replace('\r\n', '\n')  # Normalize Windows line endings
+        markdown_content = markdown_content.replace('\\n', '\n')   # Convert literal \n to newlines
+        
+        # Create the PDF document
+        doc = SimpleDocTemplate(
+            output_pdf,
+            pagesize=letter,
+            rightMargin=40,
+            leftMargin=40,
+            topMargin=40,
+            bottomMargin=40
+        )
+        
+        # Setup styles
+        styles = getSampleStyleSheet()
+        
+        # Custom styles
+        title_style = ParagraphStyle(
+            'Title',
+            parent=styles['Heading1'],
+            fontSize=20,
+            textColor=colors.black,
+            spaceAfter=12
+        )
+        
+        heading2_style = ParagraphStyle(
+            'Heading2',
+            parent=styles['Heading2'],
+            fontSize=16,
+            textColor=colors.black,
+            spaceBefore=12,
+            spaceAfter=6,
+            fontName='Helvetica-Bold'
+        )
+        
+        heading3_style = ParagraphStyle(
+            'Heading3',
+            parent=styles['Heading3'],
+            fontSize=12,
+            textColor=colors.black,
+            spaceBefore=10,
+            spaceAfter=4
+        )
+        
+        normal_style = ParagraphStyle(
+            'Normal',
+            parent=styles['Normal'],
+            fontSize=10,
+            textColor=colors.black,
+            spaceBefore=2,
+            spaceAfter=2
+        )
+        
+        list_item_style = ParagraphStyle(
+            'ListItem',
+            parent=styles['Normal'],
+            fontSize=10,
+            textColor=colors.black,
+            spaceBefore=2,
+            spaceAfter=2,
+            leftIndent=10,
+            firstLineIndent=0,
+            bulletIndent=0
+        )
+        
+        # Create the story (content)
+        story = []
+        
+        # Process markdown content into PDF elements
+        lines = markdown_content.split('\n')
+        i = 0
+        
+        # Track if we're in a list
+        in_list = False
+        list_items = []
+        
+        while i < len(lines):
+            line = lines[i].strip()
+            
+            # Skip empty lines
+            if not line:
+                if in_list and list_items:
+                    # Flush list if we were building one
+                    story.append(ListFlowable(
+                        [ListItem(Paragraph(item, list_item_style)) for item in list_items],
+                        bulletType='bullet',
+                        leftIndent=10,
+                        bulletFontName='Helvetica',
+                        bulletFontSize=10,
+                        bulletOffsetY=0,
+                        bulletDedent=10,
+                        spaceAfter=0
+                    ))
+                    list_items = []
+                    in_list = False
+                
+                story.append(Spacer(1, 6))
+                i += 1
+                continue
+            
+            # Headings
+            if line.startswith('# '):
+                story.append(Paragraph(line[2:], title_style))
+            elif line.startswith('## '):
+                story.append(Paragraph(line[3:], heading2_style))
+            elif line.startswith('### '):
+                story.append(Paragraph(line[4:], heading3_style))
+            
+            # Bullet points
+            elif line.startswith('* '):
+                bullet_text = line[2:].strip()  # Remove the '* ' but keep any other asterisks
+                
+                # For links in bullet points
+                if bullet_text.startswith('[') and '](' in bullet_text and bullet_text.endswith(')'):
+                    link_text, link_url = extract_link_info(bullet_text)
+                    # Simplified link format to avoid potential formatting issues
+                    bullet_text = f'<link href="{link_url}" color="blue"><u>{link_text or link_url}</u></link>'
+                
+                list_items.append(bullet_text)
+                in_list = True
+            
+            # Regular paragraphs (including links)
+            else:
+                # Handle bold and italic text
+                line = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', line)  # Bold
+                line = re.sub(r'\*(.*?)\*', r'<i>\1</i>', line)      # Italic
+                
+                # Check for links in the text
+                if '[' in line and '](' in line:
+                    try:
+                        # Process links
+                        parts = []
+                        last_idx = 0
+                        for match in re.finditer(r'\[(.*?)\]\((.*?)\)', line):
+                            # Add text before the link
+                            if match.start() > last_idx:
+                                parts.append(line[last_idx:match.start()])
+                            
+                            # Add the link
+                            link_text = match.group(1)
+                            link_url = match.group(2)
+                            parts.append(f'<link href="{link_url}" color="blue"><u>{link_text}</u></link>')
+                            
+                            last_idx = match.end()
+                        
+                        # Add any remaining text
+                        if last_idx < len(line):
+                            parts.append(line[last_idx:])
+                        
+                        line = ''.join(parts)
+                    except Exception as e:
+                        # If link processing fails, use the original line
+                        logger.error(f"Error processing links: {e}")
+                
+                # Add the paragraph
+                story.append(Paragraph(line, normal_style))
+            
+            i += 1
+        
+        # Flush any remaining list
+        if in_list and list_items:
+            story.append(ListFlowable(
+                [ListItem(Paragraph(item, list_item_style)) for item in list_items],
+                bulletType='bullet',
+                leftIndent=10,
+                bulletFontName='Helvetica',
+                bulletFontSize=10,
+                bulletOffsetY=0,
+                bulletDedent=10,
+                spaceAfter=0
+            ))
+        
+        # Build the PDF
+        doc.build(story)
+        
+        logger.info(f"Successfully generated PDF: {output_pdf}")
+    
+    except Exception as e:
+        error_msg = f"Error generating PDF: {str(e)}"
+        logger.error(error_msg)
+        raise Exception(error_msg)
+
+# Example usage (uncomment if you want to run directly):
+# if __name__ == '__main__':
+#     with open('example.md', 'r', encoding='utf-8') as f:
+#         md_text = f.read()
+#     generate_pdf_from_md(md_text, 'output.pdf')
+
+def convert_markdown_to_pdf_elements(markdown_text: str, custom_styles: Dict) -> List:
+    """
+    Example function that converts a Markdown string into a list of
+    ReportLab Flowable elements. This is separate from generate_pdf_from_md.
+    """
+    story = []
+    current_list_items = []
+    in_list = False
+    in_references = False
+
+    lines = markdown_text.split('\n')
+    i = 0
+
+    def process_markdown_formatting(text):
+        # Bold
+        text = re.sub(r'(?<!\*)\*\*(.*?)\*\*(?!\*)', r'<b>\1</b>', text)
+        
+        # Clean up any remaining double asterisks (bold markers) but preserve single asterisks for bullet points
+        text = text.replace('**', '')
+        return text
+
+    while i < len(lines):
+        line = lines[i].strip()
+
+        # Blank line
+        if not line:
+            if in_list and current_list_items:
+                story.append(ListFlowable(
+                    [
+                        ListItem(
+                            Paragraph(item, custom_styles['ListItem']),
+                            value='bullet',
+                            leftIndent=20,
+                            bulletColor=colors.HexColor('#2c3e50'),
+                            bulletType='bullet',
+                            bulletFontName='Helvetica',
+                            bulletFontSize=10
+                        ) for item in current_list_items
+                    ],
+                    bulletType='bullet',
+                    leftIndent=20,
+                    bulletOffsetX=10,
+                    bulletOffsetY=2,
+                    start=None,
+                    bulletDedent=20,
+                    bulletFormat='•',
+                    spaceBefore=4,
+                    spaceAfter=4
+                ))
+                current_list_items = []
+                in_list = False
+            story.append(Spacer(1, 6))
+            i += 1
+            continue
+
+        # Headings
+        if line.startswith('#'):
+            if in_list and current_list_items:
+                # Flush the list
+                story.append(ListFlowable(
+                    [
+                        ListItem(
+                            Paragraph(item, custom_styles['ListItem']),
+                            value='bullet',
+                            leftIndent=20,
+                            bulletColor=colors.HexColor('#2c3e50'),
+                            bulletType='bullet',
+                            bulletFontName='Helvetica',
+                            bulletFontSize=10
+                        ) for item in current_list_items
+                    ],
+                    bulletType='bullet',
+                    leftIndent=20,
+                    bulletOffsetX=10,
+                    bulletOffsetY=2,
+                    start=None,
+                    bulletDedent=20,
+                    bulletFormat='•',
+                    spaceBefore=4,
+                    spaceAfter=4
+                ))
+                current_list_items = []
+                in_list = False
+
+            heading_level = len(line.split()[0])  # number of '#' characters
+            heading_text = ' '.join(line.split()[1:])
+            style_name = f'Heading{heading_level}'
+            # Use an existing style or a custom style
+            story.append(Paragraph(heading_text, custom_styles.get(style_name, custom_styles['BodyText'])))
+
+            if heading_text.lower() == 'references':
+                in_references = True
+            else:
+                in_references = False
+            i += 1
+            continue
+
+        # Bullets
+        if line.startswith('* '):
+            bullet_text = line[2:].strip()  # Remove the '* ' but keep any other asterisks
+            
+            # For non-references bullet points
+            if bullet_text.startswith('[') and '](' in bullet_text and bullet_text.endswith(')'):
+                # It's a link bullet
+                title, url = extract_link_info(bullet_text)
+                bullet_text = f'<link href="{url}" color="blue" textColor="blue"><u>{title or url}</u></link>'
+            else:
+                # Only process non-link text
+                bullet_text = process_markdown_formatting(bullet_text)
+
+            # Add it immediately as a single bullet item with explicit bullet styling
+            story.append(ListFlowable(
+                [
+                    ListItem(
+                        Paragraph(bullet_text, custom_styles['ListItem']),
+                        value='bullet',
+                        leftIndent=20,
+                        bulletColor=colors.HexColor('#2c3e50'),
+                        bulletType='bullet',
+                        bulletFontName='Helvetica',
+                        bulletFontSize=10,
+                        bulletFormat='•'
+                    )
+                ],
+                bulletType='bullet',
+                leftIndent=20,
+                bulletOffsetX=10,
+                bulletOffsetY=2,
+                start=None,
+                bulletDedent=20,
+                bulletFormat='•',
+                spaceBefore=4,
+                spaceAfter=4
+            ))
+
+        # If we were in a list but found something else
+        if in_list and current_list_items:
+            story.append(ListFlowable(
+                [
+                    ListItem(
+                        Paragraph(item, custom_styles['ListItem']),
+                        value='bullet',
+                        leftIndent=20,
+                        bulletColor=colors.HexColor('#2c3e50'),
+                        bulletType='bullet',
+                        bulletFontName='Helvetica',
+                        bulletFontSize=10
+                    ) for item in current_list_items
+                ],
+                bulletType='bullet',
+                leftIndent=20,
+                bulletOffsetX=10,
+                bulletOffsetY=2,
+                start=None,
+                bulletDedent=20,
+                bulletFormat='•',
+                spaceBefore=4,
+                spaceAfter=4
+            ))
+            current_list_items = []
+            in_list = False
+
+        # Standalone link
+        if line.startswith('[') and '](' in line and line.endswith(')'):
+            link_title, link_url = extract_link_info(line)
+            # Don't process the URL again since it's already a raw URL
+            link_paragraph = f'<link href="{link_url}" color="blue" textColor="blue"><u>{link_title or link_url}</u></link>'
+            story.append(Paragraph(link_paragraph, custom_styles['Link']))
+            i += 1
+            continue
+
+        # Regular paragraph
+        line = clean_text(line)
+        line = process_markdown_formatting(line)
+        story.append(Paragraph(line, custom_styles['BodyText']))
+        i += 1
+
+    # Flush any remaining bullet items at the end
+    if in_list and current_list_items:
+        story.append(ListFlowable(
+            [
+                ListItem(
+                    Paragraph(item, custom_styles['ListItem']),
+                    value='bullet',
+                    leftIndent=20,
+                    bulletColor=colors.HexColor('#2c3e50'),
+                    bulletType='bullet',
+                    bulletFontName='Helvetica',
+                    bulletFontSize=10
+                ) for item in current_list_items
+            ],
+            bulletType='bullet',
+            leftIndent=20,
+            bulletOffsetX=10,
+            bulletOffsetY=2,
+            start=None,
+            bulletDedent=20,
+            bulletFormat='•',
+            spaceBefore=4,
+            spaceAfter=4
+        ))
+
+    return story
+
+def get_custom_styles():
+    """
+    Example helper to retrieve a base stylesheet and then augment with custom styles.
+    """
+    styles = getSampleStyleSheet()
+
+    # Update ListItem style
+    styles.add(ParagraphStyle(
+        name='ListItem',
+        parent=styles['BodyText'],
+        leftIndent=30,
+        firstLineIndent=0,
+        spaceBefore=2,
+        spaceAfter=2,
+        bulletIndent=15,
+        bulletFontName='Helvetica-Bold',
+        bulletFontSize=12,
+        textColor=colors.HexColor('#2c3e50'),
+        leading=14
+    ))
+    
+    # Update BodyText
+    styles['BodyText'].textColor = colors.HexColor('#2c3e50')
+    styles['BodyText'].fontSize = 10
+    styles['BodyText'].leading = 14
+    
+    # Heading styles
+    styles['Heading1'].textColor = colors.HexColor('#2c3e50')
+    styles['Heading1'].fontSize = 24
+    styles['Heading1'].leading = 28
+
+    styles['Heading2'].textColor = colors.HexColor('#2c3e50')
+    styles['Heading2'].fontSize = 18
+    styles['Heading2'].leading = 22
+
+    styles['Heading3'].textColor = colors.HexColor('#2c3e50')
+    styles['Heading3'].fontSize = 14
+    styles['Heading3'].leading = 18
+
+    # Link style
+    styles.add(ParagraphStyle(
+        name='Link',
+        parent=styles['BodyText'],
+        textColor=colors.HexColor('#3498db'),
+        fontSize=10,
+        leading=14
+    ))
+    
+    return styles
+
+

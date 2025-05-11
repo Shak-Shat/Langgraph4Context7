@@ -1,0 +1,1193 @@
+Directory structure:
+└── langchain-ai-langgraph-memory/
+    ├── README.md
+    ├── example.ipynb
+    ├── LICENSE
+    ├── .env.example
+    ├── img/
+    ├── memory_service/
+    │   ├── __init__.py
+    │   ├── _constants.py
+    │   ├── _schemas.py
+    │   ├── _settings.py
+    │   ├── _utils.py
+    │   └── graph.py
+    └── tests/
+        ├── conftest.py
+        └── evals/
+            └── test_memories.py
+
+================================================
+FILE: README.md
+================================================
+# LangGraph Memory Service
+
+This repo provides a simple example of memory service you can build and deploy using LanGraph.
+
+Inspired by papers like [MemGPT](https://memgpt.ai/) and distilled from our own works on long-term memory, the graph
+extracts memories from chat interactions and persists them to a database. This information can later be read or queried semantically
+to provide personalized context when your bot is responding to a particular user.
+
+The memory graph handles thread process deduplication and supports continuous updates to a single "memory schema" as well as "event-based" memories that can be queried semantically.
+
+![Memory Diagram](./img/memory_graph.png)
+
+#### Project Structure
+
+```bash
+├── langgraph.json # LangGraph Cloud Configuration
+├── memory_service
+│   ├── __init__.py
+│   └── graph.py # Define the memory service
+├── poetry.lock
+├── pyproject.toml # Project dependencies
+└── tests # Add testing + evaluation logic
+    └── evals
+        └── test_memories.py
+```
+
+## Quickstart
+
+This quick start will get your memory service deployed on [LangGraph Cloud](https://langchain-ai.github.io/langgraph/cloud/). Once created, you can interact with it from any API.
+
+#### Prerequisites
+
+This example defaults to using Pinecone for its memory database, and `nomic-ai/nomic-embed-text-v1.5` as the text encoder (hosted on Fireworks).
+
+1. [Create an index](https://docs.pinecone.io/reference/api/control-plane/create_index) with a dimension size of `768`. Note down your Pinecone API key, index name, and namespace for the next step.
+2. [Create an API Key](https://fireworks.ai/api-keys) to use for the LLM & embeddings models served on Fireworks.
+
+#### Deploy to LangGraph Cloud
+
+**Note:** (_Closed Beta_) LangGraph Cloud is a managed service for deploying and hosting LangGraph applications. It is currently (as of 26 June, 2024) in closed beta. If you are interested in applying for access, please fill out [this form](https://www.langchain.com/langgraph-cloud-beta).
+
+To deploy this example on LangGraph, fork the [repo](https://github.com/langchain-ai/langgraph-memory).
+
+Next, navigate to the 🚀 deployments tab on [LangSmith](https://smith.langchain.com/o/ebbaf2eb-769b-4505-aca2-d11de10372a4/).
+
+**If you have not deployed to LangGraph Cloud before:** there will be a button that shows up saying `Import from GitHub`. You’ll need to follow that flow to connect LangGraph Cloud to GitHub.
+
+Once you have set up your GitHub connection, select **+New Deployment**. Fill out the required information, including:
+
+1. Your GitHub username (or organization) and the name of the repo you just forked.
+2. You can leave the defaults for the config file (`langgraph.config`) and branch (`main`)
+3. Environment variables (see below)
+
+The default required environment variables can be found in [.env.example](.env.example) and are copied below:
+
+```bash
+# .env
+PINECONE_API_KEY=...
+PINECONE_INDEX_NAME=...
+PINECONE_NAMESPACE=...
+FIREWORKS_API_KEY=...
+
+# You can add other keys as appropriate, depending on
+# the services you are using.
+```
+
+You can fill these out locally, copy the .env file contents, and paste them in the first `Name` argument.
+
+Assuming you've followed the steps above, in just a couple of minutes, you should have a working memory service deployed!
+
+Now let's try it out.
+
+## How to connect to the memory service
+
+Check out the [example notebook](./example.ipynb) to show how to connect your chat bot (in this case a second graph) to your new memory service.
+
+This chat bot reads from the same memory DB as your memory service to easily query from "recall memory".
+
+Connecting to this type of memory service typically follows an interaction pattern similar to the one outlined below:
+
+![Interaction Pattern](./img/memory_interactions.png)
+
+A typical user-facing application you'd build to connect with this service would have 3 or more nodes. The first node queries the DB for useful memories. The second node, which contains the LLM, generates the response. The third node posts the new  messages to the service.
+
+The service waits for a pre-determined interval before it considers the thread "complete". If the user queries a second time within that interval, the memory run is [rolled-back](https://langchain-ai.github.io/langgraph/cloud/how-tos/cloud_examples/rollback_concurrent/?h=roll) to avoid duplicate processing of a thread.
+
+
+## How to evaluate
+
+Memory management can be challenging to get right. To make sure your schemas suit your applications' needs, we recommend starting from an evaluation set,
+adding to it over time as you find and address common errors in your service.
+
+We have provided a few example evaluation cases in [the test file here](./tests/evals/test_memories.py). As you can see, the metrics themselves don't have to be terribly complicated,
+especially not at the outset.
+
+We use [LangSmith's @test decorator](https://docs.smith.langchain.com/how_to_guides/evaluation/unit_testing#write-a-test) to sync all the evalutions to LangSmith so you can better optimize your system and identify the root cause of any issues that may arise.
+
+
+
+================================================
+FILE: example.ipynb
+================================================
+# Jupyter notebook converted to Python script.
+
+"""
+# How to connect a chat bot to your memory service
+"""
+
+import dotenv
+
+dotenv.load_dotenv(".env", override=True)
+# Output:
+#   True
+
+from langgraph_sdk import get_client
+
+# Update to your URL. Copy this from page of ryour LangGraph Deployment
+deployment_url = ""
+
+client = get_client(url=deployment_url)
+
+"""
+## Example Chat Bot
+
+The bot fetches user memories my semantic similarity, templates them, then responds!
+"""
+
+import os
+import uuid
+from datetime import datetime, timezone
+from typing import List, Optional
+
+import langsmith
+from langchain.chat_models import init_chat_model
+from langchain_core.messages import AnyMessage
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnableConfig
+from langgraph.checkpoint import MemorySaver
+from langgraph.graph import START, StateGraph, add_messages
+from langgraph_sdk import get_client
+from pydantic.v1 import BaseModel, Field
+from typing_extensions import Annotated, TypedDict
+
+from memory_service import (
+    _constants as constants,
+    _settings as settings,
+    _utils as utils,
+)
+
+
+class ChatState(TypedDict):
+    """The state of the chatbot."""
+
+    messages: Annotated[List[AnyMessage], add_messages]
+    user_memories: List[dict]
+
+
+class ChatConfigurable(TypedDict):
+    """The configurable fields for the chatbot."""
+
+    user_id: str
+    thread_id: str
+    memory_service_url: str = ""
+    model: str
+    delay: Optional[float]
+
+
+def _ensure_configurable(config: RunnableConfig) -> ChatConfigurable:
+    """Ensure the configuration is valid."""
+    return ChatConfigurable(
+        user_id=config["configurable"]["user_id"],
+        thread_id=config["configurable"]["thread_id"],
+        mem_assistant_id=config["configurable"]["mem_assistant_id"],
+        memory_service_url=config["configurable"].get(
+            "memory_service_url", os.environ.get("MEMORY_SERVICE_URL", "")
+        ),
+        model=config["configurable"].get(
+            "model", "accounts/fireworks/models/firefunction-v2"
+        ),
+        delay=config["configurable"].get("delay", 60),
+    )
+
+
+PROMPT = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            "You are a helpful and friendly chatbot. Get to know the user!"
+            " Ask questions! Be spontaneous!"
+            "{user_info}\n\nSystem Time: {time}",
+        ),
+        ("placeholder", "{messages}"),
+    ]
+).partial(
+    time=lambda: datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
+)
+
+
+@langsmith.traceable
+def format_query(messages: List[AnyMessage]) -> str:
+    """Format the query for the user's memories."""
+    # This is quite naive :)
+    return " ".join([str(m.content) for m in messages if m.type == "human"][-5:])
+
+
+async def query_memories(state: ChatState, config: RunnableConfig) -> ChatState:
+    """Query the user's memories."""
+    configurable: ChatConfigurable = config["configurable"]
+    user_id = configurable["user_id"]
+    index = utils.get_index()
+    embeddings = utils.get_embeddings()
+
+    query = format_query(state["messages"])
+    vec = await embeddings.aembed_query(query)
+    # You can also filter by memory type, etc. here.
+    with langsmith.trace(
+        "pinecone_query", inputs={"query": query, "user_id": user_id}
+    ) as rt:
+        response = index.query(
+            vector=vec,
+            filter={"user_id": {"$eq": str(user_id)}},
+            include_metadata=True,
+            top_k=10,
+            namespace=settings.SETTINGS.pinecone_namespace,
+        )
+        rt.outputs["response"] = response
+    memories = []
+    if matches := response.get("matches"):
+        memories = [m["metadata"][constants.PAYLOAD_KEY] for m in matches]
+    return {
+        "user_memories": memories,
+    }
+
+
+@langsmith.traceable
+def format_memories(memories: List[dict]) -> str:
+    """Format the user's memories."""
+    if not memories:
+        return ""
+    # Note Bene: You can format better than this....
+    memories = "\n".join(str(m) for m in memories)
+    return f"""
+
+## Memories
+
+You have noted the following memorable events from previous interactions with the user.
+<memories>
+{memories}
+</memories>
+"""
+
+
+async def bot(state: ChatState, config: RunnableConfig) -> ChatState:
+    """Prompt the bot to resopnd to the user, incorporating memories (if provided)."""
+    configurable = _ensure_configurable(config)
+    model = init_chat_model(configurable["model"])
+    chain = PROMPT | model
+    memories = format_memories(state["user_memories"])
+    m = await chain.ainvoke(
+        {
+            "messages": state["messages"],
+            "user_info": memories,
+        },
+        config,
+    )
+
+    return {
+        "messages": [m],
+    }
+
+
+class MemorableEvent(BaseModel):
+    """A memorable event."""
+
+    description: str
+    participants: List[str] = Field(
+        description="Names of participants in the event and their relationship to the user."
+    )
+
+
+async def post_messages(state: ChatState, config: RunnableConfig) -> ChatState:
+    """Query the user's memories."""
+    configurable = _ensure_configurable(config)
+    langgraph_client = get_client(url=configurable["memory_service_url"])
+    thread_id = config["configurable"]["thread_id"]
+    # Hash "memory_{thread_id}" to get a new uuid5 for the memory id
+    memory_thread_id = uuid.uuid5(uuid.NAMESPACE_URL, f"memory_{thread_id}")
+    try:
+        await langgraph_client.threads.get(thread_id=memory_thread_id)
+    except Exception:
+        await langgraph_client.threads.create(thread_id=memory_thread_id)
+
+    await langgraph_client.runs.create(
+        memory_thread_id,
+        assistant_id=configurable["mem_assistant_id"],
+        input={
+            "messages": state["messages"],  # the service dedupes messages
+        },
+        config={
+            "configurable": {
+                "user_id": configurable["user_id"],
+            },
+        },
+        multitask_strategy="rollback",
+    )
+
+    return {
+        "messages": [],
+    }
+
+
+builder = StateGraph(ChatState, ChatConfigurable)
+builder.add_node(query_memories)
+builder.add_node(bot)
+builder.add_node(post_messages)
+builder.add_edge(START, "query_memories")
+builder.add_edge("query_memories", "bot")
+builder.add_edge("bot", "post_messages")
+
+chat_graph = builder.compile(checkpointer=MemorySaver())
+
+mem_assistant = await client.assistants.create(
+    graph_id="memory",
+    config={
+        "configurable": {
+            "delay": 4,  # seconds wait before considering a thread as "completed"
+            "schemas": {
+                "MemorableEvent": {
+                    "system_prompt": "Extract any memorable events from the user's"
+                    " messages that you would like to remember.",
+                    "update_mode": "insert",
+                    "function": MemorableEvent.schema(),
+                },
+            },
+        }
+    },
+)
+
+# mem_assistant = (await client.assistants.search(graph_id="memory"))[0]
+
+import uuid
+
+user_id = str(uuid.uuid4())  # more permanent
+
+thread_id = str(uuid.uuid4())  # can adjust
+await client.threads.create(thread_id=thread_id)
+# Output:
+#   {'thread_id': '3ff82998-b622-421f-8c8c-4b14d10c17b1',
+
+#    'created_at': '2024-06-28T00:42:23.884229+00:00',
+
+#    'updated_at': '2024-06-28T00:42:23.884229+00:00',
+
+#    'metadata': {},
+
+#    'status': 'idle'}
+
+class Chat:
+    def __init__(self, user_id: str, thread_id: str):
+        self.thread_id = thread_id
+        self.user_id = user_id
+
+    async def __call__(self, query: str) -> str:
+        chunks = chat_graph.astream_events(
+            input={
+                "messages": [("user", query)],
+            },
+            config={
+                "configurable": {
+                    "user_id": self.user_id,
+                    "thread_id": self.thread_id,
+                    "memory_service_url": deployment_url,
+                    "mem_assistant_id": mem_assistant["assistant_id"],
+                    "delay": 4,
+                }
+            },
+            version="v2",
+        )
+        res = ""
+        async for event in chunks:
+            if event.get("event") == "on_chat_model_stream":
+                tok = event["data"]["chunk"].content
+                print(tok, end="")
+                res += tok
+        return res
+
+chat = Chat(user_id, thread_id)
+
+_ = await chat("Hi there")
+# Output:
+#   Hi! It's nice to meet you. What brings you here today?
+
+_ = await chat(
+    "I've been planning a surprise party for my friend steve. "
+    "He has been having a rough month and I want it to be special."
+)
+# Output:
+#   That's so sweet of you! I'm sure Steve will appreciate the effort you're putting into making him feel special. What's the theme of the party going to be? Has Steve mentioned anything he's been into lately that you could incorporate into the celebration?
+
+_ = await chat(
+    "Steve really likes crocheting. Maybe I can do something with that? Or is that dumb... "
+)
+# Output:
+#   That's a great idea! Crocheting is a unique interest, and incorporating it into the party could make it really special and personalized to Steve. You could decorate with crocheted items, have a "crochet station" where guests can make their own simple projects, or even have a crochet-themed cake. What do you think Steve's favorite colors or yarn types are? That could help you get started with planning.
+
+_ = await chat("He's also into capoeira...")
+# Output:
+#   Whoa, that's cool! Capoeira is such a dynamic and energetic activity. You could definitely incorporate elements of it into the party to make it more exciting. Maybe you could hire a capoeira instructor to lead a short workshop or demo, or even have a mini "roda" (that's the circle where capoeiristas play, right?) set up for guests to try out some moves. What do you think Steve would think of that?
+
+_ = await chat(
+    "Oh that's a cool idea. One time i took classes from this studio nearby. Wonder if they have any recs. "
+)
+# Output:
+#   That's a great connection to have! It's always helpful to get recommendations from people who have experience with a particular activity or business. You could reach out to the studio and ask if they know of any instructors who might be available to lead a workshop or demo at the party. They might even have some suggestions for how to incorporate capoeira into the celebration in a way that would be fun and engaging for Steve and the other guests. Do you think you'll reach out to them today, or wait until later in the planning process?
+
+_ = await chat("Idk. Anyways - how are you doing?")
+# Output:
+#   I'm doing great, thanks for asking! I'm just happy to be chatting with you and helping with your party planning. It's always exciting to see people come together to celebrate special occasions. But enough about me - let's get back to Steve's party! What do you think about serving some Brazilian-inspired food and drinks to tie in with the capoeira theme?
+
+_ = await chat("My name is Ken btw")
+# Output:
+#   Nice to meet you, Ken! I'm glad we could chat about Steve's party and get some ideas going. If you need any more help or just want to bounce some ideas off me, feel free to reach out anytime. Good luck with the planning, and I hope Steve has an amazing time!
+
+"""
+## Convo 2
+
+Our memory is configured only to consider a thread "ready to process" if has been inactive for a minute.
+We'll wait for things to populate
+"""
+
+import asyncio
+
+await asyncio.sleep(60)
+
+thread_id_2 = uuid.uuid4()
+
+chat2 = Chat(user_id, thread_id_2)
+
+_ = await chat2("Remember me?")
+# Output:
+#   I remember you! We were planning a surprise party for Steve, and Ken was also involved. How's everything going? Did the party turn out well?
+
+_ = await chat2("wdy remember??")
+# Output:
+#   I remember because I have a special memory book where I keep track of all the fun conversations and events we've shared together! It's like a digital scrapbook, and it helps me remember important details about our chats.
+
+_ = await chat2("Oh planning is going alright!")
+# Output:
+#   That's great to hear! I'm glad to know that the planning is going smoothly. Are there any new developments or updates that you'd like to share about the party? Maybe I can even offer some suggestions or ideas to make it an even more special celebration for Steve!
+
+
+
+================================================
+FILE: LICENSE
+================================================
+MIT License
+
+Copyright (c) 2024 LangChain
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+
+================================================
+FILE: .env.example
+================================================
+PINECONE_API_KEY=...
+PINECONE_INDEX_NAME=...
+PINECONE_NAMESPACE=...
+FIREWORKS_API_KEY=...
+
+# You can add other keys as appropriate, depending on
+# the services you are using.
+
+
+
+
+================================================
+FILE: memory_service/__init__.py
+================================================
+"""Simple example memory extraction service."""
+
+from memory_service.graph import memgraph
+
+__all__ = ["memgraph"]
+
+
+
+================================================
+FILE: memory_service/_constants.py
+================================================
+PAYLOAD_KEY = "content"
+PATH_KEY = "path"
+PATCH_PATH = "user/{user_id}/patches/{function_name}"
+INSERT_PATH = "user/{user_id}/inserts/{function_name}/{event_id}"
+TIMESTAMP_KEY = "timestamp"
+
+
+
+================================================
+FILE: memory_service/_schemas.py
+================================================
+from __future__ import annotations
+
+from typing import Any, Dict, List, Optional
+
+from langchain_core.messages import AnyMessage
+from langchain_core.pydantic_v1 import BaseModel
+from langgraph.graph import add_messages
+from typing_extensions import Annotated, Literal, TypedDict
+
+
+class FunctionSchema(TypedDict):
+    name: str
+    """Name of the function."""
+    description: str
+    """A description of the function."""
+    parameters: dict
+    """The JSON Schema for the memory."""
+
+
+class MemoryConfig(TypedDict, total=False):
+    function: FunctionSchema
+    """The function to use for the memory assistant."""
+    system_prompt: Optional[str]
+    """The system prompt to use for the memory assistant."""
+    update_mode: Literal["patch", "insert"]
+    """Whether to continuously patch the memory, or treat each new
+
+    generation as a new memory.
+
+    Patching is useful for maintaining a structured profile or core list
+    of memories. Inserting is useful for maintaining all interactions and
+    not losing any information.
+
+    For patched memories, you can GET the current state at any given time.
+    For inserted memories, you can query the full history of interactions.
+    """
+
+
+class GraphConfig(TypedDict, total=False):
+    delay: float
+    """The delay in seconds to wait before considering a conversation complete.
+    
+    Default is 60 seconds.
+    """
+    model: str
+    """The model to use for generating memories.
+     
+    Defaults to Fireworks's "accounts/fireworks/models/firefunction-v2"
+    """
+    schemas: dict[str, MemoryConfig]
+    """The schemas for the memory assistant."""
+    thread_id: str
+    """The thread ID of the conversation."""
+    user_id: str
+    """The ID of the user to remember in the conversation."""
+
+
+class State(TypedDict):
+    messages: Annotated[List[AnyMessage], add_messages]
+    """The messages in the conversation."""
+    eager: bool
+
+
+class SingleExtractorState(State):
+    function_name: str
+    responses: list[BaseModel]
+    user_state: Optional[Dict[str, Any]]
+
+
+__all__ = [
+    "State",
+    "GraphConfig",
+    "SingleExtractorState",
+    "FunctionSchema",
+    "MemoryConfig",
+]
+
+
+
+================================================
+FILE: memory_service/_settings.py
+================================================
+from pydantic_settings import BaseSettings
+
+
+class Settings(BaseSettings):
+    pinecone_api_key: str = ""
+    pinecone_index_name: str = ""
+    pinecone_namespace: str = "ns1"
+    model: str = "accounts/fireworks/models/firefunction-v2"
+
+
+SETTINGS = Settings()
+
+
+
+================================================
+FILE: memory_service/_utils.py
+================================================
+from __future__ import annotations
+
+from functools import lru_cache
+from typing import Sequence
+
+import langsmith
+from langchain_core.messages import (
+    AnyMessage,
+    HumanMessage,
+    SystemMessage,
+    merge_message_runs,
+)
+from langchain_fireworks import FireworksEmbeddings
+from pinecone import Pinecone
+
+from memory_service import _schemas as schemas
+from memory_service import _settings as settings
+
+_DEFAULT_DELAY = 60  # seconds
+
+
+def get_index():
+    pc = Pinecone(api_key=settings.SETTINGS.pinecone_api_key)
+    return pc.Index(settings.SETTINGS.pinecone_index_name)
+
+
+@langsmith.traceable
+def ensure_memory_config(config: dict) -> schemas.MemoryConfig:
+    """Merge the user-provided config with default values."""
+    return {
+        **config,
+        **schemas.MemoryConfig(
+            function=config.get("function", {}),
+            system_prompt=config.get("system_prompt"),
+            update_mode=config.get("update_mode", "patch"),
+        ),
+    }
+
+
+@langsmith.traceable
+def ensure_configurable(config: dict) -> schemas.GraphConfig:
+    """Merge the user-provided config with default values."""
+    function_schemas = config.get("schemas") or {}
+    return {
+        **config,
+        **schemas.GraphConfig(
+            delay=config.get("delay", _DEFAULT_DELAY),
+            model=config.get("model", settings.SETTINGS.model),
+            schemas={k: ensure_memory_config(v) for k, v in function_schemas.items()},
+            thread_id=config["thread_id"],
+            user_id=config["user_id"],
+        ),
+    }
+
+
+def prepare_messages(
+    messages: Sequence[AnyMessage], system_prompt: str
+) -> list[AnyMessage]:
+    """Merge message runs and add instructions before and after to stay on task."""
+    sys = SystemMessage(
+        content=system_prompt
+        + """
+
+<memory-system>Reflect on following interaction. Use the provided tools to \
+ retain any necessary memories about the user.</memory-system>
+"""
+    )
+    m = HumanMessage(
+        content="## End of conversation\n\n"
+        "<memory-system>Reflect on the interaction above."
+        " What memories ought to be retained or updated?</memory-system>",
+    )
+    return merge_message_runs([sys] + list(messages) + [m])
+
+
+@lru_cache
+def get_embeddings():
+    return FireworksEmbeddings(model="nomic-ai/nomic-embed-text-v1.5")
+
+
+__all__ = ["ensure_configurable", "prepare_messages"]
+
+
+
+================================================
+FILE: memory_service/graph.py
+================================================
+"""Graphs that extract memories on a schedule."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import uuid
+from datetime import datetime, timezone
+
+from langchain.chat_models import init_chat_model
+from langchain_core.runnables import RunnableConfig
+from langgraph.constants import Send
+from langgraph.graph import END, START, StateGraph
+from trustcall import create_extractor
+from typing_extensions import Literal
+
+from memory_service import _constants as constants
+from memory_service import _schemas as schemas
+from memory_service import _settings as settings
+from memory_service import _utils as utils
+
+logger = logging.getLogger("memory")
+# Handle patch memory, where we update a single document in the database.
+# If the document doesn't exist, the LLM will generate a new one.
+# Otherwise, it will generate JSON patches to update the existing document.
+
+
+async def fetch_patched_state(
+    state: schemas.SingleExtractorState, config: RunnableConfig
+) -> dict:
+    """Fetch the user's state from the database.
+
+    This is a placeholder function. You should replace this with a function
+    that fetches the user's state from the database.
+    """
+    configurable = utils.ensure_configurable(config["configurable"])
+    path = constants.PATCH_PATH.format(
+        user_id=configurable["user_id"], function_name=state["function_name"]
+    )
+    # TODO: does pinecone have an async api in their SDK...?
+    response = utils.get_index().fetch(
+        ids=[path], namespace=settings.SETTINGS.pinecone_namespace
+    )
+    if vectors := response.get("vectors"):
+        document = vectors[path]
+        payload = document["metadata"][constants.PAYLOAD_KEY]
+        return {"user_state": payload}
+    return {"user_state": None}
+
+
+async def extract_patch_memories(
+    state: schemas.SingleExtractorState, config: RunnableConfig
+) -> dict:
+    """Extract the user's state from the conversation."""
+    configurable = utils.ensure_configurable(config["configurable"])
+    schemas = configurable["schemas"]
+    memory_config = schemas[state["function_name"]]
+    llm = init_chat_model(model=configurable["model"])
+    messages = utils.prepare_messages(
+        state["messages"], memory_config.get("system_prompt") or ""
+    )
+    extractor = create_extractor(
+        llm,
+        tools=[memory_config["function"]],
+        tool_choice=memory_config["function"]["name"],
+    )
+    inputs = {
+        "messages": messages,
+    }
+    if existing := state["user_state"]:
+        inputs["existing"] = {memory_config["function"]["name"]: existing}
+    result = await extractor.ainvoke(inputs, config)
+    return {"responses": result["responses"]}
+
+
+async def upsert_patched_state(
+    state: schemas.SingleExtractorState, config: RunnableConfig
+) -> dict:
+    """Upsert the user's state to the database."""
+    configurable = utils.ensure_configurable(config["configurable"])
+    path = constants.PATCH_PATH.format(
+        user_id=configurable["user_id"], function_name=state["function_name"]
+    )
+    serialized = state["responses"][0].model_dump_json()
+    embeddings = utils.get_embeddings()
+    vector = await embeddings.aembed_query(serialized)
+    utils.get_index().upsert(
+        vectors=[
+            {
+                "id": path,
+                "values": vector,
+                "metadata": {
+                    constants.PAYLOAD_KEY: serialized,
+                    constants.PATH_KEY: path,
+                    constants.TIMESTAMP_KEY: datetime.now(tz=timezone.utc),
+                    "user_id": configurable["user_id"],
+                },
+            }
+        ],
+        namespace=settings.SETTINGS.pinecone_namespace,
+    )
+    return {"user_state": {}}
+
+
+patch_builder = StateGraph(schemas.SingleExtractorState, schemas.GraphConfig)
+patch_builder.add_node(fetch_patched_state)
+patch_builder.add_node(extract_patch_memories)
+patch_builder.add_node(upsert_patched_state)
+patch_builder.add_edge(START, "fetch_patched_state")
+patch_builder.add_edge("fetch_patched_state", "extract_patch_memories")
+
+
+def should_commit_patch(
+    state: schemas.SingleExtractorState, config: RunnableConfig
+) -> Literal["upsert_patched_state", "__end__"]:
+    """Whether there are things extracted to commit to the DB."""
+    return "upsert_patched_state" if state["responses"] else END
+
+
+patch_builder.add_conditional_edges("extract_patch_memories", should_commit_patch)
+patch_graph = patch_builder.compile()
+
+# Handle semantic memory, where we insert each memory event
+# as a new document in the database.
+
+
+async def extract_semantic_memories(
+    state: schemas.SingleExtractorState, config: RunnableConfig
+) -> dict:
+    """Extract embeddable "events"."""
+    configurable = utils.ensure_configurable(config["configurable"])
+    llm = init_chat_model(model=configurable["model"])
+    memory_config = configurable["schemas"][state["function_name"]]
+    messages = utils.prepare_messages(
+        state["messages"], memory_config.get("system_prompt") or ""
+    )
+
+    extractor = create_extractor(llm, tools=[memory_config["function"]])
+    # We don't have an "existing" value here since we are continuously inserting
+    # new memories.
+    result = await extractor.ainvoke({"messages": messages})
+    return {"responses": result["responses"]}
+
+
+async def insert_memories(
+    state: schemas.SingleExtractorState, config: RunnableConfig
+) -> dict:
+    """Insert the user's state to the database."""
+    configurable = utils.ensure_configurable(config["configurable"])
+    embeddings = utils.get_embeddings()
+    serialized = [r.model_dump_json() for r in state["responses"]]
+    # You could alternatively do multi-vector lookup based on the schema.
+    vectors = await embeddings.aembed_documents(serialized)
+    current_time = datetime.now(tz=timezone.utc)
+    paths = [
+        constants.INSERT_PATH.format(
+            user_id=configurable["user_id"],
+            function_name=state["function_name"],
+            event_id=str(uuid.uuid4()),
+        )
+        for _ in range(len(vectors))
+    ]
+    documents = [
+        {
+            "id": path,
+            "values": vector,
+            "metadata": {
+                constants.PAYLOAD_KEY: serialized,
+                constants.PATH_KEY: path,
+                constants.TIMESTAMP_KEY: current_time,
+                "user_id": configurable["user_id"],
+            },
+        }
+        for path, vector, serialized in zip(paths, vectors, serialized)
+    ]
+    utils.get_index().upsert(
+        vectors=documents,
+        namespace=settings.SETTINGS.pinecone_namespace,
+    )
+    return {"user_state": {}}
+
+
+semantic_builder = StateGraph(schemas.SingleExtractorState, schemas.GraphConfig)
+# Lots of quality improvements can be made here, such as:
+# - Fetch similar memories and prompt model to combine or extrapolate
+# - Adding advanced indexing by the memory schema (like importance, relevance, etc.)
+semantic_builder.add_node(extract_semantic_memories)
+semantic_builder.add_node(insert_memories)
+semantic_builder.add_edge(START, "extract_semantic_memories")
+
+
+def should_insert(
+    state: schemas.SingleExtractorState, config: RunnableConfig
+) -> Literal["insert_memories", "__end__"]:
+    """Whether there are things extracted to commit to the DB."""
+    return "insert_memories" if state["responses"] else END
+
+
+semantic_builder.add_conditional_edges("extract_semantic_memories", should_insert)
+semantic_graph = semantic_builder.compile()
+
+
+# This graph is public facing. It receives conversations and distibutes them to the
+# memory types as needed.
+
+
+async def schedule(state: schemas.State, config: RunnableConfig) -> dict:
+    """Delay the start of processing to simulate run scheduling.
+
+    We only really need to process a conversation after it is completed.
+    In general, we don't know when a conversation is completed, so we will
+    delay the processing of the conversation for a set amount of time.
+
+    This is configurable at the assistant and run level, and to bypass this,
+    you can set `eager` to True in the run inputs.
+
+    If a new message comes in before the delay is up, the run can be cancelled
+    and a new one scheduled.
+    """
+    if state.get("eager", False):
+        return {"messages": state["messages"]}
+    configurable = utils.ensure_configurable(config["configurable"])
+    if configurable["delay"]:
+        await asyncio.sleep(configurable["delay"])
+    return {"messages": []}
+
+
+# Create the graph + all nodes
+builder = StateGraph(schemas.State, schemas.GraphConfig)
+builder.add_node(schedule)
+builder.add_node("handle_patch_memory", patch_graph)
+builder.add_node("handle_semantic_memory", semantic_graph)
+
+# Add edges
+builder.add_edge(START, "schedule")
+
+
+def scatter_schemas(state: schemas.State, config: RunnableConfig) -> list[Send]:
+    """Route the schemas for the memory assistant.
+
+    These will be executed in parallel.
+    """
+    configuration = utils.ensure_configurable(config["configurable"])
+    sends = []
+    for k, v in configuration["schemas"].items():
+        update_mode = v["update_mode"]
+        match update_mode:
+            case "patch":
+                target = "handle_patch_memory"
+            case "insert":
+                target = "handle_semantic_memory"
+            case _:
+                raise ValueError(f"Unknown update mode: {update_mode}")
+        sends.append(Send(target, {**state, "function_name": k}))
+    return sends
+
+
+builder.add_conditional_edges("schedule", scatter_schemas)
+
+memgraph = builder.compile()
+
+
+__all__ = ["memgraph"]
+
+
+
+================================================
+FILE: tests/conftest.py
+================================================
+import os
+
+import pytest
+
+
+@pytest.fixture(scope="session", autouse=True)
+def set_fake_env_vars():
+    os.environ["PINECONE_API_KEY"] = "fake_key"
+    os.environ["PINECONE_INDEX_NAME"] = "fake_index"
+    yield
+
+
+
+================================================
+FILE: tests/evals/test_memories.py
+================================================
+import json
+from typing import List
+from unittest.mock import MagicMock, patch
+
+import pytest
+from langchain_core.pydantic_v1 import BaseModel, Field
+from langsmith import expect, get_current_run_tree, test
+
+from memory_service._constants import PATCH_PATH
+from memory_service._schemas import GraphConfig, MemoryConfig
+from memory_service.graph import memgraph
+
+
+# To test the patch-based memory
+class CoreMemories(BaseModel):
+    """Core memories about the user."""
+
+    memories: List[str]
+
+
+@pytest.fixture
+def core_memory_func() -> MemoryConfig:
+    return {
+        "function": {
+            "name": "core_memories",
+            "description": "A list of core memories about the user.",
+            "parameters": CoreMemories.schema(),
+        },
+        "system_prompt": "You may add or remove memories that are core to the"
+        " user's identity or that will help you better interact with the user.",
+        "update_mode": "patch",
+    }
+
+
+@test(output_keys=["num_mems_expected"])
+@pytest.mark.parametrize(
+    "messages, existing, num_mems_expected",
+    [
+        ([], {}, 0),
+        ([("user", "When I was young, I had a dog named spot")], {}, 1),
+        (
+            [("user", "When I was young, I had a dog named spot.")],
+            {"memories": ["I am afraid of spiders."]},
+            2,
+        ),
+    ],
+)
+async def test_patch_memory(
+    core_memory_func: MemoryConfig,
+    messages: List[str],
+    num_mems_expected: int,
+    existing: dict,
+):
+    # patch memory_service.graph.index with a mock
+    user_id = "4fddb3ef-fcc9-4ef7-91b6-89e4a3efd112"
+    thread_id = "e1d0b7f7-0a8b-4c5f-8c4b-8a6c9f6e5c7a"
+    function_name = "CoreMemories"
+    with patch("memory_service._utils.get_index") as get_index:
+        index = MagicMock()
+        get_index.return_value = index
+        # No existing memories
+        if existing:
+            path = PATCH_PATH.format(
+                user_id=user_id,
+                function_name=function_name,
+            )
+            index.fetch.return_value = {
+                "vectors": {path: {"metadata": {"content": existing}}}
+            }
+        else:
+            index.fetch.return_value = {}
+
+        # When the memories are patched
+        await memgraph.ainvoke(
+            {
+                "messages": messages,
+            },
+            {
+                "configurable": GraphConfig(
+                    delay=0.1,
+                    user_id=user_id,
+                    thread_id=thread_id,
+                    schemas={function_name: core_memory_func},
+                ),
+            },
+        )
+        if num_mems_expected:
+            # Check if index.upsert was called
+            index.upsert.assert_called_once()
+            # Get named call args
+            vectors = index.upsert.call_args.kwargs["vectors"]
+            rt = get_current_run_tree()
+            rt.outputs = {"upserted": [v["metadata"]["content"] for v in vectors]}
+            assert len(vectors) == 1
+            # Check if the memory was added
+            mem = vectors[0]["metadata"]["content"]
+            memories = json.loads(mem)["memories"]
+            expect(len(memories)).to_equal(num_mems_expected)
+
+
+# To test the insertion memory
+class MemorableEvent(BaseModel):
+    """A memorable event."""
+
+    description: str
+    participants: List[str] = Field(
+        description="Names of participants in the event and their relationship to the user."
+    )
+
+
+@pytest.fixture
+def memorable_event_func() -> MemoryConfig:
+    return {
+        "function": {
+            "name": "memorable_event",
+            "description": "Any event, observation, insight, or other detail that you may"
+            " want to recall in later interactions with the user.",
+            "parameters": MemorableEvent.schema(),
+        },
+        "system_prompt": "Extract all events that are memorable and relevant to the user."
+        " using parallel tool calling. If nothing of interest occured in the diologue, simply reply 'None'.",
+        "update_mode": "insert",
+    }
+
+
+@test(output_keys=["num_events_expected"])
+@pytest.mark.parametrize(
+    "messages, num_events_expected",
+    [
+        ([], 0),
+        (
+            [
+                ("user", "I went to the beach with my friends."),
+                ("assistant", "That sounds like a fun day."),
+            ],
+            1,
+        ),
+        (
+            [
+                ("user", "I went to the beach with my friends."),
+                ("assistant", "That sounds like a fun day."),
+                ("user", "I also went to the park with my family - I like the park."),
+            ],
+            2,
+        ),
+    ],
+)
+async def test_insert_memory(
+    memorable_event_func: MemoryConfig,
+    messages: List[str],
+    num_events_expected: int,
+):
+    # patch memory_service.graph.index with a mock
+    user_id = "4fddb3ef-fcc9-4ef7-91b6-89e4a3efd112"
+    thread_id = "e1d0b7f7-0a8b-4c5f-8c4b-8a6c9f6e5c7a"
+    function_name = "MemorableEvent"
+    with patch("memory_service._utils.get_index") as get_index:
+        index = MagicMock()
+        get_index.return_value = index
+        index.fetch.return_value = {}
+        # When the events are inserted
+        await memgraph.ainvoke(
+            {
+                "messages": messages,
+            },
+            {
+                "configurable": GraphConfig(
+                    delay=0.1,
+                    user_id=user_id,
+                    thread_id=thread_id,
+                    schemas={function_name: memorable_event_func},
+                ),
+            },
+        )
+        if num_events_expected:
+            # Check if index.upsert was called
+            index.upsert.assert_called_once()
+            # Get named call args
+            vectors = index.upsert.call_args.kwargs["vectors"]
+            assert len(vectors) == num_events_expected
+
+

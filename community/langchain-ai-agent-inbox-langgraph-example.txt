@@ -1,0 +1,265 @@
+Directory structure:
+└── langchain-ai-agent-inbox-langgraph-example/
+    ├── README.md
+    ├── LICENSE
+    ├── .codespellignore
+    ├── .env.example
+    ├── src/
+    │   └── agent/
+    │       ├── __init__.py
+    │       ├── graph.py
+    │       └── state.py
+    └── static/
+
+================================================
+FILE: README.md
+================================================
+# Agent Inbox LangGraph Example
+
+The repository contains a bare minimum code example to get started with the Agent Inbox with LangGraph.
+
+> [!TIP]
+> Looking for the TypeScript version of this example repository? Click [here](https://github.com/langchain-ai/agent-inbox-langgraphjs-example)
+
+## Getting Started
+
+To get started, clone the repository:
+
+```bash
+git clone https://github.com/langchain-ai/agent-inbox-langgraph-example.git
+```
+
+```bash
+cd agent-inbox-langgraph-example
+```
+
+Then, install the dependencies:
+
+```bash
+poetry install
+```
+
+Next, install the [LangGraph CLI](https://langchain-ai.github.io/langgraph/cloud/reference/cli/) if not already installed. We're installing the in-memory version so we can run the LangGraph server without Docker.
+
+```bash
+pip install -U "langgraph-cli[inmem]"
+```
+
+After this, we can start the LangGraph server:
+
+```bash
+langgraph dev
+```
+
+This may take a second to start. Once the server is running, it should open a new browser tab to the LangGraph Studio through LangSmith. If this does not happen automatically, visit this URL:
+[https://smith.langchain.com/studio/thread?baseUrl=http%3A%2F%2F127.0.0.1%3A2024](https://smith.langchain.com/studio/thread?baseUrl=http%3A%2F%2F127.0.0.1%3A2024)
+
+Now that our LangGraph server is running, we can start a new run in the Studio. To do this, simply enter any string into the `Interrupt Response` field, then click the `Submit` button. This will execute the graph, and interrupt on the `human_node`. Once the graph has interrupted, we can visit the Agent Inbox site to add your graph, and manage the interrupted thread.
+
+## Agent Inbox Setup
+
+Visit [`dev.agentinbox.ai`](https://dev.agentinbox.ai). If it's your first time visiting the site, you'll be prompted to add a new graph.
+
+Enter the following fields into the form:
+
+- Graph/Assistant ID: `agent` - this corresponds to the ID of the graph defined in the [`langgraph.json`](./langgraph.json) file, or the ID of an assistant tied to your graph.
+- Deployment URL: `http://127.0.0.1:2024` - this is the URL of the LangGraph server running locally.
+- Name: `My Agent` - this is the optional name of the graph. You can set this to any value you want, or leave it empty and it'll be auto-assigned.
+
+Click `Submit` and watch your graph appear in the sidebar. This should automatically fetch the interrupted threads, but if it does not, click on the sidebar item & refresh the page. Once you've done this, you should see a single interrupted item in the table:
+
+![Screenshot of the Agent Inbox](./static/agent_inbox_view.png)
+
+Click on this row, and you'll be taken to the interrupted item page. From here, you can respond in any way you'd like:
+
+- Accept
+- Edit
+- Respond
+- Ignore
+
+![Screenshot of an interrupted item in the Agent Inbox](./static/interrupted_item.png)
+
+Once you take an action, the graph will resume the execution and end. The final state returned from the graph will be a string containing the type of action which was taken, and the value of the action args (unless `ignore` was chosen).
+
+To view the result of the graph, go back to the LangGraph Studio and inspect the most recent thread results.
+
+![Screenshot of the most recent thread results LangGraph Studio](./static/studio_thread_result.png)
+
+## Go Deeper
+
+If you'd like to go deeper, you can:
+
+- Checkout the Agent Inbox docs, and codebase here: [github.com/langchain-ai/agent-inbox](https://github.com/langchain-ai/agent-inbox)
+- See an open source Executive AI Assistant here: [github.com/langchain-ai/executive-ai-assistant](https://github.com/langchain-ai/executive-ai-assistant)
+- See an open source Social Media Agent here: [github.com/langchain-ai/social-media-agent](https://github.com/langchain-ai/social-media-agent)
+
+
+
+================================================
+FILE: LICENSE
+================================================
+MIT License
+
+Copyright (c) 2024 LangChain
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+
+================================================
+FILE: .codespellignore
+================================================
+
+
+
+================================================
+FILE: .env.example
+================================================
+# To separate your traces from other application
+LANGSMITH_PROJECT=new-agent
+
+# The following depend on your selected configuration
+
+## LLM choice:
+ANTHROPIC_API_KEY=....
+FIREWORKS_API_KEY=...
+OPENAI_API_KEY=...
+
+
+
+================================================
+FILE: src/agent/__init__.py
+================================================
+"""New LangGraph Agent.
+
+This module defines a custom graph.
+"""
+
+from agent.graph import graph
+
+__all__ = ["graph"]
+
+
+
+================================================
+FILE: src/agent/graph.py
+================================================
+"""Module for defining the agent's workflow graph and human interaction nodes."""
+
+from typing import Any, Dict
+
+from langchain_core.runnables import RunnableConfig
+from langgraph.graph import StateGraph
+from langgraph.prebuilt.interrupt import (
+    ActionRequest,
+    HumanInterrupt,
+    HumanInterruptConfig,
+    HumanResponse,
+)
+from langgraph.types import interrupt
+
+from agent.state import State
+
+
+async def human_node(state: State, config: RunnableConfig) -> Dict[str, Any]:
+    """Call the interrupt function to pause the graph and handle user interaction.
+
+    Once resumed, it will log the type of action which was returned from
+    the interrupt function.
+    """
+    # Define the interrupt request
+    action_request = ActionRequest(
+        action="Confirm Joke",
+        args={"joke": "What did the engineer say to the manager?"},
+    )
+
+    interrupt_config = HumanInterruptConfig(
+        allow_ignore=True,  # Allow the user to `ignore` the interrupt.
+        allow_respond=True,  # Allow the user to `respond` to the interrupt.
+        allow_edit=True,  # Allow the user to `edit` the interrupt's args.
+        allow_accept=True,  # Allow the user to `accept` the interrupt's args.
+    )
+
+    # The description will be rendered as markdown in the UI, so you may use markdown syntax.
+    description = (
+        "# Confirm Joke\n"
+        + "Please carefully example the joke, and decide if you want to accept, edit, or ignore the joke."
+        + "If you accept, the joke will be added to the conversation."
+        + "If you edit and submit, the edited joke will be added to the conversation."
+        + "If you ignore, the conversation will continue without adding the joke."
+        + "If you respond, the response will be used to generate a new joke."
+    )
+
+    request = HumanInterrupt(
+        action_request=action_request, config=interrupt_config, description=description
+    )
+
+    human_response: HumanResponse = interrupt([request])[0]
+
+    if human_response.get("type") == "response":
+        message = f"User responded with: {human_response.get('args')}"
+        return {"interrupt_response": message}
+    elif human_response.get("type") == "accept":
+        message = f"User accepted with: {human_response.get('args')}"
+        return {"interrupt_response": message}
+    elif human_response.get("type") == "edit":
+        message = f"User edited with: {human_response.get('args')}"
+        return {"interrupt_response": message}
+    elif human_response.get("type") == "ignore":
+        message = "User ignored interrupt."
+        return {"interrupt_response": message}
+
+    return {
+        "interrupt_response": "Unknown interrupt response type: " + str(human_response)
+    }
+
+
+# Define a new graph
+workflow = StateGraph(State)
+
+# Add the node to the graph. This node will interrupt when it is invoked.
+workflow.add_node("human_node", human_node)
+
+# Set the entrypoint as `human_node` so the first node will interrupt
+workflow.add_edge("__start__", "human_node")
+
+# Compile the workflow into an executable graph
+graph = workflow.compile()
+graph.name = "Agent Inbox Example"  # This defines the custom name in LangSmith
+
+
+
+================================================
+FILE: src/agent/state.py
+================================================
+"""State module for managing agent state."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass
+class State:
+    """Class representing the state of the agent interaction."""
+
+    interrupt_response: str = "example"
+
+
+

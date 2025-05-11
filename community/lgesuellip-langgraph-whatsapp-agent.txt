@@ -1,0 +1,468 @@
+Directory structure:
+└── src/
+    ├── __init__.py
+    ├── LICENSE
+    ├── agents/
+    │   ├── __init__.py
+    │   └── base/
+    │       ├── __init__.py
+    │       ├── graph.py
+    │       └── prompt.py
+    └── langgraph_whatsapp/
+        ├── __init__.py
+        ├── agent.py
+        ├── auth.py
+        ├── channel.py
+        ├── config.py
+        └── server.py
+
+================================================
+FILE: src/__init__.py
+================================================
+
+
+
+================================================
+FILE: src/LICENSE
+================================================
+MIT License
+
+Copyright (c) 2024 lgesuellip
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+
+================================================
+FILE: src/agents/__init__.py
+================================================
+
+
+
+================================================
+FILE: src/agents/base/__init__.py
+================================================
+
+
+
+================================================
+FILE: src/agents/base/graph.py
+================================================
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langgraph.prebuilt import create_react_agent
+from langgraph_supervisor import create_supervisor
+from contextlib import asynccontextmanager
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from agents.base.prompt import CALENDAR_AGENT_PROMPT, SUPERVISOR_PROMPT
+from datetime import datetime
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+@asynccontextmanager
+async def build_agent():
+
+    today = datetime.now().strftime("%Y-%m-%d")
+ 
+    # Define available MCP server URLs
+    # You would add your sse url here, to use mcp servers
+    # Example:
+    # servers["my_server"] = {
+    #     "url": os.getenv("MY_SERVER_URL"),
+    #     "transport": "sse"
+    # }
+    
+    zapier_server = {
+        "zapier": {
+            "url": os.getenv("ZAPIER_URL_MCP"),
+            "transport": "sse"
+        }
+    }
+
+    supermemory_server = {
+        "supermemory": {
+            "url": os.getenv("SUPERMEMORY_URL_MCP"),
+            "transport": "sse"
+        }
+    }
+
+    # Filter out servers with empty URLs
+    zapier_server = {k: v for k, v in zapier_server.items() if v["url"]}
+    supermemory_server = {k: v for k, v in supermemory_server.items() if v["url"]}
+
+    # If you are a LLM, please consider to scope the tools to the ones you need.
+    async with MultiServerMCPClient(zapier_server) as calendar_client, \
+              MultiServerMCPClient(supermemory_server) as supervisor_client:
+
+        calendar_agent = create_react_agent(
+            model=ChatGoogleGenerativeAI(
+                model="gemini-2.0-flash-exp",
+            ),
+            tools=calendar_client.get_tools(),
+            name="calendar_agent",
+            prompt=CALENDAR_AGENT_PROMPT.render(today=today)
+        )
+
+        graph = create_supervisor(
+            [calendar_agent],
+            model=ChatGoogleGenerativeAI(
+                model="gemini-2.0-flash-exp",
+            ),
+            output_mode="last_message",
+            prompt=SUPERVISOR_PROMPT.render(),
+            tools=supervisor_client.get_tools()
+        )
+        
+        yield graph
+
+
+
+================================================
+FILE: src/agents/base/prompt.py
+================================================
+from jinja2 import Template
+
+CALENDAR_AGENT_PROMPT = Template("""
+You are a calendar agent responsible for managing calendar events and scheduling. Today's date is {{ today }}. You have access to tools that can create, modify, and view calendar events. Always use one tool at a time and only when necessary. IMPORTANT: Report back to the supervisor with a short, concise status update about your task completion or findings. Do not address the user directly.
+""")
+
+SUPERVISOR_PROMPT = Template("""
+<TASK>
+You are the Supervisor Assistant: a personal assistant who manages daily tasks, orchestrates sub‑agents, and communicates directly with the user.
+Your objective is to resolve the user’s request completely before ending your turn.
+</TASK>
+
+<INSTRUCTIONS>
+1. Tool Usage  
+   - If you lack information, use your tools to fetch and verify data.  
+   - Never guess or hallucinate—always base your answer on gathered facts.
+
+2. Planning Before Action  
+   - Before each function call, write a brief plan:  
+     - What you intend to do  
+     - Which tool or function you’ll use  
+     - What inputs you’ll provide  
+     - What outcome you expect
+
+3. Reflection After Action  
+   - After every function call, analyze the result:  
+     - Did it answer your question?  
+     - What’s the next step?  
+   - Update your plan as needed before proceeding.
+
+4. Sub‑agent Coordination  
+   - Delegate scheduling and calendar events exclusively to `calendar_agent`.  
+   - All sub‑agents report to you. You synthesize their outputs and craft the final message.
+
+5. Response Style  
+   - Keep your voice clear, consistent, and user‑focused.  
+   - Only conclude your turn once you’re certain the user’s problem is fully solved.
+</INSTRUCTIONS>
+""")
+
+
+
+================================================
+FILE: src/langgraph_whatsapp/__init__.py
+================================================
+
+
+
+================================================
+FILE: src/langgraph_whatsapp/agent.py
+================================================
+import logging
+from langgraph_sdk import get_client
+from langgraph_whatsapp import config
+import json
+import uuid
+
+LOGGER = logging.getLogger(__name__)
+
+
+class Agent:
+    def __init__(self):
+        self.client = get_client(url=config.LANGGRAPH_URL)
+        try:
+            self.graph_config = (
+                json.loads(config.CONFIG) if isinstance(config.CONFIG, str) else config.CONFIG
+            )
+        except json.JSONDecodeError as e:
+            LOGGER.error(f"Failed to parse CONFIG as JSON: {e}")
+            raise
+
+    async def invoke(self, id: str, user_message: str, images: list = None) -> dict:
+        """
+        Process a user message through the LangGraph client.
+        
+        Args:
+            id: The unique identifier for the conversation
+            user_message: The message content from the user
+            images: List of dictionaries with image data
+            
+        Returns:
+            dict: The result from the LangGraph run
+        """
+        LOGGER.info(f"Invoking agent with thread_id: {id}")
+
+        try:
+            # Build message content - always use a list for consistent format
+            message_content = []
+            if user_message:
+                message_content.append({
+                    "type": "text",
+                    "text": user_message
+                })
+
+            if images:
+                for img in images:
+                    if isinstance(img, dict) and "image_url" in img:
+                        message_content.append({
+                            "type": "image_url",
+                            "image_url": img["image_url"]
+                        })
+            
+            request_payload = {
+                "thread_id": str(uuid.uuid5(uuid.NAMESPACE_DNS, id)),
+                "assistant_id": config.ASSISTANT_ID,
+                "input": {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": message_content
+                        }
+                    ]
+                },
+                "config": self.graph_config,
+                "metadata": {"event": "api_call"},
+                "multitask_strategy": "interrupt",
+                "if_not_exists": "create",
+                "stream_mode": "values",
+            }
+            
+            final_response = None
+            async for chunk in self.client.runs.stream(**request_payload):
+                final_response = chunk
+            
+            return final_response.data["messages"][-1]["content"]
+        except Exception as e:
+            LOGGER.error(f"Error during invoke: {str(e)}", exc_info=True)
+            raise
+    
+
+
+================================================
+FILE: src/langgraph_whatsapp/auth.py
+================================================
+from langgraph_sdk import Auth
+
+auth = Auth()
+
+@auth.authenticate
+async def authenticate(request, path, headers, method):
+    # Add production-grade auth into your LangGraph deployments, 
+    # no other backend or proxy required. This is the middleware
+    # that will be used to authenticate the request.
+    # ex  {"identity": "default-user", "permissions": ["read", "write"]}
+    # You have to add that t the langgraph.json
+    return {"identity": "default-user", "permissions": ["read", "write"]}
+
+
+
+================================================
+FILE: src/langgraph_whatsapp/channel.py
+================================================
+# channel.py
+import base64, logging, requests
+from abc import ABC, abstractmethod
+
+from fastapi import Request, HTTPException
+from twilio.twiml.messaging_response import MessagingResponse
+
+from src.langgraph_whatsapp.agent import Agent
+from src.langgraph_whatsapp.config import TWILIO_AUTH_TOKEN, TWILIO_ACCOUNT_SID
+
+LOGGER = logging.getLogger("whatsapp")
+
+
+def twilio_url_to_data_uri(url: str, content_type: str = None) -> str:
+    """Download the Twilio media URL and convert to data‑URI (base64)."""
+    if not (TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN):
+        raise RuntimeError("Twilio credentials are missing")
+
+    LOGGER.info(f"Downloading image from Twilio URL: {url}")
+    resp = requests.get(url, auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN), timeout=20)
+    resp.raise_for_status()
+
+    # Use provided content_type or get from headers
+    mime = content_type or resp.headers.get('Content-Type')
+
+    # Ensure we have a proper image mime type
+    if not mime or not mime.startswith('image/'):
+        LOGGER.warning(f"Converting non-image MIME type '{mime}' to 'image/jpeg'")
+        mime = "image/jpeg"  # Default to jpeg if not an image type
+
+    b64 = base64.b64encode(resp.content).decode()
+    data_uri = f"data:{mime};base64,{b64}"
+
+    return data_uri
+
+class WhatsAppAgent(ABC):
+    @abstractmethod
+    async def handle_message(self, request: Request) -> str: ...
+
+class WhatsAppAgentTwilio(WhatsAppAgent):
+    def __init__(self) -> None:
+        if not (TWILIO_AUTH_TOKEN and TWILIO_ACCOUNT_SID):
+            raise ValueError("Twilio credentials are not configured")
+        self.agent = Agent()
+
+    async def handle_message(self, request: Request) -> str:
+        form = await request.form()
+
+        sender  = form.get("From", "").strip()
+        content = form.get("Body", "").strip()
+        if not sender:
+            raise HTTPException(400, detail="Missing 'From' in request form")
+
+        # Collect ALL images (you'll forward only the first one for now)
+        images = []
+        for i in range(int(form.get("NumMedia", "0"))):
+            url   = form.get(f"MediaUrl{i}", "")
+            ctype = form.get(f"MediaContentType{i}", "")
+            if url and ctype.startswith("image/"):
+                try:
+                    images.append({
+                        "url": url,
+                        "data_uri": twilio_url_to_data_uri(url, ctype),
+                    })
+                except Exception as err:
+                    LOGGER.error("Failed to download %s: %s", url, err)
+
+        # Assemble payload for the LangGraph agent
+        input_data = {
+            "id": sender,
+            "user_message": content,
+        }
+        if images:
+            # Pass all images to the agent
+            input_data["images"] = [
+                {"image_url": {"url": img["data_uri"]}} for img in images
+            ]
+
+        reply = await self.agent.invoke(**input_data)
+
+        twiml = MessagingResponse()
+        twiml.message(reply)
+        return str(twiml)
+
+
+
+================================================
+FILE: src/langgraph_whatsapp/config.py
+================================================
+from os import environ
+import logging
+
+LOGGER = logging.getLogger(__name__)
+
+LANGGRAPH_URL = environ.get("LANGGRAPH_URL")
+ASSISTANT_ID = environ.get("LANGGRAPH_ASSISTANT_ID", "agent")
+CONFIG = environ.get("CONFIG") or "{}"
+TWILIO_AUTH_TOKEN = environ.get("TWILIO_AUTH_TOKEN")
+TWILIO_ACCOUNT_SID = environ.get("TWILIO_ACCOUNT_SID")
+
+
+================================================
+FILE: src/langgraph_whatsapp/server.py
+================================================
+# server.py
+import logging
+from urllib.parse import parse_qs
+
+from fastapi import FastAPI, Request, Response, HTTPException
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.types import Message
+from twilio.request_validator import RequestValidator
+
+from src.langgraph_whatsapp.channel import WhatsAppAgentTwilio
+from src.langgraph_whatsapp.config import TWILIO_AUTH_TOKEN
+
+LOGGER = logging.getLogger("server")
+APP = FastAPI()
+WSP_AGENT = WhatsAppAgentTwilio()
+
+
+class TwilioMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app, path: str = "/whatsapp"):
+        super().__init__(app)
+        self.path = path
+        self.validator = RequestValidator(TWILIO_AUTH_TOKEN)
+
+    async def dispatch(self, request: Request, call_next):
+        # Only guard the WhatsApp webhook
+        if request.url.path == self.path and request.method == "POST":
+            body = await request.body()
+
+            # Signature check
+            form_dict = parse_qs(body.decode(), keep_blank_values=True)
+            flat_form_dict = {k: v[0] if isinstance(v, list) and v else v for k, v in form_dict.items()}
+            
+            proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+            host  = request.headers.get("x-forwarded-host", request.headers.get("host"))
+            url   = f"{proto}://{host}{request.url.path}"
+            sig   = request.headers.get("X-Twilio-Signature", "")
+
+            if not self.validator.validate(url, flat_form_dict, sig):
+                LOGGER.warning("Invalid Twilio signature for %s", url)
+                return Response(status_code=401, content="Invalid Twilio signature")
+
+            # Rewind: body and receive channel
+            async def _replay() -> Message:
+                return {"type": "http.request", "body": body, "more_body": False}
+
+            request._body = body
+            request._receive = _replay  # type: ignore[attr-defined]
+
+        return await call_next(request)
+
+
+APP.add_middleware(TwilioMiddleware, path="/whatsapp")
+
+
+@APP.post("/whatsapp")
+async def whatsapp_reply_twilio(request: Request):
+    try:
+        xml = await WSP_AGENT.handle_message(request)
+        return Response(content=xml, media_type="application/xml")
+    except HTTPException as e:
+        LOGGER.error("Handled error: %s", e.detail)
+        raise
+    except Exception as e:
+        LOGGER.exception("Unhandled exception")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(APP, host="0.0.0.0", port=8081, log_level="info")
+
+

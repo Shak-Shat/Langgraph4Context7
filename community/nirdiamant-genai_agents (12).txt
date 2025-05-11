@@ -1,0 +1,1483 @@
+Directory structure:
+└── self_healing_code.ipynb
+
+================================================
+FILE: all_agents_tutorials/self_healing_code.ipynb
+================================================
+# Jupyter notebook converted to Python script.
+
+"""
+# Secret Agents: A Self-Healing Codebase Agentic Workflow
+
+"""
+
+"""
+## Overview
+This code implements a workflow-based error detection and correction system that combines LangGraph, LLM capabilities, and vector database technology to detect runtime errors, generate fixes, and maintain a memory of bug patterns. The system takes function definitions and runtime arguments, processes them through a graph-based workflow, and maintains a hierarchical error management system enriched by vector-based similarity search.
+"""
+
+"""
+## Motivation
+Several key factors motivate this implementation:
+
+1. **Automated Error Resolution**
+   - Manual debugging is time-consuming and error-prone
+   - Automated fix generation streamlines the correction process
+   - LLMs can provide context-aware code repairs
+
+2. **Pattern-Based Learning**
+   - Vector databases enable similarity-based bug pattern recognition
+   - Previous fixes can inform future error resolution
+   - Semantic search capabilities improve fix relevance
+
+3. **Structured Bug Knowledge**
+   - Vector embeddings capture semantic relationships between errors
+   - ChromaDB enables efficient storage and retrieval of bug patterns
+   - Hierarchical error categorization through vector spaces
+
+4. **Runtime Code Modification**
+   - Safe deployment of generated fixes
+   - State tracking during modifications
+   - Validation of applied patches
+"""
+
+"""
+## Key Components
+1. **State Management System**: 
+   - Maintains workflow state using Pydantic models
+   - Tracks function references, errors, and fixes
+   - Ensures type safety and execution validation
+
+2. **LLM Integration**: 
+   - Leverages LLM for code analysis and generation
+   - Produces fixes based on error types:
+     - Runtime Errors
+     - Logic Errors
+     - Type Errors
+     - Resource Errors
+
+3. **Vector-Based Memory System**:
+   - Uses ChromaDB for efficient storage
+   - Enables semantic search of bug patterns
+   - Maintains contextual relationships between errors
+   - Supports pattern-based learning
+
+4. **Graph-based Workflow**: 
+   - Uses LangGraph's StateGraph for orchestration
+   - Implements error detection nodes
+   - Controls fix generation through edges
+"""
+
+"""
+## Vector Databases and ChromaDB
+
+### What is a Vector Database?
+A vector database is specialized storage system designed to handle high-dimensional vectors, which are mathematical representations of data points. These vectors capture semantic meaning, making them ideal for:
+- Similarity search operations
+- Pattern recognition
+- Semantic relationships
+- Nearest neighbor queries
+
+### Why Vector DBs Matter for ML
+Vector databases are crucial for modern ML systems because they:
+1. Enable semantic search capabilities
+2. Support efficient similarity computations
+3. Scale well with large datasets
+4. Maintain context and relationships
+5. Facilitate pattern recognition
+
+### ChromaDB Implementation
+ChromaDB provides a lightweight, embedded vector database that offers:
+1. Simple API:
+```python
+chroma_client = chromadb.Client()
+collection = chroma_client.create_collection(name='bug-reports')
+```
+
+2. Easy Data Management:
+```python
+# Adding documents
+collection.add(
+    ids=[id],
+    documents=[document],
+)
+
+# Querying
+results = collection.query(
+    query_texts=[query],
+    n_results=10
+)
+```
+
+3. Automatic embedding generation
+4. Efficient similarity search
+5. Zero configuration requirements
+"""
+
+"""
+## Memory Architecture
+The system implements a sophisticated memory architecture:
+
+1. **Vector Storage**:
+   - Bug reports converted to embeddings
+   - Semantic relationships preserved
+   - Efficient similarity search
+
+2. **Pattern Recognition**:
+   - Similar bugs identified through vector similarity
+   - Historical fixes inform new solutions
+   - Pattern evolution tracked over time
+
+3. **Memory Updates**:
+   - New patterns integrated into existing knowledge
+   - Related patterns merged and refined
+   - Obsolete patterns pruned
+"""
+
+"""
+## Visual Overview
+A flowchart representing the design and flow of the workflow.
+"""
+
+"""
+<div style="max-width:600px;">
+    
+![image.png](../images/self_healing_code.png)
+    
+</div>
+"""
+
+"""
+## Conclusion
+This implementation demonstrates a practical approach to automated code healing, enhanced by vector database technology. The system combines graph-based workflow management with LLM capabilities and vector-based pattern recognition, allowing for structured error correction while maintaining clear process control.
+
+Key advantages include:
+- Automated error detection and correction
+- Semantic pattern recognition
+- Efficient similarity-based search
+- Safe runtime code modification
+
+Future improvements could focus on:
+- Enhanced embedding strategies
+- Multi-modal pattern recognition
+- Distributed vector storage
+- Advanced pattern evolution tracking
+
+This system provides a foundation for building more sophisticated self-healing systems, particularly in applications requiring runtime error correction and pattern learning, with the added benefit of efficient vector-based memory management through ChromaDB.
+"""
+
+"""
+# Dependencies and Imports
+Install dependencies and import libraries.
+"""
+
+%%capture
+
+!pip install langgraph
+!pip install langgraph-sdk
+!pip install langgraph-checkpoint-sqlite
+!pip install langchain-community
+!pip install langchain-core
+!pip install langchain-openai
+!pip install chromadb 
+
+from langchain_core.prompts import ChatPromptTemplate
+from langgraph.graph import StateGraph, END
+from langchain.schema import HumanMessage
+from langchain_openai import ChatOpenAI
+
+import chromadb
+
+from pydantic import BaseModel
+from typing import Optional, Callable
+
+import uuid
+import json
+import os
+import types
+import inspect
+import sys
+
+
+"""
+## Clients
+Import API keys and instantiate clients.
+"""
+
+os.environ['OPENAI_API_KEY'] = 'YOUR-API-KEY'
+llm = ChatOpenAI(model='gpt-4o-mini')
+
+chroma_client = chromadb.Client()
+collection = chroma_client.create_collection(name='bug-reports')
+
+"""
+## Define Agent State
+We'll define the state that our agent will maintain throughout its operation.
+
+"""
+
+class State(BaseModel):
+    function: Callable
+    function_string: str
+    arguments: list
+    error: bool
+    error_description: str = ''
+    new_function_string: str = ''
+    bug_report: str = ''
+    memory_search_results: list = []
+    memory_ids_to_update: list = []
+
+
+"""
+## Define Code Healing Node Functions
+Now we'll define the code healing node functions that our agent will use: code_execution_node, code_update_node and code_patching_node.
+
+"""
+
+def code_execution_node(state: State):
+    ''' Run Arbitrary Code '''
+    try:
+        print('\nRunning Arbitrary Function')
+        print('--------------------------\n')
+        result = state.function(*state.arguments)
+        print('\n✅ Arbitrary Function Ran Without Error')
+        print(f'Result: {result}')
+        print('---------------------------------------\n')
+    except Exception as e:
+        print(f'❌ Function Raised an Error: {e}')
+        state.error = True
+        state.error_description = str(e)
+    return state
+
+
+def code_update_node(state: State):
+    ''' Update Arbitratry Code '''
+    prompt = ChatPromptTemplate.from_template(
+        'You are tasked with fixing a Python function that raised an error.'
+        'Function: {function_string}'
+        'Error: {error_description}' 
+        'You must provide a fix for the present error only.'
+        'The bug fix should handle the thrown error case gracefully by returning an error message.'
+        'Do not raise an error in your bug fix.'
+        'The function must use the exact same name and parameters.'
+        'Your response must contain only the function definition with no additional text.'
+        'Your response must not contain any additional formatting, such as code delimiters or language declarations.'
+    )
+    message = HumanMessage(content=prompt.format(function_string=state.function_string, error_description=state.error_description))
+    new_function_string = llm.invoke([message]).content.strip()
+
+    print('\n🐛 Buggy Function')
+    print('-----------------\n')
+    print(state.function_string)
+    print('\n🩹 Proposed Bug Fix')
+    print('-------------------\n')
+    print(new_function_string)
+    
+    state.new_function_string = new_function_string
+    return state
+
+
+def code_patching_node(state: State):
+    ''' Fix Arbitrary Code '''
+    try:
+        print('\n*******************')
+        print('\n❤️‍🩹 Patching code...')
+        # Store the new function as a string
+        new_code = state.new_function_string
+        
+        # Create namespace for new function
+        namespace = {}
+        
+        # Execute new code in namespace
+        exec(new_code, namespace)
+        
+        # Get function name dynamically
+        func_name = state.function.__name__
+        
+        # Get the new function using dynamic name
+        new_function = namespace[func_name]
+        
+        # Update state
+        state.function = new_function
+        state.error = False
+
+        # Test the new function
+        result = state.function(*state.arguments)
+
+        print('...patch complete 😬\n')
+                
+    except Exception as e:
+        print(f'...patch failed: {e}')
+        print(f'Error details: {str(e)}')
+
+    print('******************\n')
+    return state
+
+"""
+## Define Bug Reporting Node Functions
+Now we'll define the bug reporting node functions that our agent will use: bug_report_node, memory_search_node, memory_generation_node and memory_modification_node.
+"""
+
+def bug_report_node(state: State):
+    ''' Generate Bug Report '''
+    prompt = ChatPromptTemplate.from_template(
+        'You are tasked with generating a bug report for a Python function that raised an error.'
+        'Function: {function_string}'
+        'Error: {error_description}'
+        'Your response must be a comprehensive string including only crucial information on the bug report'
+    )
+    message = HumanMessage(content=prompt.format(function_string=state.function_string, error_description=state.error_description))
+    bug_report = llm.invoke([message]).content.strip()
+
+    print('\n📝 Generating Bug Report')
+    print('------------------------\n')
+    print(bug_report)
+
+    state.bug_report = bug_report
+    return state
+
+
+# Digest the bug report using the same template used when saving bug reports to increase the accuracy and relevance of results when querying the vector database.
+def memory_search_node(state: State):
+    ''' Find memories relevant to the current bug report '''
+    prompt = ChatPromptTemplate.from_template(
+        'You are tasked with archiving a bug report for a Python function that raised an error.'
+        'Bug Report: {bug_report}.'
+        'Your response must be a concise string including only crucial information on the bug report for future reference.'
+        'Format: # function_name ## error_description ### error_analysis'
+    )
+    
+    message = HumanMessage(content=prompt.format(
+        bug_report=state.bug_report,
+    ))
+    
+    response = llm.invoke([message]).content.strip()
+
+    results = collection.query(query_texts=[response])
+
+    print('\n🔎 Searching bug reports...')
+    if results['ids'][0]:
+        print(f'...{len(results["ids"][0])} found.\n')
+        print(results)
+        state.memory_search_results = [{'id':results['ids'][0][index], 'memory':results['documents'][0][index], 'distance':results['distances'][0][index]} for index, id in enumerate(results['ids'][0])]
+    else:
+        print('...none found.\n')
+            
+    return state
+
+
+# Filter the top 30% of results to ensure the relevance of memories being updated.
+def memory_filter_node(state: State):
+    print('\n🗑️ Filtering bug reports...')
+    for memory in state.memory_search_results:
+        if memory['distance'] < 0.3:
+            state.memory_ids_to_update.append(memory['id'])
+        
+    if state.memory_ids_to_update:
+        print(f'...{len(state.memory_ids_to_update)} selected.\n')
+    else:
+        print('...none selected.\n')
+            
+    return state
+
+
+# Condense the bug report before storing it in the vector database.
+def memory_generation_node(state: State):
+    ''' Generate relevant memories based on new bug report '''
+    prompt = ChatPromptTemplate.from_template(
+        'You are tasked with archiving a bug report for a Python function that raised an error.'
+        'Bug Report: {bug_report}.'
+        'Your response must be a concise string including only crucial information on the bug report for future reference.'
+        'Format: # function_name ## error_description ### error_analysis'
+    )
+    
+    message = HumanMessage(content=prompt.format(
+        bug_report=state.bug_report,
+    ))
+    
+    response = llm.invoke([message]).content.strip()
+
+    print('\n💾 Saving Bug Report to Memory')
+    print('------------------------------\n')
+    print(response)
+
+    id = str(uuid.uuid4())
+    collection.add(
+        ids=[id],
+        documents=[response],
+    )        
+    return state
+
+
+# Use the prior memory as well as the current bug report to generate an updated version of it.
+def memory_modification_node(state: State):
+    ''' Modify relevant memories based on new interaction '''
+    prompt = ChatPromptTemplate.from_template(
+        'Update the following memories based on the new interaction:'
+        'Current Bug Report: {bug_report}'
+        'Prior Bug Report: {memory_to_update}'
+        'Your response must be a concise but cumulative string including only crucial information on the current and prior bug reports for future reference.'
+        'Format: # function_name ## error_description ### error_analysis'
+    )
+    memory_to_update_id = state.memory_ids_to_update.pop(0)
+    state.memory_search_results.pop(0)
+    results = collection.get(ids=[memory_to_update_id])
+    memory_to_update = results['documents'][0]
+    message = HumanMessage(content=prompt.format(
+        bug_report=state.bug_report,
+        memory_to_update=memory_to_update,
+    ))
+    
+    response = llm.invoke([message]).content.strip()
+    
+    print('\nCurrent Bug Report')
+    print('------------------\n')
+    print(memory_to_update)
+    print('\nWill be Replaced With')
+    print('---------------------\n')
+    print(response)
+    
+    collection.update(
+        ids=[memory_to_update_id],
+        documents=[response],
+    )
+        
+    return state
+    
+
+"""
+## Define Edge Functions
+Now we'll define the conditional edge function that our agent will use to control the workflow.
+"""
+
+def error_router(state: State):
+    if state.error:
+        return 'bug_report_node'
+    else:
+        return END
+
+def memory_filter_router(state: State):
+    if state.memory_search_results:
+        return 'memory_filter_node'
+    else:
+        return 'memory_generation_node'
+
+
+def memory_generation_router(state: State):
+    if state.memory_ids_to_update:
+        return 'memory_modification_node'
+    else:
+        return 'memory_generation_node'
+
+
+def memory_update_router(state: State):
+    if state.memory_ids_to_update:
+        return 'memory_modification_node'
+    else:
+        return 'code_update_node'
+
+"""
+## Build Workflow
+Now we'll create our workflow and compile it.
+
+"""
+
+builder = StateGraph(State)
+
+# Add nodes to the graph
+builder.add_node('code_execution_node', code_execution_node)
+builder.add_node('code_update_node', code_update_node)
+builder.add_node('code_patching_node', code_patching_node)
+builder.add_node('bug_report_node', bug_report_node)
+builder.add_node('memory_search_node', memory_search_node)
+builder.add_node('memory_filter_node', memory_filter_node)
+builder.add_node('memory_modification_node', memory_modification_node)
+builder.add_node('memory_generation_node', memory_generation_node)
+
+
+# Add edges to the graph
+builder.set_entry_point('code_execution_node')
+builder.add_conditional_edges('code_execution_node', error_router)
+builder.add_edge('bug_report_node', 'memory_search_node')
+builder.add_conditional_edges('memory_search_node', memory_filter_router)
+builder.add_conditional_edges('memory_filter_node', memory_generation_router)
+builder.add_edge('memory_generation_node', 'code_update_node')
+builder.add_conditional_edges('memory_modification_node', memory_update_router)
+
+builder.add_edge('code_update_node', 'code_patching_node')
+builder.add_edge('code_patching_node', 'code_execution_node')
+
+# Compile the graph
+graph = builder.compile()
+
+"""
+# Main Function
+Define the function that runs the instanciates the workflow and its state.
+"""
+
+def execute_self_healing_code_system(function, arguments):
+
+    state = State(
+        error=False,
+        function=function,
+        function_string=inspect.getsource(function),
+        arguments=arguments,
+    )
+    
+    return graph.invoke(state)
+
+"""
+# Run Program
+Instanciate the main function and observe outputs.
+"""
+
+# Test Function 1: List Processing
+def process_list(lst, index):
+    return lst[index] * 2
+
+# Test Function 2: String Parsing
+def parse_date(date_string):
+    year, month, day = date_string.split('-')
+    return {'year': int(year), 'month': int(month), 'day': int(day)}
+
+# Original division function
+def divide_two_numbers(a, b):
+    return a/b
+
+# Test Cases
+print("*******************************")
+print("*******************************")
+print("** Testing Division Function **")
+print("*******************************")
+print("*******************************")
+execute_self_healing_code_system(divide_two_numbers, [10, 0]);
+execute_self_healing_code_system(divide_two_numbers, ['a', 0]);
+
+print("**************************************")
+print("**************************************")
+print("** Testing List Processing Function **")
+print("**************************************")
+print("**************************************")
+# Test 1: Index out of range
+execute_self_healing_code_system(process_list, [[1, 2, 3], 5]);
+# Test 2: Invalid input type
+execute_self_healing_code_system(process_list, [None, 1]);
+
+print("***********************************")
+print("***********************************")
+print("** Testing Date Parsing Function **")
+print("***********************************")
+print("***********************************")
+# Test 1: Invalid format
+execute_self_healing_code_system(parse_date, ["2024/01/01"]);
+# Test 2: Invalid data types
+execute_self_healing_code_system(parse_date, ["abc-def-ghi"]);
+# Output:
+#   *******************************
+
+#   *******************************
+
+#   ** Testing Division Function **
+
+#   *******************************
+
+#   *******************************
+
+#   
+
+#   Running Arbitrary Function
+
+#   --------------------------
+
+#   
+
+#   ❌ Function Raised an Error: division by zero
+
+#   
+
+#   📝 Generating Bug Report
+
+#   ------------------------
+
+#   
+
+#   **Bug Report**
+
+#   
+
+#   **Function Name:** `divide_two_numbers`
+
+#   
+
+#   **Description:** The function attempts to divide two numbers, `a` and `b`. However, it raises a `ZeroDivisionError` when `b` is zero.
+
+#   
+
+#   **Error Message:** `division by zero`
+
+#   
+
+#   **Steps to Reproduce:**
+
+#   1. Call the function with any number for `a`.
+
+#   2. Pass `0` as the value for `b`.
+
+#   
+
+#   **Example:**
+
+#   ```python
+
+#   divide_two_numbers(10, 0)  # Raises ZeroDivisionError
+
+#   ```
+
+#   
+
+#   **Expected Behavior:** The function should handle the case where `b` is zero and return a user-friendly error message or a default value instead of raising an exception.
+
+#   
+
+#   **Proposed Solution:** Implement error handling to check if `b` is zero before performing the division. Return an appropriate message or value in such cases. 
+
+#   
+
+#   **Priority:** High
+
+#   
+
+#   🔎 Searching bug reports...
+
+#   ...none found.
+
+#   
+
+#   
+
+#   💾 Saving Bug Report to Memory
+
+#   ------------------------------
+
+#   
+
+#   # divide_two_numbers ## ZeroDivisionError when b is zero ### Function lacks error handling for division by zero, leading to unhandled exceptions.
+
+#   
+
+#   🐛 Buggy Function
+
+#   -----------------
+
+#   
+
+#   def divide_two_numbers(a, b):
+
+#       return a/b
+
+#   
+
+#   
+
+#   🩹 Proposed Bug Fix
+
+#   -------------------
+
+#   
+
+#   def divide_two_numbers(a, b):
+
+#       if b == 0:
+
+#           return "Error: Division by zero is not allowed."
+
+#       return a / b
+
+#   
+
+#   *******************
+
+#   
+
+#   ❤️‍🩹 Patching code...
+
+#   ...patch complete 😬
+
+#   
+
+#   ******************
+
+#   
+
+#   
+
+#   Running Arbitrary Function
+
+#   --------------------------
+
+#   
+
+#   
+
+#   ✅ Arbitrary Function Ran Without Error
+
+#   Result: Error: Division by zero is not allowed.
+
+#   ---------------------------------------
+
+#   
+
+#   
+
+#   Running Arbitrary Function
+
+#   --------------------------
+
+#   
+
+#   ❌ Function Raised an Error: unsupported operand type(s) for /: 'str' and 'int'
+
+#   
+
+#   📝 Generating Bug Report
+
+#   ------------------------
+
+#   
+
+#   **Bug Report: Division Function Error**
+
+#   
+
+#   **Function:** `divide_two_numbers(a, b)`
+
+#   
+
+#   **Error Raised:** `unsupported operand type(s) for /: 'str' and 'int'`
+
+#   
+
+#   **Description:** The function `divide_two_numbers` fails to handle cases where the first argument `a` is of type `str` while the second argument `b` is of type `int`. This leads to a TypeError when attempting to perform division.
+
+#   
+
+#   **Steps to Reproduce:**
+
+#   1. Call the function with a string as the first argument and an integer as the second argument. 
+
+#      Example: `divide_two_numbers("10", 2)`
+
+#   
+
+#   **Expected Behavior:** The function should either handle the type mismatch gracefully (e.g., by raising a custom error or converting input types) or document the expected input types clearly.
+
+#   
+
+#   **Actual Behavior:** The function raises a TypeError, disrupting execution.
+
+#   
+
+#   **Suggested Fix:** Implement input type validation to ensure both arguments are numeric (int or float) before performing the division. Alternatively, consider converting input types as needed.
+
+#   
+
+#   **Priority:** Medium
+
+#   Number of requested results 10 is greater than number of elements in index 1, updating n_results = 1
+
+#   
+
+#   🔎 Searching bug reports...
+
+#   ...1 found.
+
+#   
+
+#   {'ids': [['ce0ad0e0-1716-4ff6-bdc3-4f3d80431811']], 'embeddings': None, 'documents': [['# divide_two_numbers ## ZeroDivisionError when b is zero ### Function lacks error handling for division by zero, leading to unhandled exceptions.']], 'uris': None, 'data': None, 'metadatas': [[None]], 'distances': [[0.5218325257301331]], 'included': [<IncludeEnum.distances: 'distances'>, <IncludeEnum.documents: 'documents'>, <IncludeEnum.metadatas: 'metadatas'>]}
+
+#   
+
+#   🗑️ Filtering bug reports...
+
+#   ...none selected.
+
+#   
+
+#   
+
+#   💾 Saving Bug Report to Memory
+
+#   ------------------------------
+
+#   
+
+#   # divide_two_numbers ## unsupported operand type(s) for /: 'str' and 'int' ### Function fails to handle type mismatch between string and integer inputs, leading to TypeError during division.
+
+#   
+
+#   🐛 Buggy Function
+
+#   -----------------
+
+#   
+
+#   def divide_two_numbers(a, b):
+
+#       return a/b
+
+#   
+
+#   
+
+#   🩹 Proposed Bug Fix
+
+#   -------------------
+
+#   
+
+#   def divide_two_numbers(a, b):
+
+#       if isinstance(a, str) or isinstance(b, str):
+
+#           return "Error: unsupported operand type(s) for /: 'str' and 'int'"
+
+#       return a / b
+
+#   
+
+#   *******************
+
+#   
+
+#   ❤️‍🩹 Patching code...
+
+#   ...patch complete 😬
+
+#   
+
+#   ******************
+
+#   
+
+#   
+
+#   Running Arbitrary Function
+
+#   --------------------------
+
+#   
+
+#   
+
+#   ✅ Arbitrary Function Ran Without Error
+
+#   Result: Error: unsupported operand type(s) for /: 'str' and 'int'
+
+#   ---------------------------------------
+
+#   
+
+#   **************************************
+
+#   **************************************
+
+#   ** Testing List Processing Function **
+
+#   **************************************
+
+#   **************************************
+
+#   
+
+#   Running Arbitrary Function
+
+#   --------------------------
+
+#   
+
+#   ❌ Function Raised an Error: list index out of range
+
+#   
+
+#   📝 Generating Bug Report
+
+#   ------------------------
+
+#   
+
+#   Bug Report: 
+
+#   
+
+#   **Function Name:** process_list  
+
+#   **Parameters:** lst (list), index (int)  
+
+#   **Error Raised:** IndexError: list index out of range  
+
+#   **Description:** The function attempts to access an element at a specified index in the list `lst`, but if the index is greater than or equal to the length of the list or if the list is empty, it raises an "IndexError".  
+
+#   **Reproduction Steps:**  
+
+#   1. Call `process_list([], 0)`  
+
+#   2. Call `process_list([1, 2, 3], 5)`  
+
+#   **Expected Behavior:** The function should handle invalid indices gracefully, possibly by returning a default value or raising a custom error message.  
+
+#   **Priority:** High - this bug can lead to runtime errors when the function is used with invalid inputs.  
+
+#   **Proposed Solution:** Implement index validation before accessing the list element.
+
+#   Number of requested results 10 is greater than number of elements in index 2, updating n_results = 2
+
+#   
+
+#   🔎 Searching bug reports...
+
+#   ...2 found.
+
+#   
+
+#   {'ids': [['ce0ad0e0-1716-4ff6-bdc3-4f3d80431811', '3dae16c1-6991-4267-9c88-fd3a86330963']], 'embeddings': None, 'documents': [['# divide_two_numbers ## ZeroDivisionError when b is zero ### Function lacks error handling for division by zero, leading to unhandled exceptions.', "# divide_two_numbers ## unsupported operand type(s) for /: 'str' and 'int' ### Function fails to handle type mismatch between string and integer inputs, leading to TypeError during division."]], 'uris': None, 'data': None, 'metadatas': [[None, None]], 'distances': [[1.1425693035125732, 1.1896761655807495]], 'included': [<IncludeEnum.distances: 'distances'>, <IncludeEnum.documents: 'documents'>, <IncludeEnum.metadatas: 'metadatas'>]}
+
+#   
+
+#   🗑️ Filtering bug reports...
+
+#   ...none selected.
+
+#   
+
+#   
+
+#   💾 Saving Bug Report to Memory
+
+#   ------------------------------
+
+#   
+
+#   # process_list ## IndexError: list index out of range ### The function does not validate the index before accessing the list, leading to potential runtime errors with invalid inputs.
+
+#   
+
+#   🐛 Buggy Function
+
+#   -----------------
+
+#   
+
+#   def process_list(lst, index):
+
+#       return lst[index] * 2
+
+#   
+
+#   
+
+#   🩹 Proposed Bug Fix
+
+#   -------------------
+
+#   
+
+#   def process_list(lst, index):
+
+#       if index < 0 or index >= len(lst):
+
+#           return "Error: Index out of range"
+
+#       return lst[index] * 2
+
+#   
+
+#   *******************
+
+#   
+
+#   ❤️‍🩹 Patching code...
+
+#   ...patch complete 😬
+
+#   
+
+#   ******************
+
+#   
+
+#   
+
+#   Running Arbitrary Function
+
+#   --------------------------
+
+#   
+
+#   
+
+#   ✅ Arbitrary Function Ran Without Error
+
+#   Result: Error: Index out of range
+
+#   ---------------------------------------
+
+#   
+
+#   
+
+#   Running Arbitrary Function
+
+#   --------------------------
+
+#   
+
+#   ❌ Function Raised an Error: 'NoneType' object is not subscriptable
+
+#   
+
+#   📝 Generating Bug Report
+
+#   ------------------------
+
+#   
+
+#   **Bug Report:**
+
+#   
+
+#   **Function:** `process_list(lst, index)`
+
+#   
+
+#   **Error Raised:** `'NoneType' object is not subscriptable`
+
+#   
+
+#   **Description:** The function attempts to access an element of `lst` using the provided `index`. If `lst` is `None`, this results in a TypeError since `NoneType` does not support indexing.
+
+#   
+
+#   **Steps to Reproduce:**
+
+#   1. Call `process_list(None, 0)`.
+
+#   2. Observe the error message.
+
+#   
+
+#   **Expected Behavior:** The function should handle cases where `lst` is `None` gracefully, either by returning a default value or raising a more informative error.
+
+#   
+
+#   **Proposed Fix:** Add a check at the beginning of the function to ensure `lst` is not `None`. For example:
+
+#   
+
+#   ```python
+
+#   def process_list(lst, index):
+
+#       if lst is None:
+
+#           raise ValueError("Input list cannot be None")
+
+#       return lst[index] * 2
+
+#   ```
+
+#   Number of requested results 10 is greater than number of elements in index 3, updating n_results = 3
+
+#   
+
+#   🔎 Searching bug reports...
+
+#   ...3 found.
+
+#   
+
+#   {'ids': [['128e20ca-8f3b-4d9f-aa4c-3c9e6a936532', 'ce0ad0e0-1716-4ff6-bdc3-4f3d80431811', '3dae16c1-6991-4267-9c88-fd3a86330963']], 'embeddings': None, 'documents': [['# process_list ## IndexError: list index out of range ### The function does not validate the index before accessing the list, leading to potential runtime errors with invalid inputs.', '# divide_two_numbers ## ZeroDivisionError when b is zero ### Function lacks error handling for division by zero, leading to unhandled exceptions.', "# divide_two_numbers ## unsupported operand type(s) for /: 'str' and 'int' ### Function fails to handle type mismatch between string and integer inputs, leading to TypeError during division."]], 'uris': None, 'data': None, 'metadatas': [[None, None, None]], 'distances': [[0.5496565103530884, 1.4135934114456177, 1.4512107372283936]], 'included': [<IncludeEnum.distances: 'distances'>, <IncludeEnum.documents: 'documents'>, <IncludeEnum.metadatas: 'metadatas'>]}
+
+#   
+
+#   🗑️ Filtering bug reports...
+
+#   ...none selected.
+
+#   
+
+#   
+
+#   💾 Saving Bug Report to Memory
+
+#   ------------------------------
+
+#   
+
+#   # process_list ## 'NoneType' object is not subscriptable ### Function fails when lst is None, leading to TypeError; should validate input and handle None case.
+
+#   
+
+#   🐛 Buggy Function
+
+#   -----------------
+
+#   
+
+#   def process_list(lst, index):
+
+#       return lst[index] * 2
+
+#   
+
+#   
+
+#   🩹 Proposed Bug Fix
+
+#   -------------------
+
+#   
+
+#   def process_list(lst, index):
+
+#       if lst is None:
+
+#           return "Error: Provided list is None."
+
+#       return lst[index] * 2
+
+#   
+
+#   *******************
+
+#   
+
+#   ❤️‍🩹 Patching code...
+
+#   ...patch complete 😬
+
+#   
+
+#   ******************
+
+#   
+
+#   
+
+#   Running Arbitrary Function
+
+#   --------------------------
+
+#   
+
+#   
+
+#   ✅ Arbitrary Function Ran Without Error
+
+#   Result: Error: Provided list is None.
+
+#   ---------------------------------------
+
+#   
+
+#   ***********************************
+
+#   ***********************************
+
+#   ** Testing Date Parsing Function **
+
+#   ***********************************
+
+#   ***********************************
+
+#   
+
+#   Running Arbitrary Function
+
+#   --------------------------
+
+#   
+
+#   ❌ Function Raised an Error: not enough values to unpack (expected 3, got 1)
+
+#   
+
+#   📝 Generating Bug Report
+
+#   ------------------------
+
+#   
+
+#   **Bug Report: parse_date Function**
+
+#   
+
+#   **Function Name:** parse_date  
+
+#   **Error Raised:** ValueError: not enough values to unpack (expected 3, got 1)  
+
+#   **Description:** The function attempts to split the input string `date_string` by the '-' character and unpack the result into three variables: year, month, and day. However, if the input string does not contain two '-' characters, it raises a ValueError due to insufficient values for unpacking.  
+
+#   **Reproduction Steps:**  
+
+#   1. Call `parse_date("2023")` or any string that does not contain exactly two '-' characters.
+
+#   2. Observe the error message indicating that not enough values were provided for unpacking.  
+
+#   **Expected Behavior:** The function should handle cases where the input does not conform to the expected format, either by returning an error message or raising a custom exception.  
+
+#   **Suggested Fix:** Implement input validation to ensure the `date_string` contains the correct format (YYYY-MM-DD) before attempting to unpack the values.
+
+#   Number of requested results 10 is greater than number of elements in index 4, updating n_results = 4
+
+#   
+
+#   🔎 Searching bug reports...
+
+#   ...4 found.
+
+#   
+
+#   {'ids': [['3dae16c1-6991-4267-9c88-fd3a86330963', '128e20ca-8f3b-4d9f-aa4c-3c9e6a936532', '576b4c4a-95dc-4936-8b8c-424962db4940', 'ce0ad0e0-1716-4ff6-bdc3-4f3d80431811']], 'embeddings': None, 'documents': [["# divide_two_numbers ## unsupported operand type(s) for /: 'str' and 'int' ### Function fails to handle type mismatch between string and integer inputs, leading to TypeError during division.", '# process_list ## IndexError: list index out of range ### The function does not validate the index before accessing the list, leading to potential runtime errors with invalid inputs.', "# process_list ## 'NoneType' object is not subscriptable ### Function fails when lst is None, leading to TypeError; should validate input and handle None case.", '# divide_two_numbers ## ZeroDivisionError when b is zero ### Function lacks error handling for division by zero, leading to unhandled exceptions.']], 'uris': None, 'data': None, 'metadatas': [[None, None, None, None]], 'distances': [[1.0926787853240967, 1.1112380027770996, 1.1864970922470093, 1.275838851928711]], 'included': [<IncludeEnum.distances: 'distances'>, <IncludeEnum.documents: 'documents'>, <IncludeEnum.metadatas: 'metadatas'>]}
+
+#   
+
+#   🗑️ Filtering bug reports...
+
+#   ...none selected.
+
+#   
+
+#   
+
+#   💾 Saving Bug Report to Memory
+
+#   ------------------------------
+
+#   
+
+#   # parse_date ## ValueError: not enough values to unpack (expected 3, got 1) ### The function fails when the input string does not contain exactly two '-' characters, leading to insufficient values for unpacking. Input validation is needed to ensure correct format (YYYY-MM-DD).
+
+#   
+
+#   🐛 Buggy Function
+
+#   -----------------
+
+#   
+
+#   def parse_date(date_string):
+
+#       year, month, day = date_string.split('-')
+
+#       return {'year': int(year), 'month': int(month), 'day': int(day)}
+
+#   
+
+#   
+
+#   🩹 Proposed Bug Fix
+
+#   -------------------
+
+#   
+
+#   def parse_date(date_string):
+
+#       parts = date_string.split('-')
+
+#       if len(parts) != 3:
+
+#           return "Error: Input must be in 'YYYY-MM-DD' format"
+
+#       year, month, day = parts
+
+#       return {'year': int(year), 'month': int(month), 'day': int(day)}
+
+#   
+
+#   *******************
+
+#   
+
+#   ❤️‍🩹 Patching code...
+
+#   ...patch complete 😬
+
+#   
+
+#   ******************
+
+#   
+
+#   
+
+#   Running Arbitrary Function
+
+#   --------------------------
+
+#   
+
+#   
+
+#   ✅ Arbitrary Function Ran Without Error
+
+#   Result: Error: Input must be in 'YYYY-MM-DD' format
+
+#   ---------------------------------------
+
+#   
+
+#   
+
+#   Running Arbitrary Function
+
+#   --------------------------
+
+#   
+
+#   ❌ Function Raised an Error: invalid literal for int() with base 10: 'abc'
+
+#   
+
+#   📝 Generating Bug Report
+
+#   ------------------------
+
+#   
+
+#   **Bug Report: Invalid Input Handling in parse_date Function**
+
+#   
+
+#   **Function:** `parse_date(date_string)`
+
+#   
+
+#   **Error Encountered:** `ValueError: invalid literal for int() with base 10: 'abc'`
+
+#   
+
+#   **Description:** The function `parse_date` is designed to parse a date string in the format `YYYY-MM-DD`. However, it does not handle invalid input properly. When provided with a date string that contains non-numeric characters (e.g., 'abc' instead of valid year, month, or day values), the function raises a `ValueError` when attempting to convert the string to an integer.
+
+#   
+
+#   **Steps to Reproduce:**
+
+#   1. Call `parse_date('abc-def-ghi')`
+
+#   2. Observe the error raised.
+
+#   
+
+#   **Expected Behavior:** The function should validate the input string and handle errors gracefully, either by raising a custom error or returning a specific message indicating the issue with the input format.
+
+#   
+
+#   **Proposed Solution:** Implement input validation to check if the split components of the date string are numeric before converting them to integers. If the input is invalid, return an informative error message.
+
+#   
+
+#   **Priority:** High, as this affects the function's usability with invalid inputs.
+
+#   Number of requested results 10 is greater than number of elements in index 5, updating n_results = 5
+
+#   
+
+#   🔎 Searching bug reports...
+
+#   ...5 found.
+
+#   
+
+#   {'ids': [['df6c880a-9135-4a0e-887e-692a1a545575', '3dae16c1-6991-4267-9c88-fd3a86330963', '128e20ca-8f3b-4d9f-aa4c-3c9e6a936532', '576b4c4a-95dc-4936-8b8c-424962db4940', 'ce0ad0e0-1716-4ff6-bdc3-4f3d80431811']], 'embeddings': None, 'documents': [["# parse_date ## ValueError: not enough values to unpack (expected 3, got 1) ### The function fails when the input string does not contain exactly two '-' characters, leading to insufficient values for unpacking. Input validation is needed to ensure correct format (YYYY-MM-DD).", "# divide_two_numbers ## unsupported operand type(s) for /: 'str' and 'int' ### Function fails to handle type mismatch between string and integer inputs, leading to TypeError during division.", '# process_list ## IndexError: list index out of range ### The function does not validate the index before accessing the list, leading to potential runtime errors with invalid inputs.', "# process_list ## 'NoneType' object is not subscriptable ### Function fails when lst is None, leading to TypeError; should validate input and handle None case.", '# divide_two_numbers ## ZeroDivisionError when b is zero ### Function lacks error handling for division by zero, leading to unhandled exceptions.']], 'uris': None, 'data': None, 'metadatas': [[None, None, None, None, None]], 'distances': [[0.3664924204349518, 0.9500781893730164, 1.1277501583099365, 1.2307831048965454, 1.242687702178955]], 'included': [<IncludeEnum.distances: 'distances'>, <IncludeEnum.documents: 'documents'>, <IncludeEnum.metadatas: 'metadatas'>]}
+
+#   
+
+#   🗑️ Filtering bug reports...
+
+#   ...none selected.
+
+#   
+
+#   
+
+#   💾 Saving Bug Report to Memory
+
+#   ------------------------------
+
+#   
+
+#   # parse_date ## ValueError: invalid literal for int() with base 10: 'abc' ### The function lacks input validation, causing it to raise an error when non-numeric characters are present in the date string. Implementing checks for numeric values before conversion is necessary to improve usability.
+
+#   
+
+#   🐛 Buggy Function
+
+#   -----------------
+
+#   
+
+#   def parse_date(date_string):
+
+#       year, month, day = date_string.split('-')
+
+#       return {'year': int(year), 'month': int(month), 'day': int(day)}
+
+#   
+
+#   
+
+#   🩹 Proposed Bug Fix
+
+#   -------------------
+
+#   
+
+#   def parse_date(date_string):
+
+#       try:
+
+#           year, month, day = date_string.split('-')
+
+#           return {'year': int(year), 'month': int(month), 'day': int(day)}
+
+#       except ValueError:
+
+#           return "Error: invalid date format"
+
+#   
+
+#   *******************
+
+#   
+
+#   ❤️‍🩹 Patching code...
+
+#   ...patch complete 😬
+
+#   
+
+#   ******************
+
+#   
+
+#   
+
+#   Running Arbitrary Function
+
+#   --------------------------
+
+#   
+
+#   
+
+#   ✅ Arbitrary Function Ran Without Error
+
+#   Result: Error: invalid date format
+
+#   ---------------------------------------
+
+#   
+
+
+

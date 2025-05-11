@@ -1,0 +1,2419 @@
+Directory structure:
+└── remote_agent_agp/
+    ├── README.md
+    ├── docker-compose.yml
+    ├── requirements.txt
+    ├── update_req.py
+    ├── api_client/
+    │   ├── __init__.py
+    │   ├── agp.py
+    │   ├── langgraph.json
+    │   └── logging_config.py
+    ├── docs/
+    │   └── imgs/
+    ├── gw/
+    │   └── config/
+    │       └── base/
+    │           └── server-config.yaml
+    ├── remote_agent_docker/
+    │   ├── build_docker.ps1
+    │   ├── build_docker.sh
+    │   ├── Dockerfile
+    │   ├── run_compose.ps1
+    │   ├── run_compose.sh
+    │   ├── run_gw_image.ps1
+    │   ├── run_gw_image.sh
+    │   ├── run_image.ps1
+    │   ├── run_image.sh
+    │   └── config/
+    │       └── base/
+    │           └── server-config.yaml
+    └── server/
+        ├── __init__.py
+        ├── main.py
+        ├── core/
+        │   ├── __init__.py
+        │   └── logging_config.py
+        └── rest/
+            ├── __init__.py
+            ├── app.py
+            ├── agent/
+            │   ├── __init__.py
+            │   ├── lg.py
+            │   └── prompts.py
+            ├── api/
+            │   ├── __init__.py
+            │   └── routes/
+            │       ├── __init__.py
+            │       └── stateless_runs.py
+            ├── core/
+            │   ├── __init__.py
+            │   ├── config.py
+            │   └── logging_config.py
+            └── models/
+                ├── __init__.py
+                └── models.py
+
+================================================
+FILE: remote_agent_agp/README.md
+================================================
+# Remote Agents with AGP
+
+This repository demonstrates an agentic application that uses a remote agent with Agent Gateway Protocol. It has the following simple topology:
+
+```bash
+client <-----> Gateway <----> Server
+```
+
+- Client contains a Langgraph application
+- Server is a FastAPI application that contains the remote agent
+- Gateway is a message broker.
+
+## Requirements
+
+- Python 3.12+
+- A virtual environment is recommended for isolating dependencies.
+- a `.env` at the proejct root with your OpenAI API key
+
+## Installation
+
+1. Clone the repository:
+
+   ```bash
+   git clone https://github.com/agntcy/agentic-apps
+   cd your-repo/remote_agent_agp
+   ```
+
+### Docker Remote Agent
+
+There are convenience scripts for building Docker images for both Windows and Linux. Instructions below are for windows and Linux is almost identical.
+
+On Windows Make sure you can execute PS scripts:
+
+```Powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
+```Powershell
+cd remote_agent_agp\remote_agent_docker
+.\build_image.ps1
+```
+
+After everything is done, you should have a similar output. The image is large because there is still much debugging happening.
+
+```Powershell
+> docker images    
+REPOSITORY              TAG       IMAGE ID       CREATED              SIZE
+agp_remote_agent        latest    054fbed666f9   About a minute ago   4.32GB
+```
+
+## Running the Application
+
+### Gateway
+
+#### Docker
+
+   ```Powershell
+   cd .\remote_agent_agp\
+   run_gw_image.ps1
+   ```
+
+### Remote Agent
+
+The preferred method to run the AGP remote agent is Docker
+
+### Run Docker
+
+Run remote agent:
+
+```Powershell
+.\run_image.ps1
+```
+
+### Local
+
+You can run the server app by executing from /agentic-apps/remote_agent_agp/app:
+
+   ```bash
+   python main.py
+   ```
+
+### Client
+
+You can run the client app by executing from `agentic-apps/remote_agent_agp/client`:
+
+   ```bash
+   python agp.py
+   ```
+
+### Output
+
+On a successful run you should an output similar to the following:
+
+- client:
+
+```bash
+{"timestamp": "2025-03-12 07:13:42,912", "level": "INFO", "message": "{'event': 'final_result', 'result': {'messages': [HumanMessage(content='Write a story about a cat', additional_kwargs={}, response_metadata={}, id='c97f93dd-0c55-4109-862b-a34d6fd5aeba'), AIMessage(content='cats are wise', additional_kwargs={}, response_metadata={}, id='c79d1515-340e-43b6-b16c-9e04ae2c3058')]}}", "module": "agp", "function": "<module>", "line": 212, "logger": "graph_client", "pid": 20472}
+```
+
+- server:
+
+```bash
+{"timestamp": "2025-03-12 07:13:42,910", "level": "INFO", "message": "Received message{\"agent_id\": \"remote_agent\", \"output\": {\"messages\": [{\"role\": \"assistant\", \"content\": \"cats are wise\"}]}, \"model\": \"gpt-4o\", \"metadata\": {\"id\": \"d90cafe8-8f0c-4012-937f-df98356262cc\"}}, from agent <builtins.PyAgentSource object at 0x0000020A5BA2A5F0>", "module": "main", "function": "connect_to_gateway", "line": 184, "logger": "app", "pid": 5808}
+```
+
+- Gateway
+
+```bash
+2025-03-12T14:13:21.043726Z  INFO data-plane-gateway ThreadId(32) agp_service: running service
+2025-03-12T14:13:34.776879Z  INFO data-plane-gateway ThreadId(04) agp_datapath::message_processing: new connection received from remote: (remote: Some(172.17.0.1:49344) - local: Some(172.17.0.2:46357))
+2025-03-12T14:13:42.881719Z  INFO data-plane-gateway ThreadId(07) agp_datapath::message_processing: new connection received from remote: (remote: Some(172.17.0.1:46470) - local: Some(172.17.0.2:46357))
+2025-03-12T14:13:42.954498Z  INFO data-plane-gateway ThreadId(04) agp_datapath::message_processing: end of stream conn_index=1
+```
+
+## Langgraph Studio
+
+- Run gateway and server
+
+```Powershell
+cd .\remote_agent_agp\client_studio\
+langgraph dev
+```
+
+
+
+================================================
+FILE: remote_agent_agp/docker-compose.yml
+================================================
+
+services:
+  agp_gateway:
+    image: ghcr.io/agntcy/agp/gw:0.3.10
+    container_name: agp_gateway
+    ports:
+      - "46357:46357"
+    environment:
+      - PASSWORD=${PASSWORD:-dummy}  # Default password if not set
+    volumes:
+      - ./gw/config/base/server-config.yaml:/config.yaml
+    command: ["/gateway", "--config", "/config.yaml"]
+    restart: unless-stopped
+    networks:
+      - agp_network  # Ensure both services are on the same network
+
+  agp_remote_agent:
+    image: agp_remote_agent:latest
+    # build:
+    #  context: .  # Set project root as the build context
+    #  dockerfile: remote_agent_docker/Dockerfile  # Dockerfile is inside remote_agent_docker/
+    container_name: agp_remote_agent
+    depends_on:
+      - agp_gateway
+    environment:
+      - AGP_ADDRESS=http://agp_gateway  # Inside Compose, use agp_gateway
+    env_file:
+      - ../.env
+    volumes:
+      - ../.env:/app/.env  # <== This explicitly mounts .env at /app/.env      
+    networks:
+      - agp_network
+    restart: unless-stopped
+
+networks:
+  agp_network:
+    driver: bridge
+
+
+
+================================================
+FILE: remote_agent_agp/requirements.txt
+================================================
+langgraph==0.3.2
+langchain==0.3.19
+langchain_openai==0.3.8
+langgraph-sdk==0.1.53
+fastapi[standard]==0.115.11
+requests==2.32.3
+starlette==0.46.0
+uvicorn==0.34.0
+packaging==24.2
+python-dotenv==1.0.1
+pydantic==2.10.6
+pydantic-settings==2.8.1
+uvicorn==0.34.0
+requests==2.32.3
+langgraph-cli[inmem]==0.1.74
+python-json-logger==3.3.0
+agp-bindings==0.1.14
+agp-api==0.0.6
+langsmith==0.3.18
+# If you need to debug langgraph studio
+# debugpy==1.8.12
+
+
+
+================================================
+FILE: remote_agent_agp/update_req.py
+================================================
+# Copyright AGNTCY Contributors (https://github.com/agntcy)
+# SPDX-License-Identifier: Apache-2.0
+
+import importlib.metadata
+import logging
+import subprocess
+
+from packaging.requirements import Requirement
+
+logging.basicConfig(level=logging.INFO)
+
+
+def get_installed_version(package_name):
+    """
+    Get the installed version of a package.
+
+    Parameters:
+        package_name (str): The name of the package.
+
+    Returns:
+        str or None: The installed version if installed, else None.
+    """
+    try:
+        return importlib.metadata.version(package_name)
+    except importlib.metadata.PackageNotFoundError:
+        logging.debug(f"Package '{package_name}' is not installed.")
+        return None
+    except Exception as e:
+        logging.error(f"Error getting installed version for '{package_name}': {e}")
+        return None
+
+
+def upgrade_packages(requirements_file):
+    """
+    Upgrade packages listed in the requirements.txt file to their latest versions.
+
+    Parameters:
+        requirements_file (str): Path to the requirements.txt file.
+
+    Returns:
+        None
+    """
+    try:
+        with open(requirements_file, "r") as file:
+            lines = file.readlines()
+    except Exception as e:
+        logging.error(f"Error reading requirements file: {e}")
+        return
+
+    updated_lines = []
+
+    for line in lines:
+        package_line = line.strip()
+
+        # Ignore comments and empty lines
+        if not package_line or package_line.startswith("#"):
+            updated_lines.append(line.rstrip("\n"))
+            continue
+
+        try:
+            req = Requirement(package_line)
+        except Exception as e:
+            logging.warning(f"Could not parse the line: '{package_line}'. Error: {e}")
+            updated_lines.append(line.rstrip("\n"))
+            continue
+
+        package_name = req.name
+        extras = req.extras  # Set of extras
+        specifier = req.specifier  # SpecifierSet
+        markers = req.marker
+        url = req.url  # For VCS or URL requirements
+
+        # Skip if it's a URL or VCS requirement
+        if url:
+            updated_lines.append(line.rstrip("\n"))
+            continue
+
+        # Build the package name with extras for installation
+        package_with_extras = package_name
+        if extras:
+            extras_str = "[" + ",".join(extras) + "]"
+            package_with_extras += extras_str
+
+        logging.info(f"Upgrading package '{package_with_extras}'...")
+
+        try:
+            # Upgrade the package to the latest version
+            subprocess.run(
+                ["pip", "install", "--upgrade", package_with_extras], check=True
+            )
+        except subprocess.CalledProcessError as e:
+            logging.error(f"Error upgrading package '{package_with_extras}': {e}")
+            updated_lines.append(line.rstrip("\n"))
+            continue
+
+        # Get the latest installed version
+        new_version = get_installed_version(package_name)
+        if new_version:
+            # Reconstruct the requirement line with the new version
+            updated_req_str = package_name
+            if extras:
+                updated_req_str += "[" + ",".join(extras) + "]"
+            updated_req_str += f"=={new_version}"
+            if markers:
+                updated_req_str += f"; {markers}"
+            updated_lines.append(updated_req_str)
+        else:
+            logging.warning(
+                f"Could not determine the installed version of '{package_name}'. Keeping the original line."
+            )
+            updated_lines.append(line.rstrip("\n"))
+
+    # Write the updated requirements to the file
+    try:
+        with open(requirements_file, "w") as file:
+            file.write("\n".join(updated_lines) + "\n")
+    except Exception as e:
+        logging.error(f"Error writing to requirements file: {e}")
+        return
+
+    logging.info(
+        "All packages have been upgraded and requirements.txt has been updated."
+    )
+
+
+if __name__ == "__main__":
+    upgrade_packages("requirements.txt")
+
+
+
+================================================
+FILE: remote_agent_agp/api_client/__init__.py
+================================================
+# Copyright AGNTCY Contributors (https://github.com/agntcy)
+# SPDX-License-Identifier: Apache-2.0
+
+
+
+
+================================================
+FILE: remote_agent_agp/api_client/agp.py
+================================================
+# Copyright AGNTCY Contributors (https://github.com/agntcy)
+# SPDX-License-Identifier: Apache-2.0
+
+
+import asyncio
+import json
+import uuid
+from typing import Annotated, Any, Dict, List, TypedDict
+from langsmith import traceable
+
+from langsmith.run_helpers import get_current_run_tree
+from agp_api.gateway.gateway_container import GatewayContainer
+from agp_api.agent.agent_container import AgentContainer
+from dotenv import load_dotenv
+from langchain_core.messages import BaseMessage, HumanMessage
+from langchain_core.messages.utils import convert_to_openai_messages
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
+from logging_config import configure_logging
+
+logger = configure_logging()
+
+
+class Config:
+    """Configuration class for AGP (Agent Gateway Protocol) client.
+    This class manages configuration settings for the AGP system, containing container
+    instances for gateway and agent management, as well as remote agent specification.
+    Attributes:
+        gateway_container (GatewayContainer): Container instance for gateway management
+        agent_container (AgentContainer): Container instance for agent management
+        remote_agent (str): Specification of remote agent, defaults to "server"
+    """
+
+    gateway_container = GatewayContainer()
+    agent_container = AgentContainer()
+    remote_agent = "code_analyzer"
+
+
+# Define the graph state
+class GraphState(TypedDict):
+    """
+    Represents the state of the graph, containing a list of messages and a
+    gateway holder.
+    """
+
+    messages: Annotated[List[BaseMessage], add_messages]
+
+
+@traceable(
+    run_type="tool",
+    name="Client publish and receive messages",
+    tags=["agp", "client", "publish", "receive"],
+)
+async def send_and_recv(payload: Dict[str, Any], remote_agent: str) -> Dict[str, Any]:
+    """
+    Sends a payload to a remote agent and receives a response through the gateway container.
+        payload (Dict[str, Any]): The request payload to be sent to the remote agent
+        remote_agent (str): The identifier of the remote agent to send the payload to
+    Returns:
+        Dict[str, Any]: A dictionary containing the 'messages' key with either:
+            - The last message received from the remote agent if successful
+            - An error message if the request failed, wrapped in a HumanMessage
+    Raises:
+        May raise exceptions from gateway container operations or JSON processing
+    Note:
+        The response is expected to be a JSON string that can be decoded into a dictionary
+        containing either an 'error' field (for failures) or an 'output' field with 'messages'
+    """
+
+    await Config.gateway_container.publish_messsage(
+        payload, agent_container=Config.agent_container, remote_agent=remote_agent
+    )
+    _, recv = await Config.gateway_container.gateway.receive()
+
+    response_data = json.loads(recv.decode("utf8"))
+
+    # check for errors
+    error_code = response_data.get("error")
+    if error_code is not None:
+        error_msg = {
+            "error": "AGP request failed",
+            "status_code": error_code,
+            "exception": response_data.get("message"),
+        }
+        logger.error(json.dumps(error_msg))
+        return {"messages": [HumanMessage(content=json.dumps(error_msg))]}
+
+    # decode message
+    output = response_data.get("output", {})
+    messages = output.get("messages", [])
+    logger.info(messages)
+
+    # We only store in shared memory the last message from remote to avoid duplication
+    return {"messages": [messages[-1]]}
+
+
+async def node_remote_agp(state: GraphState) -> Dict[str, Any]:
+    """
+    Sends a stateless request to the Remote Graph Server.
+
+    Args:
+        state (GraphState): The current graph state containing messages.
+
+    Returns:
+        Command[Literal["exception_node", "end_node"]]: Command to transition to the next node.
+    """
+    if not state["messages"]:
+        logger.error(json.dumps({"error": "GraphState contains no messages"}))
+        return {"messages": [HumanMessage(content="Error: No messages in state")]}
+
+    # Extract the latest user query
+    query = state["messages"][-1].content
+    logger.info(json.dumps({"event": "sending_request", "query": query}))
+
+    messages = convert_to_openai_messages(state["messages"])
+
+    headers = {"Content-Type": "application/json"}
+
+    # Distributed tracing. All traces are stored in the same run tree.
+    if run_tree := get_current_run_tree():
+        # add langsmith-id to headers
+        headers.update(run_tree.to_headers())
+
+    # payload to send to remote server at /runs endpoint
+    payload: Dict[str, Any] = {
+        "agent_id": "remote_agent",
+        "input": {"messages": messages},
+        "model": "gpt-4o",
+        "metadata": {"id": str(uuid.uuid4())},
+        # Add the fields to emulate the REST API
+        "route": "/api/v1/runs",
+        "headers": headers,
+        "method": "POST",
+    }
+
+    res = await send_and_recv(payload, remote_agent=Config.remote_agent)
+    return res
+
+
+@traceable(
+    run_type="tool",
+    name="Client init connect to AGP Gateway",
+    tags=["agp", "client", "connect", "gateway"],
+)
+async def init_client_gateway_conn(remote_agent: str = "server") -> None:
+    """Initialize connection to the gateway.
+    Establishes connection to a gateway service running on localhost using retry mechanism.
+    Returns:
+        None
+    Raises:
+        ConnectionError: If unable to establish connection after retries.
+        TimeoutError: If connection attempts exceed max duration.
+    Notes:
+        - Uses default endpoint http://127.0.0.1:46357
+        - Insecure connection is enabled
+        - Maximum retry duration is 10 seconds
+        - Initial retry delay is 1 second
+        - Targets remote agent named "server"
+    """
+
+    Config.gateway_container.set_config(
+        endpoint="http://127.0.0.1:46357", insecure=True
+    )
+
+    # Call connect_with_retry
+    _ = await Config.gateway_container.connect_with_retry(
+        agent_container=Config.agent_container,
+        max_duration=10,
+        initial_delay=1,
+        remote_agent=remote_agent,
+    )
+
+
+async def build_graph() -> Any:
+    """
+    Constructs the state graph for handling requests.
+
+    Returns:
+        StateGraph: A compiled LangGraph state graph.
+    """
+    await init_client_gateway_conn(remote_agent=Config.remote_agent)
+    builder = StateGraph(GraphState)
+    builder.add_node("node_remote_agp", node_remote_agp)
+    builder.add_edge(START, "node_remote_agp")
+    builder.add_edge("node_remote_agp", END)
+    return builder.compile()
+
+
+@traceable(
+    run_type="tool",
+    name="Entry point for AGP client",
+    tags=["agp", "client", "main"],
+)
+async def main():
+    """
+    Main function to load environment variables, initialize the gateway connection,
+    build the state graph, and invoke it with sample inputs.
+    """
+    load_dotenv(override=True)
+    graph = await build_graph()
+
+    inputs = {"messages": [HumanMessage(content="Write a story about a cat")]}
+    logger.info({"event": "invoking_graph", "inputs": inputs})
+    result = await graph.ainvoke(inputs)
+    logger.info({"event": "final_result", "result": result})
+
+
+# Main execution
+if __name__ == "__main__":
+    load_dotenv(override=True)
+    asyncio.run(main())
+
+
+
+================================================
+FILE: remote_agent_agp/api_client/langgraph.json
+================================================
+{
+    "dependencies": [".", "../requirements.txt"],
+    "graphs": {
+        "agp_local_graph": "./agp.py:build_graph"
+    },
+    "env": "../../.env"
+}
+
+
+================================================
+FILE: remote_agent_agp/api_client/logging_config.py
+================================================
+# Copyright AGNTCY Contributors (https://github.com/agntcy)
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+This module provides logging configuration for the remote graphs client.
+It sets up structured JSON logging with rotation and supports logging to both console and file.
+"""
+
+import logging
+import os
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
+
+from pythonjsonlogger.json import JsonFormatter
+
+
+def get_log_dir() -> Path:
+    """Returns the log directory path and ensures it exists."""
+    log_dir = Path.cwd() / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return log_dir
+
+
+def get_log_level() -> str:
+    """Retrieves the log level from environment variables (defaults to INFO)."""
+    return os.getenv("LOG_LEVEL", "INFO").upper()
+
+
+def configure_logging() -> logging.Logger:
+    """
+    Configures structured JSON logging with rotation.
+
+    Logs to both console and a rotating file handler.
+    The log level is determined by the LOG_LEVEL environment variable.
+    """
+    log_dir = get_log_dir()
+    log_file = log_dir / "ap_rest_client.log"
+    log_level: str = get_log_level()
+
+    logger = logging.getLogger()
+    logger.setLevel(log_level)
+
+    formatter = JsonFormatter(
+        "{asctime} {levelname} {pathname} {module} {funcName} {message} {exc_info}",
+        style="{",
+    )
+
+    # ✅ Log to Console
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+    logger.addHandler(stream_handler)
+
+    # ✅ Log to File with Rotation
+    file_handler = RotatingFileHandler(
+        log_file, mode="a", maxBytes=5 * 1024 * 1024, backupCount=5, encoding="utf-8"
+    )
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    logger.info(
+        "Logging initialized with rotation.", extra={"log_destination": str(log_file)}
+    )
+
+    return logger
+
+
+
+
+================================================
+FILE: remote_agent_agp/gw/config/base/server-config.yaml
+================================================
+# Copyright AGNTCY Contributors (https://github.com/agntcy)
+# SPDX-License-Identifier: Apache-2.0
+
+tracing:
+  log_level: info
+  display_thread_names: true
+  display_thread_ids: true
+
+runtime:
+  n_cores: 0
+  thread_name: "data-plane-gateway"
+  drain_timeout: 10s
+
+services:
+  gateway/0:
+    server:
+      endpoint: "0.0.0.0:46357"
+      tls:
+        insecure: true
+
+    clients: []
+
+
+
+================================================
+FILE: remote_agent_agp/remote_agent_docker/build_docker.ps1
+================================================
+param (
+    [string]$ImageName = "agp_remote_agent"  # Default to "agp_remote_agent" if not provided
+)
+
+Write-Host "Building Docker image: $ImageName"
+
+# Build the Docker image with the parent directory as the context
+$process = Start-Process -NoNewWindow -PassThru -Wait -FilePath "docker" -ArgumentList @(
+    "build", "-t", $ImageName, "-f", "Dockerfile", ".."
+)
+
+# Check the exit code to determine if the build was successful
+if ($process.ExitCode -eq 0) {
+    Write-Host "Docker image '$ImageName' built successfully!"
+} else {
+    Write-Host "Docker build failed!"
+    exit 1
+}
+
+
+
+================================================
+FILE: remote_agent_agp/remote_agent_docker/build_docker.sh
+================================================
+#!/bin/bash
+
+# Default image name if none is provided
+IMAGE_NAME=${1:-"agp_remote_agent"}
+
+echo "Building Docker image: $IMAGE_NAME"
+
+# Build the Docker image with the parent directory as context
+docker build -t "$IMAGE_NAME" -f Dockerfile .. 
+
+# Check if the build was successful
+if [ $? -eq 0 ]; then
+  echo "Docker image '$IMAGE_NAME' built successfully!"
+else
+  echo "Docker build failed!"
+  exit 1
+fi
+
+
+
+================================================
+FILE: remote_agent_agp/remote_agent_docker/Dockerfile
+================================================
+# Use a full Python image for better debugging support
+FROM python:3.12
+
+# Set working directory inside the container
+WORKDIR /server
+
+# Install system dependencies including Rust
+RUN apt-get update && apt-get install -y \
+    curl \
+    build-essential \
+    gcc \
+    libssl-dev \
+    pkg-config && \
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && \
+    export PATH="$HOME/.cargo/bin:$PATH"
+
+# Upgrade pip before installing dependencies
+RUN python -m pip install --upgrade pip
+
+# Copy requirements.txt from the parent directory
+COPY ../requirements.txt /app/requirements.txt
+
+# Copy the entire server source code from the parent directory
+COPY ../server /server
+
+# Ensure Rust is available in PATH
+ENV PATH="/root/.cargo/bin:$PATH"
+
+# Install dependencies
+RUN pip install --no-cache-dir -r /app/requirements.txt
+
+# Expose necessary ports
+# ENV PORT=46357
+# EXPOSE ${PORT}
+
+# Install debugging tools (optional)
+RUN apt-get update && apt-get install -y vim curl net-tools iputils-ping && rm -rf /var/lib/apt/lists/*
+
+# Start the application
+CMD ["python", "main.py"]
+
+
+
+================================================
+FILE: remote_agent_agp/remote_agent_docker/run_compose.ps1
+================================================
+Write-Host "Pulling the latest AGP Gateway image..."
+docker pull ghcr.io/agntcy/agp/gw:latest
+
+Write-Host "Starting Docker Compose services..."
+
+# Get the script directory (remote_agent_docker/)
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+
+# Change directory to the project root (where docker-compose.yml is located)
+Set-Location -Path "$scriptDir\.."
+
+# Run Docker Compose
+$process = Start-Process -NoNewWindow -PassThru -Wait -FilePath "docker-compose" -ArgumentList @("up", "-d")
+
+# Check if the services started successfully
+if ($process.ExitCode -eq 0) {
+    Write-Host "Docker Compose services are running."
+} else {
+    Write-Host "Failed to start Docker Compose services."
+    exit 1
+}
+
+# Change back to the original directory after execution
+Set-Location -Path $scriptDir
+
+
+
+================================================
+FILE: remote_agent_agp/remote_agent_docker/run_compose.sh
+================================================
+#!/bin/bash
+
+# Navigate to the directory where docker-compose.yml is located
+cd "$(dirname "$0")/.."
+
+echo "Pulling the latest AGP Gateway image..."
+docker pull ghcr.io/agntcy/agp/gw:latest
+
+echo "Starting Docker Compose services..."
+docker-compose up -d
+
+# Check if the services started successfully
+if [ $? -eq 0 ]; then
+  echo "Docker Compose services are running."
+else
+  echo "Failed to start Docker Compose services."
+  exit 1
+fi
+
+
+
+================================================
+FILE: remote_agent_agp/remote_agent_docker/run_gw_image.ps1
+================================================
+param (
+    [SecureString]$Password = (ConvertTo-SecureString "dummy_password" -AsPlainText -Force)  # Default to secure "dummy_password" if not provided
+)
+
+# Convert SecureString to plain text for the environment variable
+$BSTR = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($Password)
+$PlainPassword = [System.Runtime.InteropServices.Marshal]::PtrToStringAuto($BSTR)
+[System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($BSTR)
+
+# Set the environment variable for the password
+$env:PASSWORD = $PlainPassword
+
+$ConfigPath = (Resolve-Path "${PWD}/config/base/server-config.yaml").Path -replace '\\', '/'
+docker run -it `
+    -e PASSWORD=$env:PASSWORD `
+    -v "${ConfigPath}:/config.yaml" `
+    -p 46357:46357 `
+    ghcr.io/agntcy/agp/gw:0.3.10 /gateway --config /config.yaml
+
+
+
+
+
+================================================
+FILE: remote_agent_agp/remote_agent_docker/run_gw_image.sh
+================================================
+#!/bin/bash
+
+# Default password if not provided as an argument
+PASSWORD=${1:-"dummy_password"}
+
+# Set the environment variable for the password
+export PASSWORD
+
+# Resolve the config path and replace backslashes with forward slashes
+CONFIG_PATH=$(realpath ./config/base/server-config.yaml)
+
+# Run the Docker container
+docker run -it \
+    -e PASSWORD="$PASSWORD" \
+    -v "$CONFIG_PATH:/config.yaml" \
+    -p 46357:46357 \
+    ghcr.io/agntcy/agp/gw:0.3.10 /gateway --config /config.yaml
+
+
+================================================
+FILE: remote_agent_agp/remote_agent_docker/run_image.ps1
+================================================
+param (
+    [string]$ImageName = "agp_remote_agent"  # Default name if none is provided
+)
+
+# Set the path to the .env file (assume it's in the project root)
+$EnvFilePath = "..\..\.env"
+
+# Check if the .env file exists
+if (-Not (Test-Path $EnvFilePath)) {
+    Write-Host "Warning: .env file not found at $EnvFilePath. Environment variables may be missing."
+}
+
+Write-Host "Running Docker container for image: $ImageName"
+
+# Run the Docker container with the .env file if it exists
+$Command = @("run", "--env-file", $EnvFilePath, "-d", "--name", "agp_running_container", $ImageName)
+
+# Execute Docker command
+$process = Start-Process -NoNewWindow -PassThru -Wait -FilePath "docker" -ArgumentList $Command
+
+# Check if the container started successfully
+if ($process.ExitCode -eq 0) {
+    Write-Host "Docker container '$ImageName' is running."
+} else {
+    Write-Host "Failed to start the Docker container."
+    exit 1
+}
+
+
+
+================================================
+FILE: remote_agent_agp/remote_agent_docker/run_image.sh
+================================================
+#!/bin/bash
+
+# Default image name if none is provided
+IMAGE_NAME=${1:-"agp_remote_agent"}
+
+# Set the path to the .env file (assume it's in the project root)
+ENV_FILE="../../.env"
+
+# Check if the .env file exists
+if [ ! -f "$ENV_FILE" ]; then
+  echo "Warning: .env file not found at $ENV_FILE. Environment variables may be missing."
+fi
+
+echo "Running Docker container for image: $IMAGE_NAME"
+
+# Run the Docker container with the .env file if it exists
+docker run --env-file "$ENV_FILE" -d --name agp_running_container "$IMAGE_NAME"
+
+# Check if the container started successfully
+if [ $? -eq 0 ]; then
+  echo "Docker container '$IMAGE_NAME' is running."
+else
+  echo "Failed to start the Docker container."
+  exit 1
+fi
+
+
+
+================================================
+FILE: remote_agent_agp/remote_agent_docker/config/base/server-config.yaml
+================================================
+# Copyright AGNTCY Contributors (https://github.com/agntcy)
+# SPDX-License-Identifier: Apache-2.0
+
+tracing:
+  log_level: info
+  display_thread_names: true
+  display_thread_ids: true
+
+runtime:
+  n_cores: 0
+  thread_name: "data-plane-gateway"
+  drain_timeout: 10s
+
+services:
+  gateway/0:
+    server:
+      endpoint: "0.0.0.0:46357"
+      tls:
+        insecure: true
+
+    clients: []
+
+
+
+================================================
+FILE: remote_agent_agp/server/__init__.py
+================================================
+# Copyright AGNTCY Contributors (https://github.com/agntcy)
+# SPDX-License-Identifier: Apache-2.0
+
+
+
+
+================================================
+FILE: remote_agent_agp/server/main.py
+================================================
+# Copyright AGNTCY Contributors (https://github.com/agntcy)
+# SPDX-License-Identifier: Apache-2.0
+
+from __future__ import annotations
+
+import asyncio
+import logging
+
+from dotenv import load_dotenv
+
+from agp_api.gateway.gateway_container import GatewayContainer
+from agp_api.agent.agent_container import AgentContainer
+from core.logging_config import configure_logging
+from rest.app import create_fastapi_app
+
+# Define logger at the module level
+logger = logging.getLogger("app")
+
+
+class Config:
+    """Configuration class for AGP (Agent Gateway Protocol) client.
+    This class manages configuration settings for the AGP system, containing container
+    instances for gateway and agent management, as well as remote agent specification.
+    Attributes:
+        gateway_container (GatewayContainer): Container instance for gateway management
+        agent_container (AgentContainer): Container instance for agent management
+        remote_agent (str): Specification of remote agent, defaults to "server"
+    """
+
+    gateway_container = GatewayContainer()
+    agent_container = AgentContainer(local_agent="code_analyzer")
+    # For client
+    remote_agent = "code_analyzer"
+
+
+async def main() -> None:
+    """
+    Entry point for running the application.
+
+    This function performs the following:
+    - Configures logging globally.
+    - Loads environment variables from a `.env` file.
+    - Retrieves the address for the remote gateway
+    - Connects to the gateway and waits for incoming messages
+
+    Returns:
+        None
+    """
+    configure_logging()
+    logger.info("Starting AGP application...")
+
+    # GatewayHolder.create_gateway()
+    Config.gateway_container.set_config(
+        endpoint="http://127.0.0.1:46357", insecure=True
+    )
+    Config.gateway_container.set_fastapi_app(create_fastapi_app())
+
+    # Call connect_with_retry
+    _ = await Config.gateway_container.connect_with_retry(
+        agent_container=Config.agent_container, max_duration=10, initial_delay=1)
+
+    try:
+        await Config.gateway_container.start_server(
+            agent_container=Config.agent_container
+        )
+    except RuntimeError as e:
+        logger.error("Runtime error: %s", e)
+    except Exception as e:
+        logger.info("Unhandled error: %s", e)
+
+
+if __name__ == "__main__":
+    load_dotenv(override=True)
+    asyncio.run(main())
+
+
+
+================================================
+FILE: remote_agent_agp/server/core/__init__.py
+================================================
+# Copyright AGNTCY Contributors (https://github.com/agntcy)
+# SPDX-License-Identifier: Apache-2.0
+
+
+
+
+================================================
+FILE: remote_agent_agp/server/core/logging_config.py
+================================================
+# Copyright AGNTCY Contributors (https://github.com/agntcy)
+# SPDX-License-Identifier: Apache-2.0
+
+"""
+This module provides logging configuration for the remote graphs client.
+It sets up structured JSON logging with rotation and supports logging to both console and file.
+"""
+
+import logging
+import os
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
+
+from pythonjsonlogger.json import JsonFormatter
+
+
+def get_log_dir() -> Path:
+    """Returns the log directory path and ensures it exists."""
+    log_dir = Path.cwd() / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return log_dir
+
+
+def get_log_level() -> str:
+    """Retrieves the log level from environment variables (defaults to INFO)."""
+    return os.getenv("LOG_LEVEL", "INFO").upper()
+
+
+def configure_logging() -> logging.Logger:
+    """
+    Configures structured JSON logging with rotation.
+
+    Logs to both console and a rotating file handler.
+    The log level is determined by the LOG_LEVEL environment variable.
+    """
+    log_dir = get_log_dir()
+    log_file = log_dir / "server.log"
+    log_level: str = get_log_level()
+
+    logger = logging.getLogger()
+    logger.setLevel(log_level)
+
+    formatter = JsonFormatter(
+        "{asctime} {levelname} {pathname} {module} {funcName} {lineno} {message} {exc_info}",
+        style="{",
+    )
+
+    # ✅ Log to Console
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+    logger.addHandler(stream_handler)
+
+    # ✅ Log to File with Rotation
+    file_handler = RotatingFileHandler(
+        log_file, mode="a", maxBytes=5 * 1024 * 1024, backupCount=5, encoding="utf-8"
+    )
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    logger.info(
+        "Logging initialized with rotation.", extra={"log_destination": str(log_file)}
+    )
+
+    return logger
+
+
+
+================================================
+FILE: remote_agent_agp/server/rest/__init__.py
+================================================
+
+
+
+================================================
+FILE: remote_agent_agp/server/rest/app.py
+================================================
+"""
+The Langchain Agent Protocol Server (LAPS) serves as the entry point for a FastAPI application
+configured with JSON logging, environment variable loading, and asynchronous lifespan management.
+Designed for secure, headless operation, it will not bind to any IP/port but instead consumes
+packets via HTTP injection, aligning with the requirements of Agent operations.
+
+Key functionalities include:
+- Loading and managing environment variables using dotenv.
+- Configuring JSON-based logging to capture critical startup and runtime events.
+- Defining an async lifespan context manager for initializing and cleaning up resources during startup
+    and shutdown.
+- Creating and configuring the FastAPI application with custom route handlers, unique route ID generation,
+    and CORS middleware.
+- Serving as the protocol server endpoint for Langgraph Agents, emphasizing secure, injection-based
+    packet consumption over traditional network listening.
+
+This design prioritizes clear separation of concerns and facilitates secure integration with Langgraph
+agent workflows.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+from contextlib import asynccontextmanager
+from typing import AsyncGenerator
+
+from dotenv import find_dotenv, load_dotenv
+from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from fastapi.routing import APIRoute
+from langsmith.middleware import TracingMiddleware
+from starlette.middleware.cors import CORSMiddleware
+
+from .api.routes import stateless_runs
+from .core.config import settings
+
+# Step 1: Initialize a basic logger first (to avoid errors before full configuration)
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)  # Minimal level before full configuration
+handler = logging.StreamHandler()
+handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+logger.addHandler(handler)
+
+
+def load_environment_variables(env_file: str | None = None) -> None:
+    """
+    Load environment variables from a .env file safely.
+
+    This function loads environment variables from a `.env` file, ensuring
+    that critical configurations are set before the application starts.
+
+    Args:
+        env_file (str | None): Path to a specific `.env` file. If None,
+                               it searches for a `.env` file automatically.
+
+    Behavior:
+    - If `env_file` is provided, it loads the specified file.
+    - If `env_file` is not provided, it attempts to locate a `.env` file in the project directory.
+    - Logs a warning if no `.env` file is found.
+
+    Returns:
+        None
+    """
+    env_path = env_file or find_dotenv()
+
+    if env_path:
+        load_dotenv(env_path, override=True)
+        logger.info(".env file loaded from %s", env_path)
+    else:
+        logger.warning("No .env file found. Ensure environment variables are set.")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    """
+    Defines startup and shutdown logic for the FastAPI application.
+
+    This function follows the `lifespan` approach, allowing resource initialization
+    before the server starts and cleanup after it shuts down.
+
+    Args:
+        app (FastAPI): The FastAPI application instance.
+
+    Yields:
+        None: The application runs while `yield` is active.
+
+    Behavior:
+    - On startup: Logs a startup message.
+    - On shutdown: Logs a shutdown message.
+    - Can be extended to initialize resources (e.g., database connections).
+    """
+    logging.info("Starting Remote Graphs App...")
+
+    # Example: Attach database connection to app state (if needed)
+    # app.state.db = await init_db_connection()
+
+    yield  # Application runs while 'yield' is in effect.
+
+    logging.info("Application shutdown")
+
+    # Example: Close database connection (if needed)
+    # await app.state.db.close()
+
+
+def custom_generate_unique_id(route: APIRoute) -> str:
+    """
+    Generates a unique identifier for API routes.
+
+    Args:
+        route (APIRoute): The FastAPI route object.
+
+    Returns:
+        str: A unique string identifier for the route.
+
+    Behavior:
+    - If the route has tags, the ID is formatted as `{tag}-{route_name}`.
+    - If no tags exist, the route name is used as the ID.
+    """
+    if route.tags:
+        return f"{route.tags[0]}-{route.name}"
+    return route.name
+
+
+def add_handlers(app: FastAPI) -> None:
+    """
+    Adds global route handlers to the FastAPI application.
+
+    This function registers common endpoints, such as the root message
+    and the favicon.
+
+    Args:
+        app (FastAPI): The FastAPI application instance.
+
+    Returns:
+        None
+    """
+
+    @app.get(
+        "/",
+        summary="Root endpoint",
+        description="Returns a welcome message for the API.",
+        tags=["General"],
+    )
+    async def root() -> dict:
+        """
+        Root endpoint that provides a welcome message.
+
+        Returns:
+            dict: A JSON response with a greeting message.
+        """
+        return {"message": "Gateway of the App"}
+
+    @app.get("/favicon.png", include_in_schema=False)
+    async def favicon() -> FileResponse:
+        """
+        Serves the favicon as a PNG file.
+
+        This prevents the browser from repeatedly requesting a missing
+        favicon when accessing the API.
+
+        Returns:
+            FileResponse: A response serving the `favicon.png` file.
+
+        Raises:
+            FileNotFoundError: If the favicon file is missing.
+        """
+        file_name = "favicon.png"
+        file_path = os.path.join(app.root_path, "", file_name)
+        return FileResponse(
+            path=file_path, media_type="image/png"  # Ensures it's served inline
+        )
+
+
+def create_fastapi_app() -> FastAPI:
+    """
+    Creates and configures the FastAPI application instance.
+
+    This function sets up:
+    - The API metadata (title, version, OpenAPI URL).
+    - CORS middleware to allow cross-origin requests.
+    - Route handlers for API endpoints.
+    - A custom unique ID generator for API routes.
+
+    Returns:
+        FastAPI: The configured FastAPI application instance.
+    """
+    app = FastAPI(
+        title=settings.PROJECT_NAME,
+        openapi_url=f"{settings.API_V1_STR}/openapi.json",
+        generate_unique_id_function=custom_generate_unique_id,
+        version="0.1.0",
+        description=settings.PROJECT_NAME,
+        lifespan=lifespan,  # Use the new lifespan approach for startup/shutdown
+    )
+
+    add_handlers(app)
+    app.include_router(stateless_runs.router, prefix=settings.API_V1_STR)
+
+    # Set all CORS enabled origins
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=["*"],
+    )
+
+    app.add_middleware(TracingMiddleware)
+
+    return app
+
+
+
+================================================
+FILE: remote_agent_agp/server/rest/agent/__init__.py
+================================================
+
+
+
+================================================
+FILE: remote_agent_agp/server/rest/agent/lg.py
+================================================
+# Copyright AGNTCY Contributors (https://github.com/agntcy)
+# SPDX-License-Identifier: Apache-2.0
+
+# Build the Langgraph Application
+
+import os
+import sys
+from typing import Annotated, Any, Dict, List, Optional, TypedDict
+
+from dotenv import load_dotenv
+from langchain_core.messages import BaseMessage, HumanMessage
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.messages.utils import convert_to_openai_messages
+from langchain_openai import ChatOpenAI
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
+from langsmith import traceable
+
+
+# Get the absolute path of the parent directory
+parent_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
+# Add the parent directory to sys.path
+sys.path.insert(0, parent_dir)
+
+from core.logging_config import configure_logging  # noqa: E402
+from .prompts import Prompts
+
+logger = configure_logging()
+
+
+# Define the graph state
+class GraphState(TypedDict):
+    """Represents the state of the graph, containing a list of messages."""
+
+    messages: Annotated[List[BaseMessage], add_messages]
+
+
+# Graph node that makes a stateless request to the Remote Graph Server
+def end_node(state: GraphState) -> Dict[str, Any]:
+    """
+    Ends the graph by logging the state and returning an empty messages list.
+    """
+    logger.info("Thread end: %s", state.values())
+    return {"messages": []}
+
+
+def llm_node(state: GraphState) -> Dict[str, Any]:
+    """
+    Sends the user prompt to LLM and returns the response.
+
+    Args:
+        state (State): The current conversation state containing messages.
+
+    Returns:
+        State: The updated state with the assistant's response and incremented rounds.
+
+    Notes:
+        - Uses the ChatOpenAI model to generate the assistant's reply.
+        - If an error occurs, logs the error and returns a default state.
+    """
+    prompt = ChatPromptTemplate(
+        [
+            (
+                "system",
+                "{system_prompt}",
+            ),
+            MessagesPlaceholder(variable_name="messages"),
+        ]
+    )
+    partial_prompt = prompt.partial(system_prompt=Prompts.SYSTEM)
+    llm = ChatOpenAI(model=os.getenv("OPENAI_MODEL_NAME", "gpt-4o"), temperature=1.0)
+    generate = partial_prompt | llm
+
+    try:
+        llm_response = generate.invoke({"messages": state["messages"]})
+        return {"messages": [llm_response]}
+    except RuntimeError as e:
+        logger.error("Error in generation_node: %s", e)
+        return {"messages": []}
+
+
+def build_graph() -> Any:
+    """
+    Constructs the state graph for handling requests.
+
+    Returns:
+        StateGraph: A compiled LangGraph state graph.
+    """
+    builder = StateGraph(GraphState)
+    builder.add_node("llm_node", llm_node)
+    builder.add_node("end_node", end_node)
+    builder.add_edge(START, "llm_node")
+    builder.add_edge("llm_node", "end_node")
+    builder.add_edge("end_node", END)
+    return builder.compile()
+
+
+@traceable
+def invoke_graph(
+    messages: List[Dict[str, str]], graph: Optional[Any] = None
+) -> Optional[dict[Any, Any] | list[dict[Any, Any]]]:
+    """
+    Invokes the graph with the given messages and safely extracts the last AI-generated message.
+
+    - Logs errors if keys or indices are missing.
+    - Ensures the graph is initialized if not provided.
+    - Returns a meaningful response even if an error occurs.
+
+    :param messages: A list of message dictionaries.
+    :param graph: An optional graph object to use; will be built if not provided.
+    :return: The list of all messages returned by the graph
+    """
+    inputs = {"messages": messages}
+    logger.debug({"event": "invoking_graph", "inputs": inputs})
+
+    try:
+        if not graph:
+            graph = build_graph()
+
+        result = graph.invoke(inputs)
+
+        if not isinstance(result, dict):
+            raise TypeError(
+                f"Graph invocation returned non-dict result: {type(result)}"
+            )
+
+        messages_list = convert_to_openai_messages(result.get("messages", []))
+        if not isinstance(messages_list, list) or not messages_list:
+            raise ValueError("Graph result does not contain a valid 'messages' list.")
+
+        last_message = messages_list[-1]
+        if not isinstance(last_message, dict) or "content" not in last_message:
+            raise KeyError(f"Last message does not contain 'content': {last_message}")
+
+        ai_message_content = last_message["content"]
+        logger.info("AI message content: %s", ai_message_content)
+        return messages_list
+
+    except Exception as e:
+        logger.error("Error invoking graph: %s", e, exc_info=True)
+        messages.append({"role": "assistant", "content": str(e)})
+        return messages
+
+
+def main():
+    """
+    Main function to initialize the environment, build the graph, and invoke it.
+    """
+    # Initialize logger
+    load_dotenv(override=True)
+    graph = build_graph()
+    inputs = {"messages": [HumanMessage(content="Write a story about a cat")]}
+    logger.info({"event": "invoking_graph", "inputs": inputs})
+    result = graph.invoke(inputs)
+    logger.info({"event": "final_result", "result": result})
+
+
+# Main execution
+if __name__ == "__main__":
+    invoke_graph([{"role": "user", "content": "write a story about a cat"}])
+    # main()
+
+
+
+================================================
+FILE: remote_agent_agp/server/rest/agent/prompts.py
+================================================
+class Prompts:
+
+    SYSTEM = """
+You are an AI language assistant designed to execute tasks with precision and attention to detail. Your primary objective is to follow the user's instructions thoroughly and exactly as specified, leaving no detail unaddressed.
+
+Guidelines:
+
+- **Carefully Read Instructions:** Before starting any task, read all user instructions thoroughly to ensure complete understanding.
+
+- **Be Thorough:** Ensure that all elements of the task are completed fully. If the task involves processing multiple items (e.g., a list of items), process each item individually, even if it requires multiple iterations
+
+- **Handle Limitations Proactively:** If you encounter any limitations (such as processing limits), implement solutions to ensure all items are processed.
+
+- **Do Not Assume or Simplify:** Avoid making assumptions or simplifying tasks unless explicitly instructed by the user.
+
+- **Maintain Professionalism:** Keep your language professional and focused, aiming to deliver exactly what the user has requested.
+
+"""
+
+
+
+================================================
+FILE: remote_agent_agp/server/rest/api/__init__.py
+================================================
+
+
+
+================================================
+FILE: remote_agent_agp/server/rest/api/routes/__init__.py
+================================================
+
+
+
+================================================
+FILE: remote_agent_agp/server/rest/api/routes/stateless_runs.py
+================================================
+# generated by fastapi-codegen:
+#   filename:  openapi.json
+
+from __future__ import annotations
+
+import logging
+
+import langsmith as ls
+from fastapi import APIRouter, HTTPException, Request, status
+from fastapi.responses import JSONResponse
+
+from ...agent.lg import invoke_graph
+from ...models.models import Any, ErrorResponse, RunCreateStateless, Union
+
+router = APIRouter(tags=["Stateless Runs"])
+logger = logging.getLogger(__name__)  # This will be "app.api.routes.<name>"
+
+
+@ls.traceable(
+    run_type="tool",
+    name="Stateless Run",
+    tags=["rest", "server", "post", "stateless", "run"],
+)
+def run_stateless_runs_post(body: RunCreateStateless) -> Union[Any, ErrorResponse]:
+    """
+    Create Background Run
+    """
+    try:
+        # Convert the validated Pydantic model to a dictionary.
+        # Using model_dump() is recommended in Pydantic v2 over the deprecated dict() method.
+        payload = body.model_dump()
+        logging.debug("Decoded payload: %s", payload)
+
+        # Extract assistant_id from the payload
+        agent_id = payload.get("agent_id")
+        logging.debug("Agent id: %s", agent_id)
+
+        # Validate that the assistant_id is not empty.
+        if not payload.get("agent_id"):
+            msg = "agent_id is required and cannot be empty."
+            logging.error(msg)
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=msg,
+            )
+
+        message_id = ""
+        # Validate the config section: ensure that config.tags is a non-empty list.
+        if (metadata := payload.get("metadata", None)) is not None:
+            message_id = metadata.get("id")
+
+        # -----------------------------------------------
+        # Extract the human input content from the payload.
+        # We expect the content to be located at: payload["input"]["messages"][0]["content"]
+        # -----------------------------------------------
+
+        # Retrieve the 'input' field and ensure it is a dictionary.
+        input_field = payload.get("input")
+        if not isinstance(input_field, dict):
+            raise ValueError("The 'input' field should be a dictionary.")
+
+        # Retrieve the 'messages' list from the 'input' dictionary.
+        messages = input_field.get("messages")
+        if not isinstance(messages, list) or not messages:
+            raise ValueError("The 'input.messages' field should be a non-empty list.")
+
+        # Access the first message in the list.
+        last_message = messages[-1]
+        if not isinstance(last_message, dict):
+            raise ValueError(
+                "The first element in 'input.messages' should be a dictionary."
+            )
+
+        # Extract the 'content' from the first message.
+        human_input_content = last_message.get("content")
+        if human_input_content is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="Missing 'content' in the first message of 'input.messages'.",
+            )
+
+    except HTTPException as http_exc:
+        # Log HTTP exceptions and re-raise them so that FastAPI can generate the appropriate response.
+        logging.error("HTTP error during run processing: %s", http_exc.detail)
+        raise http_exc
+
+    except Exception as exc:
+        # Catch unexpected exceptions, log them, and return a 500 Internal Server Error.
+        logging.exception("An unexpected error occurred while processing the run.")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=exc,
+        ) from exc
+
+    graph_result = invoke_graph(messages)
+
+    messages = {"messages": graph_result}
+
+    # payload to send to autogen server at /runs endpoint
+    payload = {
+        "agent_id": agent_id,
+        "output": messages,
+        "model": "gpt-4o",
+        "metadata": {"id": message_id},
+    }
+
+    logger.info("Payload: %s", payload)
+
+    # In a real application, additional processing (like starting a background task) would occur here.
+    return JSONResponse(content=payload, status_code=status.HTTP_200_OK)
+
+
+@router.post(
+    "/runs",
+    response_model=Any,
+    responses={
+        "404": {"model": ErrorResponse},
+        "409": {"model": ErrorResponse},
+        "422": {"model": ErrorResponse},
+    },
+    tags=["Stateless Runs"],
+)
+def middlware_run_stateless_runs_post(
+    body: RunCreateStateless, request: Request
+) -> Union[Any, ErrorResponse]:
+    """
+    Create Background Run
+    """
+    # Access headers from the request object
+    headers = request.headers
+    # Log headers if needed
+    logger.debug("Request headers: %s", dict(headers))
+    return run_stateless_runs_post(body, langsmith_extra={"parent": request.headers})
+
+
+@router.post(
+    "/runs/stream",
+    response_model=str,
+    responses={
+        "404": {"model": ErrorResponse},
+        "409": {"model": ErrorResponse},
+        "422": {"model": ErrorResponse},
+    },
+    tags=["Stateless Runs"],
+)
+def stream_run_stateless_runs_stream_post(
+    body: RunCreateStateless,
+) -> Union[str, ErrorResponse]:
+    """
+    Create Run, Stream Output
+    """
+    pass
+
+
+@router.post(
+    "/runs/wait",
+    response_model=Any,
+    responses={
+        "404": {"model": ErrorResponse},
+        "409": {"model": ErrorResponse},
+        "422": {"model": ErrorResponse},
+    },
+    tags=["Stateless Runs"],
+)
+def wait_run_stateless_runs_wait_post(
+    body: RunCreateStateless,
+) -> Union[Any, ErrorResponse]:
+    """
+    Create Run, Wait for Output
+    """
+    pass
+
+
+
+================================================
+FILE: remote_agent_agp/server/rest/core/__init__.py
+================================================
+
+
+
+================================================
+FILE: remote_agent_agp/server/rest/core/config.py
+================================================
+"""
+Configuration module for the Remote Graphs Application.
+This module defines the Settings class, which utilizes BaseSettings from pydantic_settings to manage
+configuration parameters for the application. The settings include:
+- API_V1_STR: The base URL prefix for version 1 of the API.
+- ENVIRONMENT: The current runtime environment, restricted to "local", "staging", or "production".
+- PROJECT_NAME: The name of the project.
+- DESCRIPTION: A brief summary of the project's purpose.
+A global instance of the Settings class is instantiated as `settings` to provide application-wide access
+to these configuration values.
+"""
+
+from typing import Literal
+from pydantic_settings import BaseSettings
+
+
+class Settings(BaseSettings):
+    """Configuration settings for the Remote Graphs Application."""
+
+    API_V1_STR: str = "/api/v1"
+    ENVIRONMENT: Literal["local", "staging", "production"] = "local"
+
+    PROJECT_NAME: str = "Remote Graphs Application"
+    DESCRIPTION: str = "Application to demonstrate remote graphs"
+
+
+settings = Settings()  # type: ignore
+
+
+
+================================================
+FILE: remote_agent_agp/server/rest/core/logging_config.py
+================================================
+import logging
+import os
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
+
+from pythonjsonlogger.json import JsonFormatter
+
+
+def get_log_dir() -> Path:
+    """Returns the log directory path and ensures it exists."""
+    log_dir = Path.cwd() / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return log_dir
+
+
+def get_log_level() -> str:
+    """Retrieves the log level from environment variables (defaults to INFO)."""
+    return os.getenv("LOG_LEVEL", "INFO").upper()
+
+
+def configure_logging() -> logging.Logger:
+    """Configures structured JSON logging with rotation."""
+    log_dir = get_log_dir()
+    log_file = log_dir / "ap_remote_agent.log"
+    log_level = get_log_level()
+
+    logger = logging.getLogger()
+    logger.setLevel(log_level)
+
+    formatter = JsonFormatter(
+        "{asctime} {levelname} {pathname} {module} {funcName} {message} {exc_info}",
+        style="{",
+    )
+
+    # ✅ Log to Console
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+    logger.addHandler(stream_handler)
+
+    # ✅ Log to File with Rotation
+    file_handler = RotatingFileHandler(
+        log_file, mode="a", maxBytes=5 * 1024 * 1024, backupCount=5, encoding="utf-8"
+    )
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+
+    logger.info(
+        "Logging initialized with rotation.", extra={"log_destination": str(log_file)}
+    )
+
+    return logger
+
+
+
+================================================
+FILE: remote_agent_agp/server/rest/models/__init__.py
+================================================
+
+
+
+================================================
+FILE: remote_agent_agp/server/rest/models/models.py
+================================================
+# generated by fastapi-codegen:
+#   filename:  ../openapi.json
+
+# From https://github.com/langchain-ai/agent-protocol/commit/459bc5ad8b5522b6995d43c5bf655925407784ca
+
+from __future__ import annotations
+
+from enum import Enum
+from typing import Any, Dict, List, Literal, Optional, Union
+from uuid import UUID
+
+from pydantic import (AnyUrl, AwareDatetime, BaseModel, ConfigDict, Field,
+                      RootModel, conint)
+
+
+class Agent(BaseModel):
+    agent_id: str = Field(..., description="The ID of the agent.", title="Agent Id")
+    name: str = Field(..., description="The name of the agent", title="Agent Name")
+    description: Optional[str] = Field(
+        None, description="The description of the agent.", title="Description"
+    )
+    metadata: Optional[Dict[str, Any]] = Field(
+        None, description="The agent metadata.", title="Metadata"
+    )
+
+
+class AgentSchemas(BaseModel):
+    agent_id: str = Field(..., description="The ID of the agent.", title="Agent Id")
+    input_schema: Dict[str, Any] = Field(
+        ...,
+        description="The schema for the agent input. In JSON Schema format.",
+        title="Input Schema",
+    )
+    output_schema: Dict[str, Any] = Field(
+        ...,
+        description="The schema for the agent output. In JSON Schema format.",
+        title="Output Schema",
+    )
+    state_schema: Optional[Dict[str, Any]] = Field(
+        None,
+        description="The schema for the agent's internal state. In JSON Schema format.",
+        title="State Schema",
+    )
+    config_schema: Optional[Dict[str, Any]] = Field(
+        None,
+        description="The schema for the agent config. In JSON Schema format.",
+        title="Config Schema",
+    )
+
+
+class Status(Enum):
+    pending = "pending"
+    error = "error"
+    success = "success"
+    timeout = "timeout"
+    interrupted = "interrupted"
+
+
+class MultitaskStrategy(Enum):
+    reject = "reject"
+    rollback = "rollback"
+    interrupt = "interrupt"
+    enqueue = "enqueue"
+
+
+class Run(BaseModel):
+    run_id: UUID = Field(..., description="The ID of the run.", title="Run Id")
+    thread_id: UUID = Field(..., description="The ID of the thread.", title="Thread Id")
+    agent_id: Optional[str] = Field(
+        None, description="The agent that was used for this run.", title="Agent Id"
+    )
+    created_at: AwareDatetime = Field(
+        ..., description="The time the run was created.", title="Created At"
+    )
+    updated_at: AwareDatetime = Field(
+        ..., description="The last time the run was updated.", title="Updated At"
+    )
+    status: Status = Field(
+        ...,
+        description="The status of the run. One of 'pending', 'error', 'success', 'timeout', 'interrupted'.",
+        title="Status",
+    )
+    metadata: Dict[str, Any] = Field(
+        ..., description="The run metadata.", title="Metadata"
+    )
+    kwargs: Dict[str, Any] = Field(..., title="Kwargs")
+    multitask_strategy: MultitaskStrategy = Field(
+        ...,
+        description="Strategy to handle concurrent runs on the same thread.",
+        title="Multitask Strategy",
+    )
+
+
+class Config(BaseModel):
+    tags: Optional[List[str]] = Field(None, title="Tags")
+    recursion_limit: Optional[int] = Field(None, title="Recursion Limit")
+    configurable: Optional[Dict[str, Any]] = Field(None, title="Configurable")
+
+
+class StreamModeEnum(Enum):
+    values = "values"
+    messages_tuple = "messages-tuple"
+    updates = "updates"
+    debug = "debug"
+    custom = "custom"
+
+
+class StreamMode(Enum):
+    values = "values"
+    messages_tuple = "messages-tuple"
+    updates = "updates"
+    debug = "debug"
+    custom = "custom"
+
+
+class OnDisconnect(Enum):
+    cancel = "cancel"
+    continue_ = "continue"
+
+
+class IfNotExists(Enum):
+    create = "create"
+    reject = "reject"
+
+
+class RunCreateStateful(BaseModel):
+    agent_id: Optional[str] = Field(
+        None,
+        description="The agent ID to run. If not provided will use the default agent for this service.",
+        title="Agent Id",
+    )
+    input: Optional[Union[Dict[str, Any], List, str, float, bool]] = Field(
+        None, description="The input to the graph.", title="Input"
+    )
+    metadata: Optional[Dict[str, Any]] = Field(
+        None, description="Metadata to assign to the run.", title="Metadata"
+    )
+    config: Optional[Config] = Field(
+        None, description="The configuration for the agent.", title="Config"
+    )
+    webhook: Optional[AnyUrl] = Field(
+        None, description="Webhook to call after run finishes.", title="Webhook"
+    )
+    stream_mode: Optional[Union[List[StreamModeEnum], StreamMode]] = Field(
+        ["values"], description="The stream mode(s) to use.", title="Stream Mode"
+    )
+    stream_subgraphs: Optional[bool] = Field(
+        False,
+        description="Whether to stream output from subgraphs.",
+        title="Stream Subgraphs",
+    )
+    on_disconnect: Optional[OnDisconnect] = Field(
+        "cancel",
+        description="The disconnect mode to use. Must be one of 'cancel' or 'continue'.",
+        title="On Disconnect",
+    )
+    multitask_strategy: Optional[MultitaskStrategy] = Field(
+        "reject",
+        description="Multitask strategy to use. Must be one of 'reject', 'interrupt', 'rollback', or 'enqueue'.",
+        title="Multitask Strategy",
+    )
+    if_not_exists: Optional[IfNotExists] = Field(
+        "reject",
+        description="How to handle missing thread. Must be either 'reject' (raise error if missing), or 'create' (create new thread).",
+        title="If Not Exists",
+    )
+    after_seconds: Optional[int] = Field(
+        None,
+        description="The number of seconds to wait before starting the run. Use to schedule future runs.",
+        title="After Seconds",
+    )
+
+
+class OnCompletion(Enum):
+    delete = "delete"
+    keep = "keep"
+
+
+class RunCreateStateless(BaseModel):
+    agent_id: Optional[str] = Field(
+        None,
+        description="The agent ID to run. If not provided will use the default agent for this service.",
+        title="Agent Id",
+    )
+    input: Optional[Union[Dict[str, Any], List, str, float, bool]] = Field(
+        None, description="The input to the graph.", title="Input"
+    )
+    metadata: Optional[Dict[str, Any]] = Field(
+        None, description="Metadata to assign to the run.", title="Metadata"
+    )
+    config: Optional[Config] = Field(
+        None, description="The configuration for the agent.", title="Config"
+    )
+    webhook: Optional[AnyUrl] = Field(
+        None, description="Webhook to call after run finishes.", title="Webhook"
+    )
+    stream_mode: Optional[Union[List[StreamModeEnum], StreamMode]] = Field(
+        ["values"], description="The stream mode(s) to use.", title="Stream Mode"
+    )
+    on_completion: Optional[OnCompletion] = Field(
+        "delete",
+        description="Whether to delete or keep the thread created for a stateless run. Must be one of 'delete' or 'keep'.",
+        title="On Completion",
+    )
+    on_disconnect: Optional[OnDisconnect] = Field(
+        "cancel",
+        description="The disconnect mode to use. Must be one of 'cancel' or 'continue'.",
+        title="On Disconnect",
+    )
+    multitask_strategy: Optional[MultitaskStrategy] = Field(
+        "reject",
+        description="Multitask strategy to use. Must be one of 'reject', 'interrupt', 'rollback', or 'enqueue'.",
+        title="Multitask Strategy",
+    )
+    after_seconds: Optional[int] = Field(
+        None,
+        description="The number of seconds to wait before starting the run. Use to schedule future runs.",
+        title="After Seconds",
+    )
+
+
+class Status1(Enum):
+    idle = "idle"
+    busy = "busy"
+    interrupted = "interrupted"
+    error = "error"
+
+
+class ThreadSearchRequest(BaseModel):
+    metadata: Optional[Dict[str, Any]] = Field(
+        None, description="Thread metadata to filter on.", title="Metadata"
+    )
+    values: Optional[Dict[str, Any]] = Field(
+        None, description="State values to filter on.", title="Values"
+    )
+    status: Optional[Status1] = Field(
+        None, description="Thread status to filter on.", title="Status"
+    )
+    limit: Optional[conint(ge=1, le=1000)] = Field(
+        10, description="Maximum number to return.", title="Limit"
+    )
+    offset: Optional[conint(ge=0)] = Field(
+        0, description="Offset to start from.", title="Offset"
+    )
+
+
+class ThreadCheckpoint(BaseModel):
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    checkpoint_id: UUID = Field(
+        ..., description="The ID of the checkpoint.", title="Checkpoint Id"
+    )
+
+
+class IfExists(Enum):
+    raise_ = "raise"
+    do_nothing = "do_nothing"
+
+
+class ThreadCreate(BaseModel):
+    thread_id: Optional[UUID] = Field(
+        None,
+        description="The ID of the thread. If not provided, a random UUID will be generated.",
+        title="Thread Id",
+    )
+    metadata: Optional[Dict[str, Any]] = Field(
+        None, description="Metadata to add to thread.", title="Metadata"
+    )
+    if_exists: Optional[IfExists] = Field(
+        "raise",
+        description="How to handle duplicate creation. Must be either 'raise' (raise error if duplicate), or 'do_nothing' (return existing thread).",
+        title="If Exists",
+    )
+
+
+class StorePutRequest(BaseModel):
+    namespace: List[str] = Field(
+        ...,
+        description="A list of strings representing the namespace path.",
+        title="Namespace",
+    )
+    key: str = Field(
+        ...,
+        description="The unique identifier for the item within the namespace.",
+        title="Key",
+    )
+    value: Dict[str, Any] = Field(
+        ..., description="A dictionary containing the item's data.", title="Value"
+    )
+
+
+class StoreDeleteRequest(BaseModel):
+    namespace: Optional[List[str]] = Field(
+        None,
+        description="A list of strings representing the namespace path.",
+        title="Namespace",
+    )
+    key: str = Field(
+        ..., description="The unique identifier for the item.", title="Key"
+    )
+
+
+class StoreSearchRequest(BaseModel):
+    namespace_prefix: Optional[List[str]] = Field(
+        None,
+        description="List of strings representing the namespace prefix.",
+        title="Namespace Prefix",
+    )
+    filter: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Optional dictionary of key-value pairs to filter results.",
+        title="Filter",
+    )
+    limit: Optional[int] = Field(
+        10,
+        description="Maximum number of items to return (default is 10).",
+        title="Limit",
+    )
+    offset: Optional[int] = Field(
+        0,
+        description="Number of items to skip before returning results (default is 0).",
+        title="Offset",
+    )
+
+
+class StoreListNamespacesRequest(BaseModel):
+    prefix: Optional[List[str]] = Field(
+        None,
+        description="Optional list of strings representing the prefix to filter namespaces.",
+        title="Prefix",
+    )
+    suffix: Optional[List[str]] = Field(
+        None,
+        description="Optional list of strings representing the suffix to filter namespaces.",
+        title="Suffix",
+    )
+    max_depth: Optional[int] = Field(
+        None,
+        description="Optional integer specifying the maximum depth of namespaces to return.",
+        title="Max Depth",
+    )
+    limit: Optional[int] = Field(
+        100,
+        description="Maximum number of namespaces to return (default is 100).",
+        title="Limit",
+    )
+    offset: Optional[int] = Field(
+        0,
+        description="Number of namespaces to skip before returning results (default is 0).",
+        title="Offset",
+    )
+
+
+class Item(BaseModel):
+    namespace: List[str] = Field(
+        ...,
+        description="The namespace of the item. A namespace is analogous to a document's directory.",
+    )
+    key: str = Field(
+        ...,
+        description="The unique identifier of the item within its namespace. In general, keys needn't be globally unique.",
+    )
+    value: Dict[str, Any] = Field(
+        ..., description="The value stored in the item. This is the document itself."
+    )
+    created_at: AwareDatetime = Field(
+        ..., description="The timestamp when the item was created."
+    )
+    updated_at: AwareDatetime = Field(
+        ..., description="The timestamp when the item was last updated."
+    )
+
+
+class Content(BaseModel):
+    text: str
+    type: Literal["text"]
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class Content1(BaseModel):
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    type: str
+    metadata: Optional[Dict[str, Any]] = None
+
+
+class Message(BaseModel):
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    role: str = Field(..., description="The role of the message.", title="Role")
+    content: Union[str, List[Union[Content, Content1]]] = Field(
+        ..., description="The content of the message.", title="Content"
+    )
+    id: Optional[str] = Field(None, description="The ID of the message.", title="Id")
+    metadata: Optional[Dict[str, Any]] = Field(
+        None, description="The metadata of the message.", title="Metadata"
+    )
+
+
+class SearchItemsResponse(BaseModel):
+    items: List[Item]
+
+
+class ListNamespaceResponse(RootModel[List[List[str]]]):
+    root: List[List[str]]
+
+
+class ErrorResponse(RootModel[str]):
+    root: str = Field(
+        ..., description="Error message returned from the server", title="ErrorResponse"
+    )
+
+
+class AgentsSearchPostRequest(BaseModel):
+    name: Optional[str] = Field(None, description="Name of the agent to search.")
+    metadata: Optional[Dict[str, Any]] = Field(
+        None, description="Metadata of the agent to search."
+    )
+    limit: Optional[conint(ge=1, le=1000)] = Field(
+        10, description="Maximum number to return.", title="Limit"
+    )
+    offset: Optional[conint(ge=0)] = Field(
+        0, description="Offset to start from.", title="Offset"
+    )
+
+
+class AgentsSearchPostResponse(RootModel[List[Agent]]):
+    root: List[Agent] = Field(..., title="Response List Agents")
+
+
+class ThreadsThreadIdRunsGetResponse(RootModel[List[Run]]):
+    root: List[Run]
+
+
+class Action(Enum):
+    interrupt = "interrupt"
+    rollback = "rollback"
+
+
+class Namespace(RootModel[List[str]]):
+    root: List[str]
+
+
+class RunWaitResponse(BaseModel):
+    run: Optional[Run] = Field(None, description="The run information.", title="Run")
+    values: Optional[Dict[str, Any]] = Field(
+        None, description="The values returned by the run.", title="Values"
+    )
+    messages: Optional[List[Message]] = Field(
+        None, description="The messages returned by the run.", title="Messages"
+    )
+
+
+class Thread(BaseModel):
+    thread_id: UUID = Field(..., description="The ID of the thread.", title="Thread Id")
+    created_at: AwareDatetime = Field(
+        ..., description="The time the thread was created.", title="Created At"
+    )
+    updated_at: AwareDatetime = Field(
+        ..., description="The last time the thread was updated.", title="Updated At"
+    )
+    metadata: Dict[str, Any] = Field(
+        ..., description="The thread metadata.", title="Metadata"
+    )
+    status: Status1 = Field(
+        ..., description="The status of the thread.", title="Status"
+    )
+    values: Optional[Dict[str, Any]] = Field(
+        None, description="The current state of the thread.", title="Values"
+    )
+    messages: Optional[List[Message]] = Field(
+        None,
+        description="The current Messages of the thread. If messages are contained in Thread.values, implementations should remove them from values when returning messages. When this key isn't present it means the thread/agent doesn't support messages.",
+        title="Messages",
+    )
+
+
+class ThreadState(BaseModel):
+    checkpoint: ThreadCheckpoint = Field(
+        ..., description="The identifier for this checkpoint.", title="Checkpoint"
+    )
+    values: Dict[str, Any] = Field(
+        ..., description="The current state of the thread.", title="Values"
+    )
+    messages: Optional[List[Message]] = Field(
+        None,
+        description="The current messages of the thread. If messages are contained in Thread.values, implementations should remove them from values when returning messages. When this key isn't present it means the thread/agent doesn't support messages.",
+        title="Messages",
+    )
+    metadata: Optional[Dict[str, Any]] = Field(
+        None, description="The checkpoint metadata.", title="Metadata"
+    )
+
+
+class ThreadPatch(BaseModel):
+    checkpoint: Optional[ThreadCheckpoint] = Field(
+        None,
+        description="The identifier of the checkpoint to branch from. Ignored for metadata-only patches. If not provided, defaults to the latest checkpoint.",
+        title="Checkpoint",
+    )
+    metadata: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Metadata to merge with existing thread metadata.",
+        title="Metadata",
+    )
+    values: Optional[Dict[str, Any]] = Field(
+        None, description="Values to merge with existing thread values.", title="Values"
+    )
+    messages: Optional[List[Message]] = Field(
+        None,
+        description="The current Messages of the thread. If messages are contained in Thread.values, implementations should remove them from values when returning messages. When this key isn't present it means the thread/agent doesn't support messages.",
+        title="Messages",
+    )
+
+
+class ThreadsSearchPostResponse(RootModel[List[Thread]]):
+    root: List[Thread] = Field(..., title="Response Search Threads Threads Search Post")
+
+
+class ThreadsThreadIdHistoryGetResponse(RootModel[List[ThreadState]]):
+    root: List[ThreadState]
+
+

@@ -1,0 +1,1683 @@
+Directory structure:
+└── memory/
+    ├── add-summary-conversation-history.ipynb
+    ├── delete-messages.ipynb
+    ├── manage-conversation-history.ipynb
+    └── semantic-search.ipynb
+
+================================================
+FILE: examples/memory/add-summary-conversation-history.ipynb
+================================================
+# Jupyter notebook converted to Python script.
+
+"""
+# How to add summary of the conversation history
+
+One of the most common use cases for persistence is to use it to keep track of conversation history. This is great - it makes it easy to continue conversations. As conversations get longer and longer, however, this conversation history can build up and take up more and more of the context window. This can often be undesirable as it leads to more expensive and longer calls to the LLM, and potentially ones that error. One way to work around that is to create a summary of the conversation to date, and use that with the past N messages. This guide will go through an example of how to do that.
+
+This will involve a few steps:
+
+- Check if the conversation is too long (can be done by checking number of messages or length of messages)
+- If yes, the create summary (will need a prompt for this)
+- Then remove all except the last N messages
+
+A big part of this is deleting old messages. For an in depth guide on how to do that, see [this guide](../delete-messages)
+"""
+
+"""
+## Setup
+
+First, let's set up the packages we're going to want to use
+"""
+
+%%capture --no-stderr
+%pip install --quiet -U langgraph langchain_anthropic
+
+"""
+Next, we need to set API keys for Anthropic (the LLM we will use)
+"""
+
+import getpass
+import os
+
+
+def _set_env(var: str):
+    if not os.environ.get(var):
+        os.environ[var] = getpass.getpass(f"{var}: ")
+
+
+_set_env("ANTHROPIC_API_KEY")
+# Output:
+#   ANTHROPIC_API_KEY:  ········
+
+
+"""
+<div class="admonition tip">
+    <p class="admonition-title">Set up <a href="https://smith.langchain.com">LangSmith</a> for LangGraph development</p>
+    <p style="padding-top: 5px;">
+        Sign up for LangSmith to quickly spot issues and improve the performance of your LangGraph projects. LangSmith lets you use trace data to debug, test, and monitor your LLM apps built with LangGraph — read more about how to get started <a href="https://docs.smith.langchain.com">here</a>. 
+    </p>
+</div>
+"""
+
+"""
+## Build the chatbot
+
+Let's now build the chatbot.
+"""
+
+from typing import Literal
+
+from langchain_anthropic import ChatAnthropic
+from langchain_core.messages import SystemMessage, RemoveMessage, HumanMessage
+from langgraph.checkpoint.redis import RedisSaver
+from langgraph.graph import MessagesState, StateGraph, START, END
+
+# Set up Redis connection for checkpointer
+REDIS_URI = "redis://redis:6379"
+memory = None
+with RedisSaver.from_conn_string(REDIS_URI) as cp:
+    cp.setup()
+    memory = cp
+
+
+# We will add a `summary` attribute (in addition to `messages` key,
+# which MessagesState already has)
+class State(MessagesState):
+    summary: str
+
+
+# We will use this model for both the conversation and the summarization
+model = ChatAnthropic(model_name="claude-3-haiku-20240307")
+
+
+# Define the logic to call the model
+def call_model(state: State):
+    # If a summary exists, we add this in as a system message
+    summary = state.get("summary", "")
+    if summary:
+        system_message = f"Summary of conversation earlier: {summary}"
+        messages = [SystemMessage(content=system_message)] + state["messages"]
+    else:
+        messages = state["messages"]
+    response = model.invoke(messages)
+    # We return a list, because this will get added to the existing list
+    return {"messages": [response]}
+
+
+# We now define the logic for determining whether to end or summarize the conversation
+def should_continue(state: State) -> Literal["summarize_conversation", END]:
+    """Return the next node to execute."""
+    messages = state["messages"]
+    # If there are more than six messages, then we summarize the conversation
+    if len(messages) > 6:
+        return "summarize_conversation"
+    # Otherwise we can just end
+    return END
+
+
+def summarize_conversation(state: State):
+    # First, we summarize the conversation
+    summary = state.get("summary", "")
+    if summary:
+        # If a summary already exists, we use a different system prompt
+        # to summarize it than if one didn't
+        summary_message = (
+            f"This is summary of the conversation to date: {summary}\n\n"
+            "Extend the summary by taking into account the new messages above:"
+        )
+    else:
+        summary_message = "Create a summary of the conversation above:"
+
+    messages = state["messages"] + [HumanMessage(content=summary_message)]
+    response = model.invoke(messages)
+    # We now need to delete messages that we no longer want to show up
+    # I will delete all but the last two messages, but you can change this
+    delete_messages = [RemoveMessage(id=m.id) for m in state["messages"][:-2]]
+    return {"summary": response.content, "messages": delete_messages}
+
+
+# Define a new graph
+workflow = StateGraph(State)
+
+# Define the conversation node and the summarize node
+workflow.add_node("conversation", call_model)
+workflow.add_node(summarize_conversation)
+
+# Set the entrypoint as conversation
+workflow.add_edge(START, "conversation")
+
+# We now add a conditional edge
+workflow.add_conditional_edges(
+    # First, we define the start node. We use `conversation`.
+    # This means these are the edges taken after the `conversation` node is called.
+    "conversation",
+    # Next, we pass in the function that will determine which node is called next.
+    should_continue,
+)
+
+# We now add a normal edge from `summarize_conversation` to END.
+# This means that after `summarize_conversation` is called, we end.
+workflow.add_edge("summarize_conversation", END)
+
+# Finally, we compile it!
+app = workflow.compile(checkpointer=memory)
+
+"""
+## Using the graph
+"""
+
+def print_update(update):
+    for k, v in update.items():
+        for m in v["messages"]:
+            m.pretty_print()
+        if "summary" in v:
+            print(v["summary"])
+
+from langchain_core.messages import HumanMessage
+
+config = {"configurable": {"thread_id": "4"}}
+input_message = HumanMessage(content="hi! I'm bob")
+input_message.pretty_print()
+for event in app.stream({"messages": [input_message]}, config, stream_mode="updates"):
+    print_update(event)
+
+input_message = HumanMessage(content="what's my name?")
+input_message.pretty_print()
+for event in app.stream({"messages": [input_message]}, config, stream_mode="updates"):
+    print_update(event)
+
+input_message = HumanMessage(content="i like the celtics!")
+input_message.pretty_print()
+for event in app.stream({"messages": [input_message]}, config, stream_mode="updates"):
+    print_update(event)
+# Output:
+#   ================================[1m Human Message [0m=================================
+
+#   
+
+#   hi! I'm bob
+
+#   ==================================[1m Ai Message [0m==================================
+
+#   
+
+#   Hi Bob! It's nice to meet you. I'm Claude, an AI assistant created by Anthropic. I'm here to help out however I can. Please let me know if you have any questions or if there's anything I can assist you with.
+
+#   ================================[1m Human Message [0m=================================
+
+#   
+
+#   what's my name?
+
+#   ==================================[1m Ai Message [0m==================================
+
+#   
+
+#   You said your name is Bob, so that is the name I have for you.
+
+#   ================================[1m Human Message [0m=================================
+
+#   
+
+#   i like the celtics!
+
+#   ==================================[1m Ai Message [0m==================================
+
+#   
+
+#   That's great that you're a Celtics fan! The Celtics are a storied NBA franchise with a rich history of success. Some key things about the Celtics:
+
+#   
+
+#   - They have won 17 NBA championships, the most of any team. Their most recent title was in 2008.
+
+#   
+
+#   - They have had many all-time great players wear the Celtics jersey, including Bill Russell, Larry Bird, Paul Pierce, and more.
+
+#   
+
+#   - The Celtics-Lakers rivalry is one of the most intense in professional sports, with the two teams meeting in the Finals 12 times.
+
+#   
+
+#   - The Celtics play their home games at the TD Garden in Boston, which has a fantastic game-day atmosphere.
+
+#   
+
+#   As a fellow Celtics fan, I always enjoy discussing the team and their journey. Let me know if you have any other thoughts or opinions on the Celtics that you'd like to share!
+
+
+"""
+We can see that so far no summarization has happened - this is because there are only six messages in the list.
+"""
+
+values = app.get_state(config).values
+values
+# Output:
+#   {'messages': [HumanMessage(content="hi! I'm bob", additional_kwargs={}, response_metadata={}, id='6bb57452-d968-4ca2-b641-a72a09b7dfbf'),
+
+#     AIMessage(content="Hi Bob! It's nice to meet you. I'm Claude, an AI assistant created by Anthropic. I'm here to help out however I can. Please let me know if you have any questions or if there's anything I can assist you with.", additional_kwargs={}, response_metadata={'id': 'msg_011jBGcbsvqnA6gCXExmN1a6', 'model': 'claude-3-haiku-20240307', 'stop_reason': 'end_turn', 'stop_sequence': None, 'usage': {'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0, 'input_tokens': 12, 'output_tokens': 56}, 'model_name': 'claude-3-haiku-20240307'}, id='run-39f0f967-454c-4047-a3db-9196c041668b-0', usage_metadata={'input_tokens': 12, 'output_tokens': 56, 'total_tokens': 68, 'input_token_details': {'cache_creation': 0, 'cache_read': 0}}),
+
+#     HumanMessage(content="what's my name?", additional_kwargs={}, response_metadata={}, id='5fd5c63c-f680-45c9-ba74-ae36f0004ecd'),
+
+#     AIMessage(content='You said your name is Bob, so that is the name I have for you.', additional_kwargs={}, response_metadata={'id': 'msg_019gbVCckc8LDkDAK7n4w8SG', 'model': 'claude-3-haiku-20240307', 'stop_reason': 'end_turn', 'stop_sequence': None, 'usage': {'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0, 'input_tokens': 76, 'output_tokens': 20}, 'model_name': 'claude-3-haiku-20240307'}, id='run-11232468-dc34-4f32-84a5-34de7a82f147-0', usage_metadata={'input_tokens': 76, 'output_tokens': 20, 'total_tokens': 96, 'input_token_details': {'cache_creation': 0, 'cache_read': 0}}),
+
+#     HumanMessage(content='i like the celtics!', additional_kwargs={}, response_metadata={}, id='0d3a5506-f36e-4008-afa9-877abe188311'),
+
+#     AIMessage(content="That's great that you're a Celtics fan! The Celtics are a storied NBA franchise with a rich history of success. Some key things about the Celtics:\n\n- They have won 17 NBA championships, the most of any team. Their most recent title was in 2008.\n\n- They have had many all-time great players wear the Celtics jersey, including Bill Russell, Larry Bird, Paul Pierce, and more.\n\n- The Celtics-Lakers rivalry is one of the most intense in professional sports, with the two teams meeting in the Finals 12 times.\n\n- The Celtics play their home games at the TD Garden in Boston, which has a fantastic game-day atmosphere.\n\nAs a fellow Celtics fan, I always enjoy discussing the team and their journey. Let me know if you have any other thoughts or opinions on the Celtics that you'd like to share!", additional_kwargs={}, response_metadata={'id': 'msg_01EUNtTQZHcgyST7xhhGvWX8', 'model': 'claude-3-haiku-20240307', 'stop_reason': 'end_turn', 'stop_sequence': None, 'usage': {'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0, 'input_tokens': 105, 'output_tokens': 199}, 'model_name': 'claude-3-haiku-20240307'}, id='run-aacbc85e-471c-4834-9726-433328240953-0', usage_metadata={'input_tokens': 105, 'output_tokens': 199, 'total_tokens': 304, 'input_token_details': {'cache_creation': 0, 'cache_read': 0}})]}
+
+"""
+Now let's send another message in
+"""
+
+input_message = HumanMessage(content="i like how much they win")
+input_message.pretty_print()
+for event in app.stream({"messages": [input_message]}, config, stream_mode="updates"):
+    print_update(event)
+# Output:
+#   ================================[1m Human Message [0m=================================
+
+#   
+
+#   i like how much they win
+
+#   ==================================[1m Ai Message [0m==================================
+
+#   
+
+#   I agree, the Celtics' consistent winning over the decades is really impressive. A few reasons why the Celtics have been so successful:
+
+#   
+
+#   - Great coaching - They've had legendary coaches like Red Auerbach, Doc Rivers, and now Ime Udoka who have gotten the most out of their talented rosters.
+
+#   
+
+#   - Sustained excellence - Unlike some teams that have short windows of success, the Celtics have been a perennial contender for the majority of their history.
+
+#   
+
+#   - Ability to reload - Even when they lose star players, the Celtics have done a great job of rebuilding and restocking their roster to remain competitive.
+
+#   
+
+#   - Knack for developing talent - Players like Larry Bird, Kevin McHale, and others have blossomed into all-time greats under the Celtics' system.
+
+#   
+
+#   The Celtics' winning culture and pedigree as an organization is really admirable. It's no wonder they have such a passionate fan base like yourself who takes pride in their sustained success over the decades. It's fun to be a fan of a team that expects to win championships year in and year out.
+
+#   ================================[1m Remove Message [0m================================
+
+#   
+
+#   
+
+#   ================================[1m Remove Message [0m================================
+
+#   
+
+#   
+
+#   ================================[1m Remove Message [0m================================
+
+#   
+
+#   
+
+#   ================================[1m Remove Message [0m================================
+
+#   
+
+#   
+
+#   ================================[1m Remove Message [0m================================
+
+#   
+
+#   
+
+#   ================================[1m Remove Message [0m================================
+
+#   
+
+#   
+
+#   Sure, here's a summary of our conversation so far:
+
+#   
+
+#   The conversation began with me introducing myself as Claude, an AI assistant, and greeting the user who identified themselves as Bob. 
+
+#   
+
+#   Bob then expressed that he likes the Boston Celtics basketball team. I responded positively, noting the Celtics' impressive history of 17 NBA championships, their storied rivalry with the Lakers, and the great atmosphere at their home games.
+
+#   
+
+#   Bob said he likes how much the Celtics win, and I agreed, explaining some of the key reasons for the Celtics' sustained success over the decades - great coaching, the ability to reload and develop talent, and the team's winning culture and high expectations.
+
+#   
+
+#   Throughout the conversation, I tried to engage with Bob's interest in the Celtics, demonstrating my knowledge of the team's history and achievements while also inviting him to share more of his thoughts and opinions as a fan.
+
+
+"""
+If we check the state now, we can see that we have a summary of the conversation, as well as the last two messages
+"""
+
+values = app.get_state(config).values
+values
+# Output:
+#   {'messages': [HumanMessage(content='i like how much they win', additional_kwargs={}, response_metadata={}, id='26916ba3-a474-48ec-a3d2-0da1d3b9f433'),
+
+#     AIMessage(content="I agree, the Celtics' consistent winning over the decades is really impressive. A few reasons why the Celtics have been so successful:\n\n- Great coaching - They've had legendary coaches like Red Auerbach, Doc Rivers, and now Ime Udoka who have gotten the most out of their talented rosters.\n\n- Sustained excellence - Unlike some teams that have short windows of success, the Celtics have been a perennial contender for the majority of their history.\n\n- Ability to reload - Even when they lose star players, the Celtics have done a great job of rebuilding and restocking their roster to remain competitive.\n\n- Knack for developing talent - Players like Larry Bird, Kevin McHale, and others have blossomed into all-time greats under the Celtics' system.\n\nThe Celtics' winning culture and pedigree as an organization is really admirable. It's no wonder they have such a passionate fan base like yourself who takes pride in their sustained success over the decades. It's fun to be a fan of a team that expects to win championships year in and year out.", additional_kwargs={}, response_metadata={'id': 'msg_01Pnf5fNM12szy1j2BSmfgsm', 'model': 'claude-3-haiku-20240307', 'stop_reason': 'end_turn', 'stop_sequence': None, 'usage': {'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0, 'input_tokens': 313, 'output_tokens': 245}, 'model_name': 'claude-3-haiku-20240307'}, id='run-2bfb8b79-1097-4fc4-bf49-256c08442556-0', usage_metadata={'input_tokens': 313, 'output_tokens': 245, 'total_tokens': 558, 'input_token_details': {'cache_creation': 0, 'cache_read': 0}})],
+
+#    'summary': "Sure, here's a summary of our conversation so far:\n\nThe conversation began with me introducing myself as Claude, an AI assistant, and greeting the user who identified themselves as Bob. \n\nBob then expressed that he likes the Boston Celtics basketball team. I responded positively, noting the Celtics' impressive history of 17 NBA championships, their storied rivalry with the Lakers, and the great atmosphere at their home games.\n\nBob said he likes how much the Celtics win, and I agreed, explaining some of the key reasons for the Celtics' sustained success over the decades - great coaching, the ability to reload and develop talent, and the team's winning culture and high expectations.\n\nThroughout the conversation, I tried to engage with Bob's interest in the Celtics, demonstrating my knowledge of the team's history and achievements while also inviting him to share more of his thoughts and opinions as a fan."}
+
+"""
+We can now resume having a conversation! Note that even though we only have the last two messages, we can still ask it questions about things mentioned earlier in the conversation (because we summarized those)
+"""
+
+input_message = HumanMessage(content="what's my name?")
+input_message.pretty_print()
+for event in app.stream({"messages": [input_message]}, config, stream_mode="updates"):
+    print_update(event)
+# Output:
+#   ================================[1m Human Message [0m=================================
+
+#   
+
+#   what's my name?
+
+#   ==================================[1m Ai Message [0m==================================
+
+#   
+
+#   You haven't explicitly told me your name in our conversation, so I don't know what your name is. I addressed you as "Bob" earlier based on the context, but I don't have definitive information about your actual name. If you let me know your name, I'll be happy to refer to you by it going forward.
+
+
+input_message = HumanMessage(content="what NFL team do you think I like?")
+input_message.pretty_print()
+for event in app.stream({"messages": [input_message]}, config, stream_mode="updates"):
+    print_update(event)
+# Output:
+#   ================================[1m Human Message [0m=================================
+
+#   
+
+#   what NFL team do you think I like?
+
+#   ==================================[1m Ai Message [0m==================================
+
+#   
+
+#   Hmm, without any additional information about your preferences, it's hard for me to confidently guess which NFL team you might like. There are so many great NFL franchises, each with their own passionate fanbases. 
+
+#   
+
+#   Since we've been discussing your interest in the Boston Celtics, one possibility could be that you're a fan of another New England team, like the Patriots. Their success over the past couple of decades has certainly earned them a large and devoted following.
+
+#   
+
+#   Alternatively, you could be a fan of a team with a strong connection to basketball, like the Dallas Cowboys which play in the same stadium as the NBA's Mavericks.
+
+#   
+
+#   Or you might support an underdog team that's been on the rise, like the Cincinnati Bengals or Jacksonville Jaguars, who have developed exciting young cores.
+
+#   
+
+#   Really, without more context about your background or other sports/team interests, I don't want to make an assumption. I'm happy to continue our conversation and see if any clues emerge about which NFL franchise you might root for. What do you think - any hints you can provide?
+
+
+input_message = HumanMessage(content="i like the patriots!")
+input_message.pretty_print()
+for event in app.stream({"messages": [input_message]}, config, stream_mode="updates"):
+    print_update(event)
+# Output:
+#   ================================[1m Human Message [0m=================================
+
+#   
+
+#   i like the patriots!
+
+#   ==================================[1m Ai Message [0m==================================
+
+#   
+
+#   Ah I see, that makes a lot of sense! As a fellow Boston sports fan, it's great to hear that you're also a supporter of the New England Patriots.
+
+#   
+
+#   The Patriots have been one of the most dominant and consistent franchises in the NFL over the past two decades, with 6 Super Bowl championships during the Tom Brady and Bill Belichick era. Their sustained excellence and championship pedigree is really impressive.
+
+#   
+
+#   Some of the things that make the Patriots such an appealing team to root for:
+
+#   
+
+#   - Winning culture and high expectations year after year
+
+#   - Innovative, adaptable game-planning and coaching from Belichick
+
+#   - Clutch performances from legendary players like Brady, Gronkowski, etc.
+
+#   - Passionate, loyal fanbase in the New England region
+
+#   
+
+#   It's always fun to be a fan of a team that is consistently in contention for the title. As a fellow Boston sports enthusiast, I can understand the pride and excitement of cheering on the Patriots. Their success has been truly remarkable.
+
+#   
+
+#   Does the Patriots' sustained dominance over the past 20+ years resonate with you as a fan? I'd be curious to hear more about what you enjoy most about following them.
+
+#   ================================[1m Remove Message [0m================================
+
+#   
+
+#   
+
+#   ================================[1m Remove Message [0m================================
+
+#   
+
+#   
+
+#   ================================[1m Remove Message [0m================================
+
+#   
+
+#   
+
+#   ================================[1m Remove Message [0m================================
+
+#   
+
+#   
+
+#   ================================[1m Remove Message [0m================================
+
+#   
+
+#   
+
+#   ================================[1m Remove Message [0m================================
+
+#   
+
+#   
+
+#   Extending the summary based on the new messages:
+
+#   
+
+#   After discussing the Celtics, I then asked Bob what his name was, and he did not provide it. I noted that I had previously addressed him as "Bob" based on the context, but did not have definitive information about his actual name.
+
+#   
+
+#   I then asked Bob what NFL team he thought he might like, since he was a fan of the Boston Celtics. Without any additional clues, I speculated that he could be a fan of other New England teams like the Patriots, or a team with ties to basketball. 
+
+#   
+
+#   Bob then revealed that he is indeed a fan of the New England Patriots, which made sense given his interest in other Boston sports teams. I expressed my understanding of why the Patriots' sustained success and winning culture would appeal to a Boston sports fan like himself.
+
+#   
+
+#   I asked Bob to share more about what he enjoys most about being a Patriots fan, given their two decades of dominance under Tom Brady and Bill Belichick. I emphasized my appreciation for the Patriots' impressive accomplishments and the passion of their fanbase.
+
+#   
+
+#   Throughout this extended exchange, I aimed to have a friendly, engaging dialogue where I demonstrated my knowledge of sports teams and their histories, while also inviting Bob to contribute his own perspectives and experiences as a fan. The conversation flowed naturally between discussing the Celtics and then transitioning to the Patriots.
+
+
+
+
+================================================
+FILE: examples/memory/delete-messages.ipynb
+================================================
+# Jupyter notebook converted to Python script.
+
+"""
+# How to delete messages
+
+One of the common states for a graph is a list of messages. Usually you only add messages to that state. However, sometimes you may want to remove messages (either by directly modifying the state or as part of the graph). To do that, you can use the `RemoveMessage` modifier. In this guide, we will cover how to do that.
+
+The key idea is that each state key has a `reducer` key. This key specifies how to combine updates to the state. The default `MessagesState` has a messages key, and the reducer for that key accepts these `RemoveMessage` modifiers. That reducer then uses these `RemoveMessage` to delete messages from the key.
+
+So note that just because your graph state has a key that is a list of messages, it doesn't mean that that this `RemoveMessage` modifier will work. You also have to have a `reducer` defined that knows how to work with this.
+
+**NOTE**: Many models expect certain rules around lists of messages. For example, some expect them to start with a `user` message, others expect all messages with tool calls to be followed by a tool message. **When deleting messages, you will want to make sure you don't violate these rules.**
+"""
+
+"""
+## Setup
+
+First, let's build a simple graph that uses messages. Note that it's using the `MessagesState` which has the required `reducer`.
+"""
+
+%%capture --no-stderr
+%pip install --quiet -U langgraph langchain_anthropic
+
+"""
+Next, we need to set API keys for Anthropic (the LLM we will use)
+"""
+
+import getpass
+import os
+
+
+def _set_env(var: str):
+    if not os.environ.get(var):
+        os.environ[var] = getpass.getpass(f"{var}: ")
+
+
+_set_env("ANTHROPIC_API_KEY")
+# Output:
+#   ANTHROPIC_API_KEY:  ········
+
+
+"""
+<div class="admonition tip">
+    <p class="admonition-title">Set up <a href="https://smith.langchain.com">LangSmith</a> for LangGraph development</p>
+    <p style="padding-top: 5px;">
+        Sign up for LangSmith to quickly spot issues and improve the performance of your LangGraph projects. LangSmith lets you use trace data to debug, test, and monitor your LLM apps built with LangGraph — read more about how to get started <a href="https://docs.smith.langchain.com">here</a>. 
+    </p>
+</div>
+"""
+
+"""
+## Build the agent
+Let's now build a simple ReAct style agent.
+"""
+
+from typing import Literal
+
+from langchain_anthropic import ChatAnthropic
+from langchain_core.tools import tool
+
+from langgraph.checkpoint.redis import RedisSaver
+from langgraph.graph import MessagesState, StateGraph, START, END
+from langgraph.prebuilt import ToolNode
+
+# Set up Redis connection for checkpointer
+REDIS_URI = "redis://redis:6379"
+memory = None
+with RedisSaver.from_conn_string(REDIS_URI) as cp:
+    cp.setup()
+    memory = cp
+
+
+@tool
+def search(query: str):
+    """Call to surf the web."""
+    # This is a placeholder for the actual implementation
+    # Don't let the LLM know this though 😊
+    return "It's sunny in San Francisco, but you better look out if you're a Gemini 😈."
+
+
+tools = [search]
+tool_node = ToolNode(tools)
+model = ChatAnthropic(model_name="claude-3-haiku-20240307")
+bound_model = model.bind_tools(tools)
+
+
+def should_continue(state: MessagesState):
+    """Return the next node to execute."""
+    last_message = state["messages"][-1]
+    # If there is no function call, then we finish
+    if not last_message.tool_calls:
+        return END
+    # Otherwise if there is, we continue
+    return "action"
+
+
+# Define the function that calls the model
+def call_model(state: MessagesState):
+    response = model.invoke(state["messages"])
+    # We return a list, because this will get added to the existing list
+    return {"messages": response}
+
+
+# Define a new graph
+workflow = StateGraph(MessagesState)
+
+# Define the two nodes we will cycle between
+workflow.add_node("agent", call_model)
+workflow.add_node("action", tool_node)
+
+# Set the entrypoint as `agent`
+# This means that this node is the first one called
+workflow.add_edge(START, "agent")
+
+# We now add a conditional edge
+workflow.add_conditional_edges(
+    # First, we define the start node. We use `agent`.
+    # This means these are the edges taken after the `agent` node is called.
+    "agent",
+    # Next, we pass in the function that will determine which node is called next.
+    should_continue,
+    # Next, we pass in the path map - all the possible nodes this edge could go to
+    ["action", END],
+)
+
+# We now add a normal edge from `tools` to `agent`.
+# This means that after `tools` is called, `agent` node is called next.
+workflow.add_edge("action", "agent")
+
+# Finally, we compile it!
+# This compiles it into a LangChain Runnable,
+# meaning you can use it as you would any other runnable
+app = workflow.compile(checkpointer=memory)
+
+from langchain_core.messages import HumanMessage
+
+config = {"configurable": {"thread_id": "2"}}
+input_message = HumanMessage(content="hi! I'm bob")
+for event in app.stream({"messages": [input_message]}, config, stream_mode="values"):
+    event["messages"][-1].pretty_print()
+
+
+input_message = HumanMessage(content="what's my name?")
+for event in app.stream({"messages": [input_message]}, config, stream_mode="values"):
+    event["messages"][-1].pretty_print()
+# Output:
+#   ================================[1m Human Message [0m=================================
+
+#   
+
+#   hi! I'm bob
+
+#   ==================================[1m Ai Message [0m==================================
+
+#   
+
+#   It's nice to meet you, Bob! As an AI assistant, I'm here to help you with any questions or tasks you may have. Please feel free to ask me anything, and I'll do my best to assist you.
+
+#   ================================[1m Human Message [0m=================================
+
+#   
+
+#   what's my name?
+
+#   ==================================[1m Ai Message [0m==================================
+
+#   
+
+#   You told me your name is Bob.
+
+
+"""
+## Manually deleting messages
+
+First, we will cover how to manually delete messages. Let's take a look at the current state of the thread:
+"""
+
+messages = app.get_state(config).values["messages"]
+messages
+# Output:
+#   [HumanMessage(content="hi! I'm bob", additional_kwargs={}, response_metadata={}, id='a17d82c0-7fe1-4896-9640-060f2c35cbb7'),
+
+#    AIMessage(content="It's nice to meet you, Bob! As an AI assistant, I'm here to help you with any questions or tasks you may have. Please feel free to ask me anything, and I'll do my best to assist you.", additional_kwargs={}, response_metadata={'id': 'msg_01B37ymr999e6yd2RX4wnC7y', 'model': 'claude-3-haiku-20240307', 'stop_reason': 'end_turn', 'stop_sequence': None, 'usage': {'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0, 'input_tokens': 12, 'output_tokens': 50}, 'model_name': 'claude-3-haiku-20240307'}, id='run-09073daa-b991-488a-ac81-5d94627d9e07-0', usage_metadata={'input_tokens': 12, 'output_tokens': 50, 'total_tokens': 62, 'input_token_details': {'cache_creation': 0, 'cache_read': 0}}),
+
+#    HumanMessage(content="what's my name?", additional_kwargs={}, response_metadata={}, id='9a05305e-2e78-473b-9fc5-47a5e0533864'),
+
+#    AIMessage(content='You told me your name is Bob.', additional_kwargs={}, response_metadata={'id': 'msg_01GUJqbBMVdRxfRgNCdELf1x', 'model': 'claude-3-haiku-20240307', 'stop_reason': 'end_turn', 'stop_sequence': None, 'usage': {'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0, 'input_tokens': 70, 'output_tokens': 11}, 'model_name': 'claude-3-haiku-20240307'}, id='run-905da30e-9014-4ec0-8e1f-2eaf606adddc-0', usage_metadata={'input_tokens': 70, 'output_tokens': 11, 'total_tokens': 81, 'input_token_details': {'cache_creation': 0, 'cache_read': 0}})]
+
+"""
+We can call `update_state` and pass in the id of the first message. This will delete that message.
+"""
+
+from langchain_core.messages import RemoveMessage
+
+app.update_state(config, {"messages": RemoveMessage(id=messages[0].id)})
+# Output:
+#   {'configurable': {'thread_id': '2',
+
+#     'checkpoint_ns': '',
+
+#     'checkpoint_id': '1f025359-21de-60f0-8003-97dbb738829b'}}
+
+"""
+If we now look at the messages, we can verify that the first one was deleted.
+"""
+
+messages = app.get_state(config).values["messages"]
+messages
+# Output:
+#   [AIMessage(content="It's nice to meet you, Bob! As an AI assistant, I'm here to help you with any questions or tasks you may have. Please feel free to ask me anything, and I'll do my best to assist you.", additional_kwargs={}, response_metadata={'id': 'msg_01B37ymr999e6yd2RX4wnC7y', 'model': 'claude-3-haiku-20240307', 'stop_reason': 'end_turn', 'stop_sequence': None, 'usage': {'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0, 'input_tokens': 12, 'output_tokens': 50}, 'model_name': 'claude-3-haiku-20240307'}, id='run-09073daa-b991-488a-ac81-5d94627d9e07-0', usage_metadata={'input_tokens': 12, 'output_tokens': 50, 'total_tokens': 62, 'input_token_details': {'cache_creation': 0, 'cache_read': 0}}),
+
+#    HumanMessage(content="what's my name?", additional_kwargs={}, response_metadata={}, id='9a05305e-2e78-473b-9fc5-47a5e0533864'),
+
+#    AIMessage(content='You told me your name is Bob.', additional_kwargs={}, response_metadata={'id': 'msg_01GUJqbBMVdRxfRgNCdELf1x', 'model': 'claude-3-haiku-20240307', 'stop_reason': 'end_turn', 'stop_sequence': None, 'usage': {'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0, 'input_tokens': 70, 'output_tokens': 11}, 'model_name': 'claude-3-haiku-20240307'}, id='run-905da30e-9014-4ec0-8e1f-2eaf606adddc-0', usage_metadata={'input_tokens': 70, 'output_tokens': 11, 'total_tokens': 81, 'input_token_details': {'cache_creation': 0, 'cache_read': 0}})]
+
+"""
+## Programmatically deleting messages
+
+We can also delete messages programmatically from inside the graph. Here we'll modify the graph to delete any old messages (longer than 3 messages ago) at the end of a graph run.
+"""
+
+from langchain_core.messages import RemoveMessage
+from langgraph.graph import END
+from langgraph.checkpoint.redis import RedisSaver
+
+
+def delete_messages(state):
+    messages = state["messages"]
+    if len(messages) > 3:
+        return {"messages": [RemoveMessage(id=m.id) for m in messages[:-3]]}
+
+
+# We need to modify the logic to call delete_messages rather than end right away
+def should_continue(state: MessagesState) -> Literal["action", "delete_messages"]:
+    """Return the next node to execute."""
+    last_message = state["messages"][-1]
+    # If there is no function call, then we call our delete_messages function
+    if not last_message.tool_calls:
+        return "delete_messages"
+    # Otherwise if there is, we continue
+    return "action"
+
+
+# Define a new graph
+workflow = StateGraph(MessagesState)
+workflow.add_node("agent", call_model)
+workflow.add_node("action", tool_node)
+
+# This is our new node we're defining
+workflow.add_node(delete_messages)
+
+
+workflow.add_edge(START, "agent")
+workflow.add_conditional_edges(
+    "agent",
+    should_continue,
+)
+workflow.add_edge("action", "agent")
+
+# This is the new edge we're adding: after we delete messages, we finish
+workflow.add_edge("delete_messages", END)
+
+# Set up Redis connection for checkpointer
+REDIS_URI = "redis://redis:6379"
+memory = None
+with RedisSaver.from_conn_string(REDIS_URI) as cp:
+    cp.setup()
+    memory = cp
+
+app = workflow.compile(checkpointer=memory)
+# Output:
+#   [32m20:07:26[0m [34mredisvl.index.index[0m [1;30mINFO[0m   Index already exists, not overwriting.
+
+#   [32m20:07:26[0m [34mredisvl.index.index[0m [1;30mINFO[0m   Index already exists, not overwriting.
+
+#   [32m20:07:26[0m [34mredisvl.index.index[0m [1;30mINFO[0m   Index already exists, not overwriting.
+
+
+"""
+We can now try this out. We can call the graph twice and then check the state
+"""
+
+from langchain_core.messages import HumanMessage
+
+config = {"configurable": {"thread_id": "3"}}
+input_message = HumanMessage(content="hi! I'm bob")
+for event in app.stream({"messages": [input_message]}, config, stream_mode="values"):
+    print([(message.type, message.content) for message in event["messages"]])
+
+
+input_message = HumanMessage(content="what's my name?")
+for event in app.stream({"messages": [input_message]}, config, stream_mode="values"):
+    print([(message.type, message.content) for message in event["messages"]])
+# Output:
+#   [('human', "hi! I'm bob")]
+
+#   [('human', "hi! I'm bob"), ('ai', "It's nice to meet you, Bob! As an AI assistant, I don't have a physical form, but I'm always happy to chat and help out however I can. Please let me know if you have any questions or if there's anything I can assist you with.")]
+
+#   [('human', "hi! I'm bob"), ('ai', "It's nice to meet you, Bob! As an AI assistant, I don't have a physical form, but I'm always happy to chat and help out however I can. Please let me know if you have any questions or if there's anything I can assist you with."), ('human', "what's my name?")]
+
+#   [('human', "hi! I'm bob"), ('ai', "It's nice to meet you, Bob! As an AI assistant, I don't have a physical form, but I'm always happy to chat and help out however I can. Please let me know if you have any questions or if there's anything I can assist you with."), ('human', "what's my name?"), ('ai', 'You told me your name is Bob, so your name is Bob.')]
+
+#   [('ai', "It's nice to meet you, Bob! As an AI assistant, I don't have a physical form, but I'm always happy to chat and help out however I can. Please let me know if you have any questions or if there's anything I can assist you with."), ('human', "what's my name?"), ('ai', 'You told me your name is Bob, so your name is Bob.')]
+
+
+"""
+If we now check the state, we should see that it is only three messages long. This is because we just deleted the earlier messages - otherwise it would be four!
+"""
+
+messages = app.get_state(config).values["messages"]
+messages
+# Output:
+#   [AIMessage(content="It's nice to meet you, Bob! As an AI assistant, I don't have a physical form, but I'm always happy to chat and help out however I can. Please let me know if you have any questions or if there's anything I can assist you with.", additional_kwargs={}, response_metadata={'id': 'msg_01NX4B5nswy32CoYTyCFugsF', 'model': 'claude-3-haiku-20240307', 'stop_reason': 'end_turn', 'stop_sequence': None, 'usage': {'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0, 'input_tokens': 12, 'output_tokens': 59}, 'model_name': 'claude-3-haiku-20240307'}, id='run-9e65ccb3-743e-4498-90cd-38081ca077d4-0', usage_metadata={'input_tokens': 12, 'output_tokens': 59, 'total_tokens': 71, 'input_token_details': {'cache_creation': 0, 'cache_read': 0}}),
+
+#    HumanMessage(content="what's my name?", additional_kwargs={}, response_metadata={}, id='fb3aac2e-ec62-416c-aefe-891f0830cbd3'),
+
+#    AIMessage(content='You told me your name is Bob, so your name is Bob.', additional_kwargs={}, response_metadata={'id': 'msg_01WHWB3SkMQSXKAr1KJgf1Wh', 'model': 'claude-3-haiku-20240307', 'stop_reason': 'end_turn', 'stop_sequence': None, 'usage': {'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0, 'input_tokens': 79, 'output_tokens': 17}, 'model_name': 'claude-3-haiku-20240307'}, id='run-b46fb921-e936-452e-9598-b61a36c4bf18-0', usage_metadata={'input_tokens': 79, 'output_tokens': 17, 'total_tokens': 96, 'input_token_details': {'cache_creation': 0, 'cache_read': 0}})]
+
+"""
+Remember, when deleting messages you will want to make sure that the remaining message list is still valid. This message list **may actually not be** - this is because it currently starts with an AI message, which some models do not allow.
+"""
+
+
+
+================================================
+FILE: examples/memory/manage-conversation-history.ipynb
+================================================
+# Jupyter notebook converted to Python script.
+
+"""
+# How to manage conversation history
+
+One of the most common use cases for persistence is to use it to keep track of conversation history. This is great - it makes it easy to continue conversations. As conversations get longer and longer, however, this conversation history can build up and take up more and more of the context window. This can often be undesirable as it leads to more expensive and longer calls to the LLM, and potentially ones that error. In order to prevent this from happening, you need to properly manage the conversation history.
+
+Note: this guide focuses on how to do this in LangGraph, where you can fully customize how this is done. If you want a more off-the-shelf solution, you can look into functionality provided in LangChain:
+
+- [How to filter messages](https://python.langchain.com/docs/how_to/filter_messages/)
+- [How to trim messages](https://python.langchain.com/docs/how_to/trim_messages/)
+"""
+
+"""
+## Setup
+
+First, let's set up the packages we're going to want to use
+"""
+
+%%capture --no-stderr
+%pip install --quiet -U langgraph langchain_anthropic
+
+"""
+Next, we need to set API keys for Anthropic (the LLM we will use)
+"""
+
+import getpass
+import os
+
+
+def _set_env(var: str):
+    if not os.environ.get(var):
+        os.environ[var] = getpass.getpass(f"{var}: ")
+
+
+_set_env("ANTHROPIC_API_KEY")
+# Output:
+#   ANTHROPIC_API_KEY:  ········
+
+
+"""
+<div class="admonition tip">
+    <p class="admonition-title">Set up <a href="https://smith.langchain.com">LangSmith</a> for LangGraph development</p>
+    <p style="padding-top: 5px;">
+        Sign up for LangSmith to quickly spot issues and improve the performance of your LangGraph projects. LangSmith lets you use trace data to debug, test, and monitor your LLM apps built with LangGraph — read more about how to get started <a href="https://docs.smith.langchain.com">here</a>. 
+    </p>
+</div>
+"""
+
+"""
+## Build the agent
+Let's now build a simple ReAct style agent.
+"""
+
+from typing import Literal
+
+from langchain_anthropic import ChatAnthropic
+from langchain_core.tools import tool
+
+from langgraph.checkpoint.redis import RedisSaver
+from langgraph.graph import MessagesState, StateGraph, START, END
+from langgraph.prebuilt import ToolNode
+
+# Set up Redis connection for checkpointer
+REDIS_URI = "redis://redis:6379"
+memory = None
+with RedisSaver.from_conn_string(REDIS_URI) as cp:
+    cp.setup()
+    memory = cp
+
+
+@tool
+def search(query: str):
+    """Call to surf the web."""
+    # This is a placeholder for the actual implementation
+    # Don't let the LLM know this though 😊
+    return "It's sunny in San Francisco, but you better look out if you're a Gemini 😈."
+
+
+tools = [search]
+tool_node = ToolNode(tools)
+model = ChatAnthropic(model_name="claude-3-haiku-20240307")
+bound_model = model.bind_tools(tools)
+
+
+def should_continue(state: MessagesState):
+    """Return the next node to execute."""
+    last_message = state["messages"][-1]
+    # If there is no function call, then we finish
+    if not last_message.tool_calls:
+        return END
+    # Otherwise if there is, we continue
+    return "action"
+
+
+# Define the function that calls the model
+def call_model(state: MessagesState):
+    response = bound_model.invoke(state["messages"])
+    # We return a list, because this will get added to the existing list
+    return {"messages": response}
+
+
+# Define a new graph
+workflow = StateGraph(MessagesState)
+
+# Define the two nodes we will cycle between
+workflow.add_node("agent", call_model)
+workflow.add_node("action", tool_node)
+
+# Set the entrypoint as `agent`
+# This means that this node is the first one called
+workflow.add_edge(START, "agent")
+
+# We now add a conditional edge
+workflow.add_conditional_edges(
+    # First, we define the start node. We use `agent`.
+    # This means these are the edges taken after the `agent` node is called.
+    "agent",
+    # Next, we pass in the function that will determine which node is called next.
+    should_continue,
+    # Next, we pass in the path map - all the possible nodes this edge could go to
+    ["action", END],
+)
+
+# We now add a normal edge from `tools` to `agent`.
+# This means that after `tools` is called, `agent` node is called next.
+workflow.add_edge("action", "agent")
+
+# Finally, we compile it!
+# This compiles it into a LangChain Runnable,
+# meaning you can use it as you would any other runnable
+app = workflow.compile(checkpointer=memory)
+
+from langchain_core.messages import HumanMessage
+
+config = {"configurable": {"thread_id": "2"}}
+input_message = HumanMessage(content="hi! I'm bob")
+for event in app.stream({"messages": [input_message]}, config, stream_mode="values"):
+    event["messages"][-1].pretty_print()
+
+
+input_message = HumanMessage(content="what's my name?")
+for event in app.stream({"messages": [input_message]}, config, stream_mode="values"):
+    event["messages"][-1].pretty_print()
+# Output:
+#   ================================[1m Human Message [0m=================================
+
+#   
+
+#   hi! I'm bob
+
+#   ==================================[1m Ai Message [0m==================================
+
+#   
+
+#   Hi Bob! It's nice to meet you. How can I assist you today?
+
+#   ================================[1m Human Message [0m=================================
+
+#   
+
+#   what's my name?
+
+#   ==================================[1m Ai Message [0m==================================
+
+#   
+
+#   You said your name is Bob, so your name is Bob.
+
+
+"""
+## Filtering messages
+
+The most straight-forward thing to do to prevent conversation history from blowing up is to filter the list of messages before they get passed to the LLM. This involves two parts: defining a function to filter messages, and then adding it to the graph. See the example below which defines a really simple `filter_messages` function and then uses it.
+"""
+
+from typing import Literal
+
+from langchain_anthropic import ChatAnthropic
+from langchain_core.tools import tool
+
+from langgraph.checkpoint.redis import RedisSaver
+from langgraph.graph import MessagesState, StateGraph, START
+from langgraph.prebuilt import ToolNode
+
+# Set up Redis connection for checkpointer
+REDIS_URI = "redis://redis:6379"
+memory = None
+with RedisSaver.from_conn_string(REDIS_URI) as cp:
+    cp.setup()
+    memory = cp
+
+
+@tool
+def search(query: str):
+    """Call to surf the web."""
+    # This is a placeholder for the actual implementation
+    # Don't let the LLM know this though 😊
+    return "It's sunny in San Francisco, but you better look out if you're a Gemini 😈."
+
+
+tools = [search]
+tool_node = ToolNode(tools)
+model = ChatAnthropic(model_name="claude-3-haiku-20240307")
+bound_model = model.bind_tools(tools)
+
+
+def should_continue(state: MessagesState):
+    """Return the next node to execute."""
+    last_message = state["messages"][-1]
+    # If there is no function call, then we finish
+    if not last_message.tool_calls:
+        return END
+    # Otherwise if there is, we continue
+    return "action"
+
+
+def filter_messages(messages: list):
+    # This is very simple helper function which only ever uses the last message
+    return messages[-1:]
+
+
+# Define the function that calls the model
+def call_model(state: MessagesState):
+    messages = filter_messages(state["messages"])
+    response = bound_model.invoke(messages)
+    # We return a list, because this will get added to the existing list
+    return {"messages": response}
+
+
+# Define a new graph
+workflow = StateGraph(MessagesState)
+
+# Define the two nodes we will cycle between
+workflow.add_node("agent", call_model)
+workflow.add_node("action", tool_node)
+
+# Set the entrypoint as `agent`
+# This means that this node is the first one called
+workflow.add_edge(START, "agent")
+
+# We now add a conditional edge
+workflow.add_conditional_edges(
+    # First, we define the start node. We use `agent`.
+    # This means these are the edges taken after the `agent` node is called.
+    "agent",
+    # Next, we pass in the function that will determine which node is called next.
+    should_continue,
+    # Next, we pass in the pathmap - all the possible nodes this edge could go to
+    ["action", END],
+)
+
+# We now add a normal edge from `tools` to `agent`.
+# This means that after `tools` is called, `agent` node is called next.
+workflow.add_edge("action", "agent")
+
+# Finally, we compile it!
+# This compiles it into a LangChain Runnable,
+# meaning you can use it as you would any other runnable
+app = workflow.compile(checkpointer=memory)
+# Output:
+#   [32m20:08:12[0m [34mredisvl.index.index[0m [1;30mINFO[0m   Index already exists, not overwriting.
+
+#   [32m20:08:12[0m [34mredisvl.index.index[0m [1;30mINFO[0m   Index already exists, not overwriting.
+
+#   [32m20:08:12[0m [34mredisvl.index.index[0m [1;30mINFO[0m   Index already exists, not overwriting.
+
+
+from langchain_core.messages import HumanMessage
+
+config = {"configurable": {"thread_id": "2"}}
+input_message = HumanMessage(content="hi! I'm bob")
+for event in app.stream({"messages": [input_message]}, config, stream_mode="values"):
+    event["messages"][-1].pretty_print()
+
+# This will now not remember the previous messages
+# (because we set `messages[-1:]` in the filter messages argument)
+input_message = HumanMessage(content="what's my name?")
+for event in app.stream({"messages": [input_message]}, config, stream_mode="values"):
+    event["messages"][-1].pretty_print()
+# Output:
+#   ================================[1m Human Message [0m=================================
+
+#   
+
+#   hi! I'm bob
+
+#   ==================================[1m Ai Message [0m==================================
+
+#   
+
+#   Nice to meet you, Bob! It's a pleasure to chat with you. As an AI assistant, I'm here to help you with any tasks or queries you may have. Please feel free to ask me anything, and I'll do my best to assist you.
+
+#   ================================[1m Human Message [0m=================================
+
+#   
+
+#   what's my name?
+
+#   ==================================[1m Ai Message [0m==================================
+
+#   
+
+#   I'm afraid I don't actually know your name. As an AI assistant, I don't have personal information about you unless you provide it to me.
+
+
+"""
+In the above example we defined the `filter_messages` function ourselves. We also provide off-the-shelf ways to trim and filter messages in LangChain. 
+
+- [How to filter messages](https://python.langchain.com/docs/how_to/filter_messages/)
+- [How to trim messages](https://python.langchain.com/docs/how_to/trim_messages/)
+"""
+
+
+
+================================================
+FILE: examples/memory/semantic-search.ipynb
+================================================
+# Jupyter notebook converted to Python script.
+
+"""
+# How to add semantic search to your agent's memory
+
+This guide shows how to enable semantic search in your agent's memory store. This lets search for items in the store by semantic similarity.
+
+!!! tip Prerequisites
+    This guide assumes familiarity with the [memory in LangGraph](https://langchain-ai.github.io/langgraph/concepts/memory/).
+
+> **Note**: This notebook uses different namespaces (`user_123`, `user_456`, etc.) for different examples to avoid conflicts between stored memories. Each example demonstrates a specific feature in isolation.
+"""
+
+%%capture --no-stderr
+%pip install -U langgraph langchain-openai langchain
+
+import getpass
+import os
+
+
+def _set_env(var: str):
+    if not os.environ.get(var):
+        os.environ[var] = getpass.getpass(f"{var}: ")
+
+
+_set_env("OPENAI_API_KEY")
+# Output:
+#   OPENAI_API_KEY:  ········
+
+
+"""
+Next, create the store with an [index configuration](https://langchain-ai.github.io/langgraph/reference/store/#langgraph.store.base.IndexConfig). By default, stores are configured without semantic/vector search. You can opt in to indexing items when creating the store by providing an [IndexConfig](https://langchain-ai.github.io/langgraph/reference/store/#langgraph.store.base.IndexConfig) to the store's constructor. If your store class does not implement this interface, or if you do not pass in an index configuration, semantic search is disabled, and all `index` arguments passed to `put` or `aput` will have no effect. Below is an example.
+"""
+
+from langchain.embeddings import init_embeddings
+from langgraph.store.redis import RedisStore
+from langgraph.store.base import IndexConfig
+
+# Create Redis store with semantic search enabled
+embeddings = init_embeddings("openai:text-embedding-3-small")
+
+# Set up Redis connection
+REDIS_URI = "redis://redis:6379"
+
+# Create index configuration for vector search
+index_config: IndexConfig = {
+    "dims": 1536,
+    "embed": embeddings,
+    "ann_index_config": {
+        "vector_type": "vector",
+    },
+    "distance_type": "cosine",
+}
+
+# Initialize the Redis store
+redis_store = None
+with RedisStore.from_conn_string(REDIS_URI, index=index_config) as s:
+    s.setup()
+    redis_store = s
+    
+store = redis_store
+# Output:
+#   /tmp/ipykernel_1484/3301134131.py:6: LangChainBetaWarning: The function `init_embeddings` is in beta. It is actively being worked on, so the API may change.
+
+#     embeddings = init_embeddings("openai:text-embedding-3-small")
+
+
+"""
+Now let's store some memories:
+"""
+
+# Store some memories
+store.put(("user_123", "memories"), "1", {"text": "I love pizza"})
+store.put(("user_123", "memories"), "2", {"text": "I prefer Italian food"})
+store.put(("user_123", "memories"), "3", {"text": "I don't like spicy food"})
+store.put(("user_123", "memories"), "3", {"text": "I am studying econometrics"})
+store.put(("user_123", "memories"), "3", {"text": "I am a plumber"})
+
+"""
+Search memories using natural language:
+"""
+
+# Find memories about food preferences
+memories = store.search(("user_123", "memories"), query="I like food?", limit=5)
+
+for memory in memories:
+    print(f'Memory: {memory.value["text"]} (similarity: {memory.score})')
+# Output:
+#   Memory: I prefer Italian food (similarity: 0.46481049060799995)
+
+#   Memory: I love pizza (similarity: 0.35512423515299996)
+
+#   Memory: I am a plumber (similarity: 0.155683338642)
+
+
+"""
+## Using in your agent
+
+Add semantic search to any node by injecting the store.
+"""
+
+from typing import Optional
+
+from langchain.chat_models import init_chat_model
+from langgraph.store.base import BaseStore
+from langgraph.checkpoint.redis import RedisSaver
+
+from langgraph.graph import START, MessagesState, StateGraph
+
+llm = init_chat_model("openai:gpt-4o-mini")
+
+
+def chat(state, *, store: BaseStore):
+    # Search based on user's last message
+    items = store.search(
+        ("user_123", "memories"), query=state["messages"][-1].content, limit=2
+    )
+    memories = "\n".join(item.value["text"] for item in items)
+    memories = f"## Memories of user\n{memories}" if memories else ""
+    response = llm.invoke(
+        [
+            {"role": "system", "content": f"You are a helpful assistant.\n{memories}"},
+            *state["messages"],
+        ]
+    )
+    return {"messages": [response]}
+
+
+# Set up Redis connection for checkpointer
+REDIS_URI = "redis://redis:6379"
+checkpointer = None
+with RedisSaver.from_conn_string(REDIS_URI) as cp:
+    cp.setup()
+    checkpointer = cp
+
+builder = StateGraph(MessagesState)
+builder.add_node(chat)
+builder.add_edge(START, "chat")
+graph = builder.compile(checkpointer=checkpointer, store=store)
+
+# Add required configuration parameters
+config = {"configurable": {"thread_id": "semantic_search_thread"}}
+for message, metadata in graph.stream(
+    input={"messages": [{"role": "user", "content": "I'm hungry"}]},
+    config=config,  # Add this line with required config
+    stream_mode="messages",
+):
+    print(message.content, end="")
+# Output:
+#   What are you in the mood for? Since you love pizza, would you like to have that, or are you thinking about something else?
+
+"""
+## Using in `create_react_agent` {#using-in-create-react-agent}
+
+Add semantic search to your tool calling agent by injecting the store in the `prompt` function. You can also use the store in a tool to let your agent manually store or search for memories.
+"""
+
+import uuid
+from typing import Optional
+
+from langchain.chat_models import init_chat_model
+from langgraph.prebuilt import InjectedStore
+from langgraph.store.base import BaseStore
+from langgraph.checkpoint.redis import RedisSaver
+from typing_extensions import Annotated
+
+from langgraph.prebuilt import create_react_agent
+
+
+def prepare_messages(state, *, store: BaseStore):
+    # Search based on user's last message
+    items = store.search(
+        ("user_123", "memories"), query=state["messages"][-1].content, limit=2
+    )
+    memories = "\n".join(item.value["text"] for item in items)
+    memories = f"## Memories of user\n{memories}" if memories else ""
+    return [
+        {"role": "system", "content": f"You are a helpful assistant.\n{memories}"}
+    ] + state["messages"]
+
+
+# You can also use the store directly within a tool!
+def upsert_memory(
+    content: str,
+    *,
+    memory_id: Optional[uuid.UUID] = None,
+    store: Annotated[BaseStore, InjectedStore],
+):
+    """Upsert a memory in the database."""
+    # The LLM can use this tool to store a new memory
+    mem_id = memory_id or uuid.uuid4()
+    store.put(
+        ("user_123", "memories"),
+        key=str(mem_id),
+        value={"text": content},
+    )
+    return f"Stored memory {mem_id}"
+
+
+# Set up Redis connection for checkpointer
+REDIS_URI = "redis://redis:6379"
+checkpointer = None
+with RedisSaver.from_conn_string(REDIS_URI) as cp:
+    cp.setup()
+    checkpointer = cp
+
+agent = create_react_agent(
+    init_chat_model("openai:gpt-4o-mini"),
+    tools=[upsert_memory],
+    # The 'prompt' function is run to prepare the messages for the LLM. It is called
+    # right before each LLM call
+    prompt=prepare_messages,
+    checkpointer=checkpointer,
+    store=store,
+)
+# Output:
+#   [32m20:09:05[0m [34mredisvl.index.index[0m [1;30mINFO[0m   Index already exists, not overwriting.
+
+#   [32m20:09:05[0m [34mredisvl.index.index[0m [1;30mINFO[0m   Index already exists, not overwriting.
+
+#   [32m20:09:05[0m [34mredisvl.index.index[0m [1;30mINFO[0m   Index already exists, not overwriting.
+
+
+# Alternative approach using agent
+config = {"configurable": {"thread_id": "semantic_search_thread_agent"}}
+try:
+    # Run the agent with proper configuration
+    for message, metadata in agent.stream(
+        input={"messages": [{"role": "user", "content": "Tell me about my food preferences based on my memories"}]},
+        config=config,  # This is required for the checkpointer
+        stream_mode="messages",
+    ):
+        print(message.content, end="")
+except Exception as e:
+    print(f"Error running agent: {e}")
+    # Try with different configuration if needed
+    config = {"configurable": {"thread_id": "semantic_search_thread_agent", "checkpoint_ns": "", "checkpoint_id": ""}}
+    for message, metadata in agent.stream(
+        input={"messages": [{"role": "user", "content": "Tell me about my food preferences based on my memories"}]},
+        config=config,
+        stream_mode="messages",
+    ):
+        print(message.content, end="")
+# Output:
+#   Based on your memories, you have a preference for Italian food, and you specifically love pizza.
+
+"""
+## Advanced Usage
+
+#### Multi-vector indexing
+
+Store and search different aspects of memories separately to improve recall or omit certain fields from being indexed.
+"""
+
+# Configure Redis store to embed both memory content and emotional context
+REDIS_URI = "redis://redis:6379"
+with RedisStore.from_conn_string(
+    REDIS_URI, 
+    index={"embed": embeddings, "dims": 1536, "fields": ["memory", "emotional_context"]}
+) as store:
+    store.setup()
+    
+    # Store memories with different content/emotion pairs
+    # Use a different namespace to avoid conflicts with previous examples
+    store.put(
+        ("user_456", "multi_vector_memories"),
+        "mem1",
+        {
+            "memory": "Had pizza with friends at Mario's",
+            "emotional_context": "felt happy and connected",
+            "this_isnt_indexed": "I prefer ravioli though",
+        },
+    )
+    store.put(
+        ("user_456", "multi_vector_memories"),
+        "mem2",
+        {
+            "memory": "Ate alone at home",
+            "emotional_context": "felt a bit lonely",
+            "this_isnt_indexed": "I like pie",
+        },
+    )
+
+    # Search focusing on emotional state - matches mem2
+    results = store.search(
+        ("user_456", "multi_vector_memories"), query="times they felt isolated", limit=1
+    )
+    print("Expect mem 2")
+    for r in results:
+        print(f"Item: {r.key}; Score ({r.score})")
+        print(f"Memory: {r.value['memory']}")
+        print(f"Emotion: {r.value['emotional_context']}\n")
+
+    # Search focusing on social eating - matches mem1
+    print("Expect mem1")
+    results = store.search(
+        ("user_456", "multi_vector_memories"), query="fun pizza", limit=1
+    )
+    for r in results:
+        print(f"Item: {r.key}; Score ({r.score})")
+        print(f"Memory: {r.value['memory']}")
+        print(f"Emotion: {r.value['emotional_context']}\n")
+
+    print("Expect random lower score (ravioli not indexed)")
+    results = store.search(
+        ("user_456", "multi_vector_memories"), query="ravioli", limit=1
+    )
+    for r in results:
+        print(f"Item: {r.key}; Score ({r.score})")
+        print(f"Memory: {r.value['memory']}")
+        print(f"Emotion: {r.value['emotional_context']}\n")
+# Output:
+#   [32m20:09:08[0m [34mredisvl.index.index[0m [1;30mINFO[0m   Index already exists, not overwriting.
+
+#   [32m20:09:08[0m [34mredisvl.index.index[0m [1;30mINFO[0m   Index already exists, not overwriting.
+
+#   Expect mem 2
+
+#   Item: mem2; Score (0.589500546455)
+
+#   Memory: Ate alone at home
+
+#   Emotion: felt a bit lonely
+
+#   
+
+#   Expect mem1
+
+#   Item: mem2; Score (0.23533040285100004)
+
+#   Memory: Ate alone at home
+
+#   Emotion: felt a bit lonely
+
+#   
+
+#   Expect random lower score (ravioli not indexed)
+
+#   Item: mem2; Score (0.15017718076700004)
+
+#   Memory: Ate alone at home
+
+#   Emotion: felt a bit lonely
+
+#   
+
+
+"""
+#### Override fields at storage time
+You can override which fields to embed when storing a specific memory using `put(..., index=[...fields])`, regardless of the store's default configuration.
+"""
+
+REDIS_URI = "redis://redis:6379"
+with RedisStore.from_conn_string(
+    REDIS_URI,
+    index={
+        "embed": embeddings,
+        "dims": 1536,
+        "fields": ["memory"],
+    }  # Default to embed memory field
+) as store:
+    store.setup()
+    
+    # Store one memory with default indexing
+    # Use a different namespace to avoid conflicts with previous examples
+    store.put(
+        ("user_789", "override_field_memories"),
+        "mem1",
+        {"memory": "I love spicy food", "context": "At a Thai restaurant"},
+    )
+
+    # Store another overriding which fields to embed
+    store.put(
+        ("user_789", "override_field_memories"),
+        "mem2",
+        {"memory": "The restaurant was too loud", "context": "Dinner at an Italian place"},
+        index=["context"],  # Override: only embed the context
+    )
+
+    # Search about food - matches mem1 (using default field)
+    print("Expect mem1")
+    results = store.search(
+        ("user_789", "override_field_memories"), query="what food do they like", limit=1
+    )
+    for r in results:
+        print(f"Item: {r.key}; Score ({r.score})")
+        print(f"Memory: {r.value['memory']}")
+        print(f"Context: {r.value['context']}\n")
+
+    # Search about restaurant atmosphere - matches mem2 (using overridden field)
+    print("Expect mem2")
+    results = store.search(
+        ("user_789", "override_field_memories"), query="restaurant environment", limit=1
+    )
+    for r in results:
+        print(f"Item: {r.key}; Score ({r.score})")
+        print(f"Memory: {r.value['memory']}")
+        print(f"Context: {r.value['context']}\n")
+# Output:
+#   [32m20:09:10[0m [34mredisvl.index.index[0m [1;30mINFO[0m   Index already exists, not overwriting.
+
+#   [32m20:09:10[0m [34mredisvl.index.index[0m [1;30mINFO[0m   Index already exists, not overwriting.
+
+#   Expect mem1
+
+#   Item: mem1; Score (0.337496995926)
+
+#   Memory: I love spicy food
+
+#   Context: At a Thai restaurant
+
+#   
+
+#   Expect mem2
+
+#   Item: mem2; Score (0.36791670322400005)
+
+#   Memory: The restaurant was too loud
+
+#   Context: Dinner at an Italian place
+
+#   
+
+
+"""
+#### Disable Indexing for Specific Memories
+
+Some memories shouldn't be searchable by content. You can disable indexing for these while still storing them using 
+`put(..., index=False)`. Example:
+"""
+
+REDIS_URI = "redis://redis:6379"
+with RedisStore.from_conn_string(
+    REDIS_URI,
+    index={"embed": embeddings, "dims": 1536, "fields": ["memory"]}
+) as store:
+    store.setup()
+    
+    # Store a normal indexed memory
+    # Use a different namespace to avoid conflicts with previous examples
+    store.put(
+        ("user_999", "disable_index_memories"),
+        "mem1",
+        {"memory": "I love chocolate ice cream", "type": "preference"},
+    )
+
+    # Store a system memory without indexing
+    store.put(
+        ("user_999", "disable_index_memories"),
+        "mem2",
+        {"memory": "User completed onboarding", "type": "system"},
+        index=False,  # Disable indexing entirely
+    )
+
+    # Search about food preferences - finds mem1
+    print("Expect mem1")
+    results = store.search(("user_999", "disable_index_memories"), query="what food preferences", limit=1)
+    for r in results:
+        print(f"Item: {r.key}; Score ({r.score})")
+        print(f"Memory: {r.value['memory']}")
+        print(f"Type: {r.value['type']}\n")
+
+    # Search about onboarding - won't find mem2 (not indexed)
+    print("Expect low score (mem2 not indexed)")
+    results = store.search(("user_999", "disable_index_memories"), query="onboarding status", limit=1)
+    for r in results:
+        print(f"Item: {r.key}; Score ({r.score})")
+        print(f"Memory: {r.value['memory']}")
+        print(f"Type: {r.value['type']}\n")
+# Output:
+#   [32m20:09:11[0m [34mredisvl.index.index[0m [1;30mINFO[0m   Index already exists, not overwriting.
+
+#   [32m20:09:11[0m [34mredisvl.index.index[0m [1;30mINFO[0m   Index already exists, not overwriting.
+
+#   Expect mem1
+
+#   Item: mem1; Score (0.32269132137300005)
+
+#   Memory: I love chocolate ice cream
+
+#   Type: preference
+
+#   
+
+#   Expect low score (mem2 not indexed)
+
+#   Item: mem1; Score (0.010228455066999986)
+
+#   Memory: I love chocolate ice cream
+
+#   Type: preference
+
+#   
+
+
+

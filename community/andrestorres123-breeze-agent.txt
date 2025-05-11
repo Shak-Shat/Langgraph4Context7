@@ -1,0 +1,1521 @@
+Directory structure:
+└── web_research_graph/
+    ├── __init__.py
+    ├── configuration.py
+    ├── graph.py
+    ├── prompts.py
+    ├── state.py
+    ├── tools.py
+    ├── utils.py
+    ├── interviews_graph/
+    │   ├── __init__.py
+    │   ├── graph.py
+    │   ├── router.py
+    │   ├── answers_graph/
+    │   │   ├── __init__.py
+    │   │   ├── graph.py
+    │   │   └── nodes/
+    │   │       ├── __init__.py
+    │   │       ├── generate.py
+    │   │       └── search.py
+    │   └── nodes/
+    │       ├── __init__.py
+    │       ├── initialize.py
+    │       ├── next_editor.py
+    │       └── question.py
+    └── nodes/
+        ├── __init__.py
+        ├── article_generator.py
+        ├── outline_generator.py
+        ├── outline_refiner.py
+        ├── perspectives_generator.py
+        ├── topic_expander.py
+        ├── topic_input.py
+        └── topic_validator.py
+
+================================================
+FILE: src/web_research_graph/__init__.py
+================================================
+"""Web Research Graph.
+
+This module defines a workflow for conducting web research and generating structured content.
+"""
+
+__all__ = ["graph"]
+
+
+================================================
+FILE: src/web_research_graph/configuration.py
+================================================
+"""Define the configurable parameters for the agent."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field, fields
+from typing import Annotated, Optional
+
+from langchain_core.runnables import RunnableConfig, ensure_config
+
+from web_research_graph import prompts
+
+
+@dataclass(kw_only=True)
+class Configuration:
+    """The configuration for the agent."""
+
+    system_prompt: str = field(
+        default=prompts.SYSTEM_PROMPT,
+        metadata={
+            "description": "The system prompt to use for the agent's interactions. "
+            "This prompt sets the context and behavior for the agent."
+        },
+    )
+
+    fast_llm_model: Annotated[str, {"__template_metadata__": {"kind": "llm"}}] = field(
+        default="anthropic/claude-3-5-haiku-20241022",
+        metadata={
+            "description": "The name of the fast language model to use for simpler tasks. "
+            "Should be in the form: provider/model-name."
+        },
+    )
+
+    tool_model: Annotated[str, {"__template_metadata__": {"kind": "llm"}}] = field(
+        default="openai/gpt-4o-mini",
+        metadata={
+            "description": "The name of the fast language model to use for simpler tasks. "
+            "Should be in the form: provider/model-name."
+        },
+    )
+
+    long_context_model: Annotated[str, {"__template_metadata__": {"kind": "llm"}}] = field(
+        default="anthropic/claude-3-5-sonnet-20241022",
+        metadata={
+            "description": "The name of the language model to use for tasks requiring longer context. "
+            "Should be in the form: provider/model-name."
+        },
+    )
+
+    
+
+    max_search_results: int = field(
+        default=10,
+        metadata={
+            "description": "The maximum number of search results to return for each search query."
+        },
+    )
+
+    @classmethod
+    def from_runnable_config(
+        cls, config: Optional[RunnableConfig] = None
+    ) -> Configuration:
+        """Create a Configuration instance from a RunnableConfig object."""
+        config = ensure_config(config)
+        configurable = config.get("configurable") or {}
+        _fields = {f.name for f in fields(cls) if f.init}
+        return cls(**{k: v for k, v in configurable.items() if k in _fields})
+
+
+
+================================================
+FILE: src/web_research_graph/graph.py
+================================================
+"""Define a research and content generation workflow graph"""
+
+from langgraph.graph import StateGraph, START, END
+
+from web_research_graph.configuration import Configuration
+from web_research_graph.nodes.article_generator import generate_article
+from web_research_graph.interviews_graph.graph import interview_graph
+from web_research_graph.nodes.outline_generator import generate_outline
+from web_research_graph.nodes.outline_refiner import refine_outline
+from web_research_graph.nodes.perspectives_generator import generate_perspectives
+from web_research_graph.nodes.topic_expander import expand_topics
+from web_research_graph.nodes.topic_input import request_topic
+from web_research_graph.nodes.topic_validator import validate_topic
+from web_research_graph.state import InputState, OutputState, State
+
+def should_continue(state: State) -> bool:
+    """Determine if the graph should continue to the next node."""
+    return state.topic.is_valid
+
+builder = StateGraph(State, input=InputState, output=OutputState, config_schema=Configuration)
+
+builder.add_node("validate_topic", validate_topic)
+builder.add_node("request_topic", request_topic)
+builder.add_node("generate_outline", generate_outline)
+builder.add_node("expand_topics", expand_topics)
+builder.add_node("generate_perspectives", generate_perspectives)
+builder.add_node("refine_outline", refine_outline)
+builder.add_node("generate_article", generate_article)
+
+builder.add_node("conduct_interviews", interview_graph)
+
+builder.add_edge(START, "validate_topic")
+builder.add_conditional_edges(
+    "validate_topic",
+    should_continue,
+    {
+        True: "generate_outline",
+        False: "request_topic"
+    }
+)
+builder.add_edge("request_topic", "validate_topic") 
+builder.add_edge("generate_outline", "expand_topics")
+builder.add_edge("expand_topics", "generate_perspectives")
+builder.add_edge("generate_perspectives", "conduct_interviews")
+builder.add_edge("conduct_interviews", "refine_outline")
+builder.add_edge("refine_outline", "generate_article")
+builder.add_edge("generate_article", END)
+
+graph = builder.compile(interrupt_after=["request_topic"])
+graph.name = "Research and Outline Generator"
+
+
+
+================================================
+FILE: src/web_research_graph/prompts.py
+================================================
+"""Default prompts used by the agent."""
+
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+
+SYSTEM_PROMPT = """You are a helpful AI assistant.
+
+System time: {system_time}"""
+
+TOPIC_VALIDATOR_PROMPT = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        """You are a helpful assistant whose job is to ensure the user provides a clear topic for research.
+        Analyze the user's input and determine if it contains a clear research topic.
+        
+        Example valid topics:
+        - "Artificial Intelligence"
+        - "The French Revolution"
+        - "Quantum Computing"
+        
+        Return a structured response with:
+        - is_valid: true if a clear topic is provided, false otherwise
+        - topic: the extracted topic if valid, null otherwise
+        - message: a helpful message if the input is invalid, null otherwise
+        
+        For invalid inputs or small talk, provide a polite message asking for a specific topic."""
+    ),
+    ("user", "{input}"),
+])
+
+RELATED_TOPICS_PROMPT = ChatPromptTemplate.from_template(
+    """I'm writing a Wikipedia page for a topic mentioned below. Please identify and recommend some Wikipedia pages on closely related subjects. I'm looking for examples that provide insights into interesting aspects commonly associated with this topic, or examples that help me understand the typical content and structure included in Wikipedia pages for similar topics.
+
+Please list the as many subjects and urls as you can.
+
+Topic of interest: {topic}
+"""
+)
+
+PERSPECTIVES_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            """You need to select a diverse (and distinct) group of Wikipedia editors who will work together to create a comprehensive article on the topic. Each of them represents a different perspective, role, or affiliation related to this topic.
+            You can use other Wikipedia pages of related topics for inspiration. For each editor, add a description of what they will focus on. Select up to 3 editors.
+
+            Wiki page outlines of related topics for inspiration:
+            {examples}""",
+        ),
+        ("user", "Topic of interest: {topic}"),
+    ]
+)
+
+INTERVIEW_QUESTION_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            """You are an experienced Wikipedia writer and want to edit a specific page. \
+Besides your identity as a Wikipedia writer, you have a specific focus when researching the topic. \
+Now, you are chatting with an expert to get information. Ask good questions to get more useful information.
+
+When you have no more questions to ask, say "Thank you so much for your help!" to end the conversation.\
+Please only ask one question at a time and don't ask what you have asked before.\
+Your questions should be related to the topic you want to write.
+Be comprehensive and curious, gaining as much unique insight from the expert as possible.\
+
+Stay true to your specific perspective:
+
+{persona}""",
+        ),
+        MessagesPlaceholder(variable_name="messages", optional=True),
+    ]
+)
+
+INTERVIEW_ANSWER_PROMPT = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        """You are an expert who can use information effectively. You are chatting with a Wikipedia writer who wants\
+ to write a Wikipedia page on the topic you know. Use the provided references to form your response.
+
+Make your response as informative as possible and make sure every sentence is supported by the gathered information.
+Each response must be backed up by a citation from a reliable source, formatted as a footnote, reproducing the URLS after your response.
+
+References:
+{references}"""
+    ),
+    MessagesPlaceholder(variable_name="messages", optional=True),
+])
+
+REFINE_OUTLINE_PROMPT = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        """You are a Wikipedia writer. You have gathered information from experts and search engines. Now, you are refining the outline of the Wikipedia page. \
+You need to make sure that the outline is comprehensive and specific. \
+Topic you are writing about: {topic} 
+
+Your output must follow this structure:
+- page_title: The main topic title
+- sections: A list of sections where each section has:
+  - section_title: The section heading
+  - description: The section's main content
+  - subsections: A list of subsections (optional) where each has:
+    - subsection_title: The subsection heading
+    - description: The subsection's content
+  - citations: A list of citation URLs
+
+Use the old outline as a base, enhancing it with new information from the conversations. Do not remove existing sections or subsections.
+
+Old outline:
+
+{old_outline}""",
+    ),
+    (
+        "user",
+        "Refine the outline based on your conversations with subject-matter experts:\n\nConversations:\n\n{conversations}\n\nProvide the refined outline following the required structure.",
+    ),
+])
+
+SECTION_WRITER_PROMPT = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        """You are an expert Wikipedia writer. Complete your assigned WikiSection from the following outline:\n\n
+{outline}\n\nCite your sources, using the following references:\n\n<Documents>\n{docs}\n</Documents>""",
+    ),
+    ("user", "Write the full WikiSection for the {section} section. Include both the section description and any subsection descriptions."),
+])
+
+ARTICLE_WRITER_PROMPT = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        """You are an expert Wikipedia author. Write the complete wiki article on {topic} using the following section drafts:\n\n
+{draft}\n\n
+CRITICAL REQUIREMENTS:
+1. You MUST write the COMPLETE article including ALL sections from the drafts
+2. Do NOT truncate, summarize, or skip any sections
+3. Do NOT use placeholders or "[Continue with...]" statements
+4. Write the article in its entirety, no matter how long
+5. Piece together all section drafts into a cohesive article
+6. Make minor adjustments only for flow and transitions between sections
+7. Ensure all specific details, examples, and depth from the original drafts are preserved
+8. Maintain the comprehensive nature of each section while creating a unified whole
+
+Strictly follow Wikipedia format guidelines.""",
+    ),
+    (
+        "user",
+        'Write the COMPLETE Wiki article using markdown format. Include ALL sections. Organize citations using footnotes like "[1]",'
+        " avoiding duplicates in the footer. Include URLs in the footer.",
+    ),
+])
+
+OUTLINE_PROMPT = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        """You are a Wikipedia writer. Create a comprehensive outline for a Wikipedia page about the given topic.
+
+Your output must follow this structure:
+- page_title: The main topic title
+- sections: A list of sections where each section has:
+  - section_title: The section heading
+  - description: A detailed description of what the section will cover
+  - subsections: A list of subsections where each has:
+    - subsection_title: The subsection heading
+    - description: Detailed description of the subsection content
+  - citations: A list of citation URLs (can be empty for initial outline)
+
+Make sure to include at least 3-5 main sections with relevant subsections."""
+    ),
+    ("user", "Create a Wikipedia outline for: {topic}"),
+])
+
+QUERY_SUMMARIZATION_PROMPT = ChatPromptTemplate.from_template(
+    """Given a long search query, create a shorter, focused version that captures the main search intent in under 350 characters.
+Make the shortened query clear and specific enough to return relevant search results.
+
+IMPORTANT: Output ONLY the shortened query. No explanations, no additional text.
+
+Original query: {query}
+
+Shortened query:"""
+)
+
+
+
+================================================
+FILE: src/web_research_graph/state.py
+================================================
+"""Define the state structures for the agent."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import List, Optional, Sequence
+
+from langchain_core.messages import AnyMessage
+from langgraph.graph import add_messages
+from langgraph.managed import IsLastStep
+from pydantic import BaseModel, Field
+from typing_extensions import Annotated
+
+
+@dataclass
+class Editor:
+    """Represents a Wikipedia editor with specific expertise."""
+    
+    affiliation: str
+    name: str
+    role: str
+    description: str
+
+    @property
+    def persona(self) -> str:
+        """Return a formatted string representation of the editor."""
+        return f"Name: {self.name}\nRole: {self.role}\nAffiliation: {self.affiliation}\nDescription: {self.description}\n"
+
+
+@dataclass
+class Perspectives:
+    """Represents a group of editors with different perspectives."""
+    
+    editors: List[Editor] = field(default_factory=list)
+
+
+class RelatedTopics(BaseModel):
+    """Represents related topics for research."""
+    
+    topics: List[str] = Field(
+        description="List of related topics that are relevant to the main research subject"
+    )
+
+
+class Subsection(BaseModel):
+    """Represents a subsection in a Wikipedia article."""
+    
+    subsection_title: str = Field(
+        description="The title of the subsection"
+    )
+    description: str = Field(
+        description="The detailed content of the subsection"
+    )
+
+    @property
+    def as_str(self) -> str:
+        """Return a formatted string representation of the subsection."""
+        return f"### {self.subsection_title}\n\n{self.description}".strip()
+
+
+class Section(BaseModel):
+    """Represents a section in a Wikipedia article."""
+    
+    section_title: str = Field(
+        description="The title of the section"
+    )
+    description: str = Field(
+        description="The main content/summary of the section"
+    )
+    subsections: List[Subsection] = Field(
+        description="List of subsections within this section"
+    )
+    citations: List[str] = Field(
+        default_factory=list,
+        description="List of citations supporting the section content"
+    )
+
+    @property
+    def as_str(self) -> str:
+        """Return a formatted string representation of the section."""
+        subsections = "\n\n".join(
+            subsection.as_str for subsection in self.subsections or []
+        )
+        citations = "\n".join([f"[{i+1}] {cit}" for i, cit in enumerate(self.citations)])
+        return (
+            f"## {self.section_title}\n\n{self.description}\n\n{subsections}".strip()
+            + f"\n\n{citations}".strip()
+        )
+
+
+class Outline(BaseModel):
+    """Represents a complete Wikipedia-style outline."""
+
+    page_title: str = Field(
+        description="The main title of the Wikipedia article"
+    )
+    sections: List[Section] = Field(
+        description="List of sections that make up the article"
+    )
+
+    @property
+    def as_str(self) -> str:
+        """Return a formatted string representation of the outline."""
+        sections = "\n\n".join(section.as_str for section in self.sections)
+        return f"# {self.page_title}\n\n{sections}".strip()
+
+
+@dataclass
+class InputState:
+    """Defines the input state for the agent."""
+
+    messages: Annotated[Sequence[AnyMessage], add_messages] = field(default_factory=list)
+
+@dataclass
+class OutputState:
+    """Defines the output state for the agent."""
+
+    article: Optional[str] = field(default=None)
+
+class TopicValidation(BaseModel):
+    """Structured output for topic validation."""
+    
+    is_valid: bool = Field(
+        description="Indicates whether the topic is valid for article generation"
+    )
+    topic: Optional[str] = Field(
+        description="The validated and possibly reformulated topic"
+    )
+    message: Optional[str] = Field(
+        description="Feedback message about the topic validation result"
+    )
+
+def default_topic_validation() -> TopicValidation:
+    """Create a default TopicValidation instance."""
+    return TopicValidation(is_valid=False, topic=None, message=None)
+
+@dataclass
+class State(InputState, OutputState):
+    """Represents the complete state of the agent."""
+
+    is_last_step: IsLastStep = field(default=False)
+    outline: Optional[Outline] = field(default=None)
+    related_topics: Optional[RelatedTopics] = field(default=None)
+    perspectives: Optional[Perspectives] = field(default=None)
+    article: Optional[str] = field(default=None)
+    references: Annotated[Optional[dict], field(default=None)] = None
+    topic: TopicValidation = field(default_factory=default_topic_validation)
+
+@dataclass
+class InterviewState:
+    """State for the interview process between editors and experts."""
+    
+    messages: Annotated[List[AnyMessage], add_messages] = field(default_factory=list)
+    references: Annotated[Optional[dict], field(default=None)] = None
+    editor: Annotated[Optional[Editor], field(default=None)] = None
+    editors: List[Editor] = field(default_factory=list)
+    current_editor_index: int = field(default=0)
+    is_complete: bool = field(default=False)
+    perspectives: Optional[Perspectives] = field(default=None)
+
+
+
+================================================
+FILE: src/web_research_graph/tools.py
+================================================
+"""This module provides tools for web scraping and search functionality.
+
+It includes a basic Tavily search function (as an example)
+
+These tools are intended as free examples to get started. For production use,
+consider implementing more robust and specialized tools tailored to your needs.
+"""
+
+from typing import Any, Callable, List, Optional, cast
+
+from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import InjectedToolArg
+from typing_extensions import Annotated
+from langchain_core.output_parsers import StrOutputParser
+from web_research_graph.utils import load_chat_model
+
+from web_research_graph.configuration import Configuration
+from web_research_graph.prompts import QUERY_SUMMARIZATION_PROMPT
+
+
+async def summarize_query(query: str, model: Any) -> str:
+    """Summarize a long query into a shorter, focused version."""
+
+    chain = QUERY_SUMMARIZATION_PROMPT | model | StrOutputParser()
+    return await chain.ainvoke({"query": query})
+
+
+async def search(
+    query: str, *, config: Annotated[RunnableConfig, InjectedToolArg]
+) -> Optional[list[dict[str, Any]]]:
+    """Search for general web results.
+
+    This function performs a search using the Tavily search engine, which is designed
+    to provide comprehensive, accurate, and trusted results. It's particularly useful
+    for answering questions about current events.
+
+    If the query is longer than 350 characters, it will be automatically summarized
+    using an LLM to create a more focused search query.
+    """
+    configuration = Configuration.from_runnable_config(config)
+    model = load_chat_model(configuration.long_context_model)
+    # If query is too long, summarize it using the LLM
+    if len(query) > 350:
+        query = await summarize_query(query, model)
+    
+    wrapped = TavilySearchResults(max_results=configuration.max_search_results)
+    result = await wrapped.ainvoke({"query": query})
+    return cast(list[dict[str, Any]], result)
+
+
+TOOLS: List[Callable[..., Any]] = [search]
+
+
+
+================================================
+FILE: src/web_research_graph/utils.py
+================================================
+"""Utility & helper functions."""
+
+from typing import Dict, Any, Optional
+from langchain.chat_models import init_chat_model
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import BaseMessage
+
+from web_research_graph.state import Outline, Section, Subsection
+import re
+from langchain_core.messages import AIMessage, HumanMessage
+
+from web_research_graph.state import InterviewState
+
+def get_message_text(msg: BaseMessage) -> str:
+    """Get the text content of a message."""
+    content = msg.content
+    if isinstance(content, str):
+        return content
+    elif isinstance(content, dict):
+        return content.get("text", "")
+    else:
+        txts = [c if isinstance(c, str) else (c.get("text") or "") for c in content]
+        return "".join(txts).strip()
+
+
+def load_chat_model(fully_specified_name: str, max_tokens: Optional[int] = None) -> BaseChatModel:
+    """Load a chat model from a fully specified name.
+
+    Args:
+        fully_specified_name (str): String in the format 'provider/model'.
+        max_tokens (Optional[int]): Maximum number of tokens to generate.
+    """
+    provider, model = fully_specified_name.split("/", maxsplit=1)
+    kwargs = {}
+    if max_tokens is not None:
+        kwargs["max_tokens"] = max_tokens
+    return init_chat_model(model, model_provider=provider, **kwargs)
+
+def dict_to_section(section_dict: Dict[str, Any]) -> Section:
+    """Convert a dictionary to a Section object."""
+    subsections = []
+    for subsection_data in section_dict.get("subsections", []) or []:
+        subsections.append(Subsection(
+            subsection_title=subsection_data["subsection_title"],
+            description=subsection_data["description"]
+        ))
+    
+    return Section(
+        section_title=section_dict["section_title"],
+        description=section_dict["description"],
+        subsections=subsections,
+        citations=section_dict.get("citations", [])
+    )
+
+def sanitize_name(name: str) -> str:
+    """Convert a name to a valid format for the API."""
+    # Replace spaces and special chars with underscores, keep alphanumeric
+    sanitized = re.sub(r'[^a-zA-Z0-9_-]', '_', name)
+    return sanitized
+
+def swap_roles(state: InterviewState, name: str):
+    """Convert messages to appropriate roles for the current speaker."""
+    
+    converted = []
+    for i, message in enumerate(state.messages):
+        
+        if isinstance(message, AIMessage) and message.name != name:
+            message = HumanMessage(**message.dict(exclude={"type"}))
+        
+        converted.append(message)
+    
+    return InterviewState(
+        messages=converted, 
+        editor=state.editor,
+        references=state.references,
+        editors=state.editors,
+        current_editor_index=state.current_editor_index
+    )
+
+
+
+================================================
+FILE: src/web_research_graph/interviews_graph/__init__.py
+================================================
+"""Interview process package."""
+
+from .graph import interview_graph
+
+__all__ = ['interview_graph'] 
+
+
+================================================
+FILE: src/web_research_graph/interviews_graph/graph.py
+================================================
+"""Define the interview workflow graph."""
+
+from langgraph.graph import StateGraph, START, END
+from langgraph.pregel import RetryPolicy
+
+from web_research_graph.state import InterviewState
+from web_research_graph.interviews_graph.nodes.initialize import initialize_interview
+from web_research_graph.interviews_graph.nodes.question import generate_question
+from web_research_graph.interviews_graph.nodes.next_editor import next_editor
+from web_research_graph.interviews_graph.router import route_messages
+from web_research_graph.interviews_graph.answers_graph.graph import answer_graph
+
+builder = StateGraph(InterviewState)
+        
+# Add nodes
+builder.add_node("initialize", initialize_interview)
+builder.add_node(
+    "ask_question", 
+    generate_question, 
+    retry=RetryPolicy(max_attempts=5)
+)
+builder.add_node(
+    "answer_question",
+    answer_graph,
+    retry=RetryPolicy(max_attempts=5)
+)
+builder.add_node("next_editor", next_editor)
+        
+# Add edges
+builder.add_edge(START, "initialize")
+builder.add_edge("initialize", "ask_question")
+builder.add_conditional_edges(
+    "answer_question",
+    route_messages,
+    {
+        "ask_question": "ask_question",
+        "next_editor": "next_editor",
+        "end": END
+    }
+)
+builder.add_edge("ask_question", "answer_question")
+builder.add_conditional_edges(
+    "next_editor",
+    lambda x: "end" if x.is_complete else "ask_question",
+    {
+        "ask_question": "ask_question",
+        "end": END
+    }
+)
+        
+interview_graph = builder.compile() 
+interview_graph.name = "Interview Conductor"
+
+
+
+================================================
+FILE: src/web_research_graph/interviews_graph/router.py
+================================================
+"""Router functions for managing interview flow."""
+
+from langchain_core.messages import AIMessage
+
+from web_research_graph.state import InterviewState
+from web_research_graph.utils import sanitize_name
+
+MAX_TURNS = 3
+EXPERT_NAME = "expert"
+
+def route_messages(state: InterviewState) -> str:
+    """Determine whether to continue the interview or end it."""
+    if not state.messages:
+        return "end"
+        
+    messages = state.messages
+    current_editor_name = sanitize_name(state.editor.name)
+    
+    # Find where the current editor's conversation started
+    conversation_start = 0
+    for i, m in enumerate(messages):
+        if (isinstance(m, AIMessage) and 
+            m.name == "system" and 
+            current_editor_name in m.content):
+            conversation_start = i
+            break
+    
+    # Only look at messages after the conversation start
+    current_messages = messages[conversation_start:]
+    
+    # Get the last message
+    if current_messages:
+        last_message = current_messages[-1]
+        
+        # If the last message was from the expert, wait for editor's response
+        if isinstance(last_message, AIMessage) and last_message.name == EXPERT_NAME:
+            return "ask_question"
+            
+        # If the last message was from the editor
+        if isinstance(last_message, AIMessage) and last_message.name == current_editor_name:
+            # Count expert responses in this conversation
+            expert_responses = len([
+                m for m in current_messages 
+                if isinstance(m, AIMessage) and m.name == EXPERT_NAME
+            ])
+            
+            # Check if we've reached max turns or got a thank you
+            if (expert_responses >= MAX_TURNS or 
+                last_message.content.endswith("Thank you so much for your help!")):
+                return "next_editor"
+                
+            return "next_editor"
+    
+    # If we're just starting, ask a question
+    return "ask_question" 
+
+
+================================================
+FILE: src/web_research_graph/interviews_graph/answers_graph/__init__.py
+================================================
+"""Answer generation package."""
+
+from .graph import answer_graph
+
+__all__ = ["answer_graph"] 
+
+
+================================================
+FILE: src/web_research_graph/interviews_graph/answers_graph/graph.py
+================================================
+"""Define the answer generation workflow graph."""
+
+from langgraph.graph import StateGraph, START, END
+
+from web_research_graph.state import InterviewState
+from web_research_graph.interviews_graph.answers_graph.nodes.search import search_for_context
+from web_research_graph.interviews_graph.answers_graph.nodes.generate import generate_expert_answer
+
+builder = StateGraph(InterviewState)
+
+# Add nodes
+builder.add_node("search_context", search_for_context)
+builder.add_node("generate_answer", generate_expert_answer)
+
+# Add edges
+builder.add_edge(START, "search_context")
+builder.add_edge("search_context", "generate_answer")
+builder.add_edge("generate_answer", END)
+
+answer_graph = builder.compile()
+answer_graph.name = "Answer Generator"
+
+
+
+================================================
+FILE: src/web_research_graph/interviews_graph/answers_graph/nodes/__init__.py
+================================================
+"""Answer generation nodes package."""
+
+from .search import search_for_context
+from .generate import generate_expert_answer
+
+__all__ = ["search_for_context", "generate_expert_answer"] 
+
+
+================================================
+FILE: src/web_research_graph/interviews_graph/answers_graph/nodes/generate.py
+================================================
+"""Node for generating expert answers."""
+
+from langchain_core.messages import AIMessage
+from langchain_core.runnables import RunnableConfig
+
+from web_research_graph.configuration import Configuration
+from web_research_graph.state import InterviewState
+from web_research_graph.prompts import INTERVIEW_ANSWER_PROMPT
+from web_research_graph.utils import load_chat_model
+
+EXPERT_NAME = "expert"
+
+async def generate_expert_answer(state: InterviewState, config: RunnableConfig) -> InterviewState:
+    """Generate an expert answer using the gathered information."""
+    
+    configuration = Configuration.from_runnable_config(config)
+    model = load_chat_model(configuration.fast_llm_model)
+    
+    if state.editor is None:
+        raise ValueError("Editor not found in state")
+    
+    # Format references for the prompt
+    references_text = ""
+    if state.references:
+        references_text = "\n\n".join(
+            f"Source: {url}\nContent: {content}" 
+            for url, content in state.references.items()
+        )
+    
+    # Create the chain
+    chain = INTERVIEW_ANSWER_PROMPT | model
+    
+    # Generate answer
+    result = await chain.ainvoke(
+        {
+            "messages": state.messages, 
+            "references": references_text
+        },
+        config
+    )
+    
+    content = result.content if hasattr(result, 'content') else str(result)
+    
+    if not content:
+        return state
+    
+    return InterviewState(
+        messages=state.messages + [AIMessage(content=content, name=EXPERT_NAME)],
+        references=state.references,
+        editor=state.editor,
+        editors=state.editors,
+        current_editor_index=state.current_editor_index
+    ) 
+
+
+================================================
+FILE: src/web_research_graph/interviews_graph/answers_graph/nodes/search.py
+================================================
+"""Node for searching relevant context for answers."""
+
+from langchain_core.runnables import RunnableConfig
+from langchain_core.messages import AIMessage, HumanMessage
+
+from web_research_graph.state import InterviewState
+from web_research_graph.tools import search
+from web_research_graph.utils import swap_roles
+
+EXPERT_NAME = "expert"
+
+async def search_for_context(state: InterviewState, config: RunnableConfig) -> InterviewState:
+    """Search for relevant information to answer the question."""
+    
+    if state.editor is None:
+        raise ValueError("Editor not found in state")
+    
+    # Swap roles to get the correct perspective
+    swapped_state = swap_roles(state, EXPERT_NAME)
+    
+    # Get the last question (now as HumanMessage after swap)
+    last_question = next(
+        (msg for msg in reversed(swapped_state.messages) 
+         if isinstance(msg, HumanMessage)),
+        None
+    )
+    
+    if not last_question:
+        return state
+    
+    # Perform search
+    search_results = await search(last_question.content, config=config)
+        
+    # Store results in references
+    if search_results:
+        references = state.references or {}
+        for result in search_results:
+            if isinstance(result, dict):
+                references[result.get("url", "unknown")] = result.get("content", "")
+            elif isinstance(result, str):
+                references[f"source_{len(references)}"] = result
+            
+        return InterviewState(
+            messages=state.messages,
+            references=references,
+            editor=state.editor,
+            editors=state.editors,
+            current_editor_index=state.current_editor_index
+        )
+    
+    return state 
+
+
+================================================
+FILE: src/web_research_graph/interviews_graph/nodes/__init__.py
+================================================
+"""Interview nodes package."""
+
+from .initialize import initialize_interview
+from .question import generate_question
+from .next_editor import next_editor
+
+__all__ = [
+    "initialize_interview",
+    "generate_question",
+    "next_editor"
+] 
+
+
+================================================
+FILE: src/web_research_graph/interviews_graph/nodes/initialize.py
+================================================
+"""Node for initializing the interview process."""
+
+from langchain_core.messages import AIMessage
+from langchain_core.runnables import RunnableConfig
+
+from web_research_graph.state import InterviewState, Editor, State
+
+EXPERT_NAME = "expert"
+
+async def initialize_interview(state: State, config: RunnableConfig) -> InterviewState:
+    """Initialize the interview state with editors from perspectives."""
+    
+    # Get editors from perspectives
+    if not state.perspectives:
+        raise ValueError("No perspectives found in state")
+        
+    perspectives = state.perspectives
+    editors = perspectives.get("editors", [])
+
+    if not editors:
+        raise ValueError("No editors found in perspectives")
+    
+    # Convert editors to proper Editor objects
+    editors_list = [
+        Editor(**editor)for editor in editors
+    ]
+    
+    # Start with the first editor
+    initial_message = AIMessage(
+        content=f"So you said you were writing an article on {state.outline.page_title if state.outline else 'this topic'}?",
+        name=EXPERT_NAME
+    )
+    
+    return InterviewState(
+        messages=[initial_message],
+        editor=editors_list[0],
+        references={},
+        editors=editors_list,
+        current_editor_index=0
+    ) 
+
+
+================================================
+FILE: src/web_research_graph/interviews_graph/nodes/next_editor.py
+================================================
+"""Node for managing editor transitions in interviews."""
+
+from langchain_core.messages import AIMessage
+from langchain_core.runnables import RunnableConfig
+
+from web_research_graph.state import InterviewState
+
+EXPERT_NAME = "expert"
+
+async def next_editor(state: InterviewState, config: RunnableConfig) -> InterviewState:
+    """Move to the next editor or end if all editors are done."""
+    next_index = state.current_editor_index + 1
+    
+    if next_index >= len(state.editors):
+        return InterviewState(
+            messages=state.messages,
+            editor=state.editor,
+            references=state.references,
+            editors=state.editors,
+            current_editor_index=next_index,
+            is_complete=True
+        )
+        
+    # Add a separator message to mark the start of a new conversation
+    separator = AIMessage(
+        content=f"\n--- Starting interview with {state.editors[next_index].name} ---\n",
+        name="system"
+    )
+    
+    # Start fresh conversation with next editor while keeping history
+    initial_message = AIMessage(
+        content=f"So you said you were writing an article on this topic?",
+        name=EXPERT_NAME
+    )
+    
+    return InterviewState(
+        messages=state.messages + [separator, initial_message],
+        editor=state.editors[next_index],
+        references=state.references,
+        editors=state.editors,
+        current_editor_index=next_index
+    ) 
+
+
+================================================
+FILE: src/web_research_graph/interviews_graph/nodes/question.py
+================================================
+"""Node for generating interview questions from editors."""
+
+from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.runnables import RunnableConfig
+
+from web_research_graph.configuration import Configuration
+from web_research_graph.state import InterviewState
+from web_research_graph.prompts import INTERVIEW_QUESTION_PROMPT
+from web_research_graph.utils import load_chat_model
+from web_research_graph.utils import sanitize_name, swap_roles
+
+async def generate_question(state: InterviewState, config: RunnableConfig):
+    """Generate a question from the editor's perspective."""
+    configuration = Configuration.from_runnable_config(config)
+    model = load_chat_model(configuration.fast_llm_model)
+    
+    if state.editor is None:
+        raise ValueError("Editor not found in state. Make sure to set the editor before starting the interview.")
+    
+    editor = state.editor
+    editor_name = sanitize_name(editor.name)
+    swapped = swap_roles(state, editor_name)
+    
+    chain = INTERVIEW_QUESTION_PROMPT | model
+    
+    result = await chain.ainvoke(
+        {"messages": swapped.messages, "persona": editor.persona},
+        config
+    )
+    
+    content = result.content if hasattr(result, 'content') else str(result)
+    
+    return InterviewState(
+        messages=state.messages + [AIMessage(content=content, name=editor_name)],
+        editor=state.editor,
+        references=state.references,
+        editors=state.editors,
+        current_editor_index=state.current_editor_index
+    ) 
+
+
+================================================
+FILE: src/web_research_graph/nodes/__init__.py
+================================================
+"""Nodes for the web research graph."""
+
+from web_research_graph.nodes.outline_generator import generate_outline
+
+__all__ = ["generate_outline"] 
+
+
+================================================
+FILE: src/web_research_graph/nodes/article_generator.py
+================================================
+"""Node for generating the full Wikipedia article."""
+
+from typing import Optional, List
+from langchain_core.runnables import RunnableConfig
+from langchain_community.vectorstores import InMemoryVectorStore
+from langchain_core.documents import Document
+from langchain_openai import OpenAIEmbeddings
+
+from web_research_graph.configuration import Configuration
+from web_research_graph.state import State, Section, Outline
+from web_research_graph.utils import load_chat_model, get_message_text, dict_to_section
+from web_research_graph.prompts import SECTION_WRITER_PROMPT, ARTICLE_WRITER_PROMPT
+
+async def create_retriever(references: dict):
+    """Create a retriever from the reference documents."""
+    embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+    reference_docs = [
+        Document(page_content=content, metadata={"source": source})
+        for source, content in references.items()
+    ]
+    vectorstore = InMemoryVectorStore.from_documents(
+        reference_docs,
+        embedding=embeddings,
+    )
+    return vectorstore.as_retriever(k=3)
+
+async def generate_section(
+    outline_str: str,
+    section_title: str,
+    topic: str,
+    retriever,
+    config: Optional[RunnableConfig] = None
+) -> Section:
+    """Generate a single section of the article."""
+    # Get configuration
+    configuration = Configuration.from_runnable_config(config)
+    
+    # Retrieve relevant documents
+    docs = await retriever.ainvoke(f"{topic}: {section_title}")
+    formatted_docs = "\n".join(
+        f'<Document href="{doc.metadata["source"]}"/>\n{doc.page_content}\n</Document>'
+        for doc in docs
+    )
+    
+    # Create the chain
+    model = load_chat_model(configuration.long_context_model, max_tokens=2000)
+    chain = SECTION_WRITER_PROMPT | model.with_structured_output(Section)
+    
+    # Generate the section
+    return await chain.ainvoke(
+        {
+            "outline": outline_str,
+            "section": section_title,
+            "docs": formatted_docs,
+        },
+        config
+    )
+
+async def generate_article(state: State, config: Optional[RunnableConfig] = None) -> State:
+    """Generate the complete Wikipedia article."""
+    if not state.outline:
+        raise ValueError("No outline found in state")
+        
+    configuration = Configuration.from_runnable_config(config)
+    model = load_chat_model(configuration.long_context_model, max_tokens=4000)
+    
+    # Convert dictionary outline to Outline object if needed
+    current_outline = state.outline
+    
+    # Create retriever from references in state
+    retriever = await create_retriever(state.references)
+    
+    # Generate each section in parallel
+    sections = []
+    for section in current_outline.sections:
+        section_content = await generate_section(
+            current_outline.as_str,
+            section.section_title,
+            current_outline.page_title,
+            retriever,
+            config
+        )
+        # Convert dictionary to Section object if needed
+        if isinstance(section_content, dict):
+            section_content = dict_to_section(section_content)
+        sections.append(section_content)
+    
+    # Format all sections for final article generation
+    draft = "\n\n".join(section.as_str for section in sections)
+    
+    # Update state with the generated article
+    return State(
+        messages=state.messages,
+        outline=current_outline,
+        related_topics=state.related_topics,
+        perspectives=state.perspectives,
+        is_last_step=True,
+        article=draft,
+        references=state.references
+    ) 
+
+
+
+
+
+================================================
+FILE: src/web_research_graph/nodes/outline_generator.py
+================================================
+"""Node for generating Wikipedia-style outlines."""
+
+from typing import Dict, List
+from langchain_core.messages import AIMessage
+from langchain_core.runnables import RunnableConfig
+
+from web_research_graph.configuration import Configuration
+from web_research_graph.prompts import OUTLINE_PROMPT
+from web_research_graph.state import Outline, State
+from web_research_graph.utils import load_chat_model
+
+async def generate_outline(
+    state: State, config: RunnableConfig
+) -> Dict[str, List[AIMessage]]:
+    """Generate a Wikipedia-style outline for a given topic."""
+    configuration = Configuration.from_runnable_config(config)
+    model = load_chat_model(configuration.tool_model)
+    
+    # Use the validated topic from state
+    if not state.topic.is_valid or not state.topic.topic:
+        raise ValueError("No valid topic found in state")
+
+    # Create the chain for outline generation with structured output
+    chain = OUTLINE_PROMPT | model.with_structured_output(Outline)
+
+    # Generate the outline using the validated topic
+    response = await chain.ainvoke({"topic": state.topic.topic}, config)
+
+    return {
+        "outline": response,
+    } 
+
+
+================================================
+FILE: src/web_research_graph/nodes/outline_refiner.py
+================================================
+"""Node for refining the outline based on interview results."""
+
+from typing import Optional
+from langchain_core.runnables import RunnableConfig
+
+from web_research_graph.configuration import Configuration
+from web_research_graph.state import State, Outline
+from web_research_graph.utils import load_chat_model, get_message_text
+from web_research_graph.prompts import REFINE_OUTLINE_PROMPT
+
+async def refine_outline(
+    state: State, 
+    config: Optional[RunnableConfig] = None
+) -> State:
+    """Refine the outline based on interview results."""
+    configuration = Configuration.from_runnable_config(config)
+    model = load_chat_model(configuration.tool_model)
+    
+    if not state.outline:
+        raise ValueError("No initial outline found in state")
+   
+    current_outline = state.outline
+        
+    # Format conversations from the state's messages
+    conversations = "\n\n".join(
+        f"### {m.name}\n\n{get_message_text(m)}" 
+        for m in state.messages
+    )
+    
+    # Create the chain with structured output
+    chain = REFINE_OUTLINE_PROMPT | model.with_structured_output(Outline)
+    
+    # Generate refined outline with explicit structure validation
+    refined_outline = await chain.ainvoke(
+        {
+            "topic": current_outline.page_title,
+            "old_outline": current_outline.as_str,
+            "conversations": conversations,
+        },
+        config
+    )
+    
+    # Ensure we maintain the structure
+    if not refined_outline.sections:
+        # If no sections, copy the sections from the current outline
+        refined_outline.sections = current_outline.sections
+    elif len(refined_outline.sections) < len(current_outline.sections):
+        # If we lost sections, merge with original
+        existing_sections = {s.section_title: s for s in current_outline.sections}
+        refined_sections = {s.section_title: s for s in refined_outline.sections}
+        # Update existing sections with refined ones, keeping any that weren't refined
+        existing_sections.update(refined_sections)
+        refined_outline.sections = list(existing_sections.values())
+    
+    # Return updated state with new outline
+    return State(
+        messages=state.messages,
+        outline=refined_outline,
+        related_topics=state.related_topics,
+        perspectives=state.perspectives,
+        is_last_step=state.is_last_step
+    ) 
+
+
+================================================
+FILE: src/web_research_graph/nodes/perspectives_generator.py
+================================================
+"""Node for generating diverse editorial perspectives."""
+
+from typing import Dict, List
+
+from langchain_community.retrievers import WikipediaRetriever
+from langchain_core.runnables import RunnableConfig
+
+from web_research_graph.configuration import Configuration
+from web_research_graph.state import State, Perspectives
+from web_research_graph.utils import load_chat_model
+from web_research_graph.prompts import PERSPECTIVES_PROMPT
+
+
+def format_doc(doc, max_length=1000) -> str:
+    """Format a Wikipedia document for use in prompts."""
+    related = "- ".join(doc.metadata["categories"])
+    return f"### {doc.metadata['title']}\n\nSummary: {doc.page_content}\n\nRelated\n{related}"[:max_length]
+
+
+def format_docs(docs) -> str:
+    """Format multiple Wikipedia documents."""
+    return "\n\n".join(format_doc(doc) for doc in docs)
+
+
+async def generate_perspectives(
+    state: State, config: RunnableConfig
+) -> Dict[str, Perspectives]:
+    """Generate diverse editorial perspectives based on related topics."""
+
+    configuration = Configuration.from_runnable_config(config)
+
+    # Initialize the Wikipedia retriever
+    wikipedia_retriever = WikipediaRetriever(load_all_available_meta=True, top_k_results=1)
+    
+    # Get related topics from state
+    if not state.related_topics:
+        raise ValueError("No related topics found in state")
+    
+    # Retrieve Wikipedia documents for each topic
+    retrieved_docs = await wikipedia_retriever.abatch(
+        state.related_topics.dict(),
+        return_exceptions=True
+    )
+    
+    # Filter out any failed retrievals and format the successful ones
+    all_docs = []
+    for docs in retrieved_docs:
+        if isinstance(docs, BaseException):
+            continue
+        all_docs.extend(docs)
+    
+    formatted_docs = format_docs(all_docs)
+    
+    # Get the original topic from messages
+    last_user_message = next(
+        (msg for msg in reversed(state.messages) if msg.type == "human"),
+        None,
+    )
+    if not last_user_message:
+        raise ValueError("No user message found in state")
+
+    # Initialize the model and create the chain
+    model = load_chat_model(configuration.fast_llm_model)
+    chain = PERSPECTIVES_PROMPT | model.with_structured_output(Perspectives)
+
+    # Generate perspectives
+    perspectives = await chain.ainvoke(
+        {
+            "examples": formatted_docs,
+            "topic": last_user_message.content
+        },
+        config
+    )
+
+    return {
+        "perspectives": perspectives
+    } 
+
+
+================================================
+FILE: src/web_research_graph/nodes/topic_expander.py
+================================================
+"""Node for expanding topics with related subjects."""
+
+from typing import Dict
+
+from langchain_core.messages import AIMessage
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnableConfig
+
+from web_research_graph.configuration import Configuration
+from web_research_graph.state import State, RelatedTopics
+from web_research_graph.utils import load_chat_model
+from web_research_graph.prompts import RELATED_TOPICS_PROMPT
+
+async def expand_topics(
+    state: State, config: RunnableConfig
+) -> Dict[str, RelatedTopics]:
+    """Expand a topic with related subjects."""
+    configuration = Configuration.from_runnable_config(config)
+
+    # Initialize the fast LLM for topic expansion
+    model = load_chat_model(configuration.fast_llm_model)
+
+    # Get the topic from the last user message
+    last_user_message = next(
+        (msg for msg in reversed(state.messages) if msg.type == "human"),
+        None,
+    )
+    if not last_user_message:
+        raise ValueError("No user message found in state")
+
+    # Create the chain for topic expansion with structured output
+    chain = RELATED_TOPICS_PROMPT | model.with_structured_output(RelatedTopics)
+
+    # Generate related topics
+    related_topics = await chain.ainvoke({"topic": last_user_message.content}, config)
+
+    return {
+        "related_topics": related_topics,
+    } 
+
+
+================================================
+FILE: src/web_research_graph/nodes/topic_input.py
+================================================
+"""Node for handling invalid topics and waiting for user input."""
+
+from typing import Dict
+from langchain_core.messages import AIMessage
+from langchain_core.runnables import RunnableConfig
+
+from web_research_graph.state import State
+
+async def request_topic(state: State, config: RunnableConfig) -> Dict:
+    """Request a new topic from the user."""
+    message = state.topic.get('message', 'Please provide a specific topic for research.')
+    
+    new_message = AIMessage(content=message)
+    new_messages = state.messages + [new_message]
+    
+    return {
+        "messages": new_messages
+    } 
+
+
+================================================
+FILE: src/web_research_graph/nodes/topic_validator.py
+================================================
+"""Node for validating and extracting the topic from user input."""
+
+from langchain_core.runnables import RunnableConfig
+from typing import Dict
+
+from web_research_graph.configuration import Configuration
+from web_research_graph.state import State, TopicValidation
+from web_research_graph.utils import load_chat_model
+from web_research_graph.prompts import TOPIC_VALIDATOR_PROMPT
+
+async def validate_topic(state: State, config: RunnableConfig) -> Dict:
+    """Validate and extract the topic from user input."""
+    configuration = Configuration.from_runnable_config(config)
+    model = load_chat_model(configuration.fast_llm_model)
+    
+    # Get the last user message
+    last_user_message = next(
+        (msg for msg in reversed(state.messages) if msg.type == "human"),
+        None,
+    )
+    if not last_user_message:
+        raise ValueError("No user message found in state")
+    
+    # Validate the topic using structured output
+    chain = TOPIC_VALIDATOR_PROMPT | model.with_structured_output(TopicValidation)
+    response = await chain.ainvoke(
+        {"input": last_user_message.content},
+        config=config,
+    )
+
+    message = []
+    if not response.is_valid:
+        message = response['message']
+    
+    return {
+        "topic": response,
+        "message": message,
+    }
+

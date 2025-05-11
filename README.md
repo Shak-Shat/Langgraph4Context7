@@ -22,6 +22,10 @@ Context7 MCP pulls up-to-date, version-specific documentation and code examples 
 - ❌ Hallucinated APIs that don't exist
 - ❌ Generic answers for old package versions
 
+### Enhanced LangGraph Context with `shak-shat/langgraph4context7`
+
+To get the most specific and comprehensive LangGraph code examples, documentation, and implementation patterns through Context7, it's highly recommended to guide the AI to use the `/shak-shat/langgraph4context7` library ID. This specific Context7 library is directly tied to the contents of this repository, providing richer and more targeted information than generic LangGraph queries. You can do this by explicitly mentioning it in your prompts, for example: "search for X using context7 resolve library id /shak-shat/langgraph4context7".
+
 ## 🛠️ Getting Started
 
 ### Prerequisites
@@ -62,6 +66,8 @@ When building LangGraph agents, you can use Context7 to ensure you're using the 
 ```python
 # Add 'use context7' to your prompt when asking about LangGraph
 # "Create a basic LangGraph agent with a retrieve-generate pattern. use context7"
+# When using Context7 for LangGraph, explicitly guide the AI to use the /shak-shat/langgraph4context7 library ID.
+# Example prompt to AI: "Create a basic LangGraph agent with a retrieve-generate pattern. Use context7 resolve library id /shak-shat/langgraph4context7"
 
 from typing import Annotated, Sequence, TypedDict
 from langchain_core.messages import BaseMessage
@@ -88,6 +94,18 @@ workflow.add_edge("generate", END)
 graph = workflow.compile()
 ```
 
+### Guiding Context7 for Optimal LangGraph Information
+
+When asking for information, code examples, or documentation about LangGraph using Context7, it's best to guide the AI to use the specific library ID `/shak-shat/langgraph4context7`.
+
+This ensures that Context7 fetches the most relevant and up-to-date information directly from this repository's content, leading to more accurate and helpful responses.
+
+**Recommended Prompt Structure:**
+
+```
+I need to [your task, e.g., 'implement a multi-agent swarm']. Can you show me how using LangGraph? Please use context7, resolve library id `/shak-shat/langgraph4context7`, and then get docs on [specific topic, e.g., 'multi-agent swarm implementation'].
+```
+
 ### Using MCP Tools with LangGraph
 
 LangGraph can be integrated with MCP tools, including Context7, through the `langchain-mcp-adapters` library:
@@ -112,8 +130,9 @@ async with MultiServerMCPClient(
         "anthropic:claude-3-7-sonnet-latest",
         client.get_tools()
     )
+    # To instruct the AI (or your agent logic) to use the specific Context7 library:
     response = await agent.ainvoke(
-        {"messages": [{"role": "user", "content": "What are the key features of LangGraph? use context7"}]}
+        {"messages": [{"role": "user", "content": "What are the key features of LangGraph? Use context7 resolve library id /shak-shat/langgraph4context7 and then get docs on its key features."}]}
     )
 ```
 

@@ -1,0 +1,4293 @@
+Directory structure:
+└── abdarwish23-advanced_sql_agent/
+    ├── README.md
+    ├── create_db_tables.py
+    ├── dummy_database.db
+    ├── ecommerce.db
+    ├── LICENSE
+    ├── requirements.txt
+    ├── run.py
+    ├── app/
+    │   ├── __init__.py
+    │   ├── config.py
+    │   ├── models.py
+    │   ├── routes.py
+    │   ├── __pycache__/
+    │   ├── services/
+    │   │   ├── __init__.py
+    │   │   ├── database_service.py
+    │   │   ├── graph_service.py
+    │   │   ├── memory_service.py
+    │   │   ├── query_analyzer_service.py
+    │   │   ├── result_evaluator_service.py
+    │   │   ├── session_service.py
+    │   │   ├── sql_correction_service.py
+    │   │   ├── sql_executor_service.py
+    │   │   ├── sql_generator_service.py
+    │   │   ├── sql_reflection_service.py
+    │   │   ├── sql_validator_service.py
+    │   │   ├── summarizer_service.py
+    │   │   ├── visualizer_service.py
+    │   │   └── __pycache__/
+    │   ├── static/
+    │   │   ├── css/
+    │   │   │   └── styles.css
+    │   │   └── js/
+    │   │       └── chatbot.js
+    │   ├── templates/
+    │   │   └── index.html
+    │   └── utils/
+    │       ├── __init__.py
+    │       ├── json_encoder.py
+    │       ├── json_utils.py
+    │       ├── llm_utils.py
+    │       └── __pycache__/
+    ├── csv_files/
+    │   ├── cart_items.csv
+    │   ├── customers.csv
+    │   ├── order_items.csv
+    │   ├── orders.csv
+    │   ├── payments.csv
+    │   ├── products.csv
+    │   ├── reviews.csv
+    │   ├── shopping_carts.csv
+    │   └── suppliers.csv
+    └── tests/
+        ├── __init__.py
+        ├── test_api.py
+        └── __pycache__/
+
+================================================
+FILE: README.md
+================================================
+# README.md
+# Advanced SQL Agent API
+
+This Flask-based API provides Advanced SQL query analysis and visualization services using LangChain and LangGraph.
+
+
+
+![image](https://github.com/user-attachments/assets/cef48c8b-2129-4c27-b0c4-8bfd22e045ef)
+
+## Prerequisites
+- Ensure you have Python 3.9 or higher installed
+- Make sure all required dependencies are installed
+
+## Steps to Run the Application
+
+1. Open a terminal or command prompt
+
+2. Navigate to your project root directory:
+   ```
+   cd path/to/your/project
+   ```
+
+3. Activate your virtual environment (if you're using one):
+   - On Windows:
+     ```
+     venv\Scripts\activate
+     ```
+   - On macOS and Linux:
+     ```
+     source venv/bin/activate
+     ```
+
+4. Set the Flask application environment variable:
+   - On Windows:
+     ```
+     set FLASK_APP=run.py
+     ```
+   - On macOS and Linux:
+     ```
+     export FLASK_APP=run.py
+     ```
+
+5. (Optional) Enable debug mode for development:
+   - On Windows:
+     ```
+     set FLASK_DEBUG=1
+     ```
+   - On macOS and Linux:
+     ```
+     export FLASK_DEBUG=1
+     ```
+
+6. Start the Flask development server:
+   ```
+   flask run
+   ```
+
+7. You should see output similar to:
+   ```
+   * Serving Flask app "run.py"
+   * Environment: development
+   * Debug mode: on
+   * Running on http://127.0.0.1:5000/ (Press CTRL+C to quit)
+   ```
+
+## Testing the API
+
+Once the server is running, you can test the `/analyze` endpoint using curl or any API testing tool:
+
+```bash
+curl -X POST -H "Content-Type: application/json" -d '{"query":"What are the top 5 customers by total order amount?"}' http://localhost:5000/analyze
+```
+
+Or using Python with the requests library:
+
+```python
+import requests
+import json
+
+url = "http://localhost:5000/analyze"
+payload = {"query": "What are the top 5 customers by total order amount?"}
+headers = {"Content-Type": "application/json"}
+
+response = requests.post(url, data=json.dumps(payload), headers=headers)
+
+print(response.status_code)
+print(json.dumps(response.json(), indent=2))
+```
+
+## Troubleshooting
+
+If you encounter any issues:
+1. Check the console output for error messages.
+2. Verify that all required environment variables are set correctly in your `.env` file.
+3. Ensure that your database is properly configured and accessible.
+4. If using SQLite, make sure the database file exists and has the correct permissions.
+
+Remember to stop the Flask server (Ctrl+C) when you're done testing.
+
+## Setup
+
+1. Clone the repository
+2. Create a virtual environment: `python -m venv venv`
+3. Activate the virtual environment:
+   - Windows: `venv\Scripts\activate`
+   - macOS/Linux: `source venv/bin/activate`
+4. Install dependencies: `pip install -r requirements.txt`
+5. Copy `.env.example` to `.env` and fill in your configuration details
+6. Run the application: `python run.py`
+
+## API Endpoints
+
+- POST /analyze: Analyze a SQL query
+  - Request body: JSON object with a "query" field
+  - Response: JSON object with analysis results
+
+## Running Tests
+
+Run tests using: `python -m unittest discover tests`
+
+## Contributing
+
+Please read CONTRIBUTING.md for details on our code of conduct and the process for submitting pull requests.
+
+## License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+
+
+================================================
+FILE: create_db_tables.py
+================================================
+import sqlite3
+import csv
+import os
+from faker import Faker
+import random
+
+# Set up Faker for generating random names, addresses, etc.
+fake = Faker()
+
+# Path to the SQLite database file
+db_file = "ecommerce.db"
+
+# Create or connect to SQLite database
+conn = sqlite3.connect(db_file)
+cur = conn.cursor()
+
+# Create directory to store CSV files
+csv_dir = "csv_files"
+os.makedirs(csv_dir, exist_ok=True)
+
+# SQL Queries to create tables
+create_tables = """
+CREATE TABLE IF NOT EXISTS customers (
+    customer_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    first_name TEXT,
+    last_name TEXT,
+    email TEXT UNIQUE,
+    phone TEXT,
+    address TEXT,
+    city TEXT,
+    country TEXT,
+    registration_date TEXT
+);
+
+CREATE TABLE IF NOT EXISTS products (
+    product_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    product_name TEXT,
+    category TEXT,
+    stock_quantity INTEGER,
+    price REAL,
+    supplier_id INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS suppliers (
+    supplier_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    supplier_name TEXT,
+    contact_name TEXT,
+    contact_phone TEXT,
+    address TEXT,
+    country TEXT
+);
+
+CREATE TABLE IF NOT EXISTS orders (
+    order_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    customer_id INTEGER,
+    order_status TEXT,
+    order_date TEXT,
+    total_amount REAL
+);
+
+CREATE TABLE IF NOT EXISTS order_items (
+    order_item_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id INTEGER,
+    product_id INTEGER,
+    quantity INTEGER,
+    price_per_item REAL
+);
+
+CREATE TABLE IF NOT EXISTS payments (
+    payment_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id INTEGER,
+    payment_method TEXT,
+    payment_date TEXT,
+    payment_status TEXT
+);
+
+CREATE TABLE IF NOT EXISTS reviews (
+    review_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    customer_id INTEGER,
+    product_id INTEGER,
+    rating INTEGER,
+    review_text TEXT,
+    review_date TEXT
+);
+
+CREATE TABLE IF NOT EXISTS shopping_carts (
+    cart_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    customer_id INTEGER,
+    created_at TEXT,
+    updated_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS cart_items (
+    cart_item_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cart_id INTEGER,
+    product_id INTEGER,
+    quantity INTEGER
+);
+"""
+cur.executescript(create_tables)
+
+# Function to generate fake data
+def populate_data():
+    # Insert Suppliers
+    for _ in range(10):
+        cur.execute(
+            "INSERT INTO suppliers (supplier_name, contact_name, contact_phone, address, country) VALUES (?, ?, ?, ?, ?)",
+            (fake.company(), fake.name(), fake.phone_number(), fake.address(), fake.country())
+        )
+
+    # Insert Customers
+    for _ in range(100):
+        cur.execute(
+            "INSERT INTO customers (first_name, last_name, email, phone, address, city, country, registration_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (fake.first_name(), fake.last_name(), fake.email(), fake.phone_number(), fake.address(), fake.city(), fake.country(), fake.date())
+        )
+
+    # Insert Products
+    for i in range(100):
+        cur.execute(
+            "INSERT INTO products (product_name, category, stock_quantity, price, supplier_id) VALUES (?, ?, ?, ?, ?)",
+            (f"Product {i+1}", f"Category {random.randint(1, 10)}", random.randint(10, 100), round(random.uniform(5, 100), 2), random.randint(1, 10))
+        )
+
+    # Insert Orders
+    for _ in range(100):
+        cur.execute(
+            "INSERT INTO orders (customer_id, order_status, order_date, total_amount) VALUES (?, ?, ?, ?)",
+            (random.randint(1, 100), random.choice(['Pending', 'Processing', 'Shipped', 'Delivered', 'Cancelled']), fake.date_time_this_year(), round(random.uniform(20, 500), 2))
+        )
+
+    # Insert Order Items
+    for _ in range(200):  # Assuming each order has 2 items on average
+        cur.execute(
+            "INSERT INTO order_items (order_id, product_id, quantity, price_per_item) VALUES (?, ?, ?, ?)",
+            (random.randint(1, 100), random.randint(1, 100), random.randint(1, 5), round(random.uniform(5, 100), 2))
+        )
+
+    # Insert Payments
+    for i in range(100):
+        cur.execute(
+            "INSERT INTO payments (order_id, payment_method, payment_date, payment_status) VALUES (?, ?, ?, ?)",
+            (i+1, random.choice(['Credit Card', 'PayPal', 'Bank Transfer']), fake.date_time_this_year(), random.choice(['Completed', 'Pending', 'Failed']))
+        )
+
+    # Insert Reviews
+    for _ in range(100):
+        cur.execute(
+            "INSERT INTO reviews (customer_id, product_id, rating, review_text, review_date) VALUES (?, ?, ?, ?, ?)",
+            (random.randint(1, 100), random.randint(1, 100), random.randint(1, 5), fake.sentence(), fake.date_time_this_year())
+        )
+
+    # Insert Shopping Carts
+    for _ in range(50):
+        cur.execute(
+            "INSERT INTO shopping_carts (customer_id, created_at, updated_at) VALUES (?, ?, ?)",
+            (random.randint(1, 100), fake.date_time_this_year(), fake.date_time_this_year())
+        )
+
+    # Insert Cart Items
+    for _ in range(150):
+        cur.execute(
+            "INSERT INTO cart_items (cart_id, product_id, quantity) VALUES (?, ?, ?)",
+            (random.randint(1, 50), random.randint(1, 100), random.randint(1, 5))
+        )
+
+# Call the function to populate data
+populate_data()
+
+# Commit changes
+conn.commit()
+
+# Function to export each table to CSV
+def export_to_csv(table_name):
+    csv_file = os.path.join(csv_dir, f"{table_name}.csv")
+    cur.execute(f"SELECT * FROM {table_name}")
+    rows = cur.fetchall()
+    
+    with open(csv_file, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        # Write header (column names)
+        writer.writerow([desc[0] for desc in cur.description])
+        # Write rows
+        writer.writerows(rows)
+
+# List of tables to export
+tables = ['customers', 'products', 'suppliers', 'orders', 'order_items', 'payments', 'reviews', 'shopping_carts', 'cart_items']
+
+# Export each table to CSV
+for table in tables:
+    export_to_csv(table)
+
+# Close connection
+conn.close()
+
+print(f"Database and CSV files created in: {os.getcwd()}")
+
+
+
+================================================
+FILE: dummy_database.db
+================================================
+[Non-text file]
+
+
+================================================
+FILE: ecommerce.db
+================================================
+[Non-text file]
+
+
+================================================
+FILE: LICENSE
+================================================
+MIT License
+
+Copyright (c) 2024 abdarwish23
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+
+================================================
+FILE: requirements.txt
+================================================
+[Non-text file]
+
+
+================================================
+FILE: run.py
+================================================
+# run.py
+from app import create_app
+from app.config import Config
+from app.services.graph_service import save_graph_visualization
+
+app = create_app(Config)
+
+if __name__ == '__main__':
+    save_graph_visualization()
+
+    app.run(debug=True)
+
+
+# Example to run:
+"""
+   a. Test the `/analyze` endpoint:
+   ```bash
+   curl -X POST http://127.0.0.1:5000/analyze \
+        -H "Content-Type: application/json" \
+        -d '{"query": "What are the top 5 customers by total order amount?"}'
+   ```
+
+   b. Test the `/stream` endpoint:
+   ```bash
+   curl -X POST http://127.0.0.1:5000/stream \
+        -H "Content-Type: application/json" \
+        -d '{"query": "What are the top 5 customers by total order amount?"}'
+"""
+
+
+
+
+================================================
+FILE: app/__init__.py
+================================================
+# app/__init__.py
+
+import os
+import logging
+import matplotlib
+matplotlib.use('Agg')
+
+from flask import Flask
+from flask_session import Session
+from flask_cors import CORS  # Add this import
+from cachelib import FileSystemCache
+from langchain.globals import set_debug, set_verbose
+
+from .config import Config
+from .utils.json_encoder import CustomJSONProvider
+from .models import db
+from .services.memory_service import MemoryService
+
+memory_service = None  # Global variable to hold the MemoryService instance
+
+def create_app(config_class=Config):
+    global memory_service
+    app = Flask(__name__, static_folder='static', static_url_path='/static')
+    app.config.from_object(config_class)
+    app.json = CustomJSONProvider(app)
+
+    # Initialize CORS
+    CORS(app)  # Add this line to enable CORS for all routes
+
+    # Initialize Flask-Session with FileSystemCache
+    app.config['SESSION_CACHELIB'] = FileSystemCache(app.config['SESSION_FILE_DIR'])
+    Session(app)
+
+    # Initialize SQLAlchemy
+    db.init_app(app)
+
+    # Configure logging
+    if not app.debug:
+        file_handler = logging.FileHandler('error.log')
+        file_handler.setLevel(logging.ERROR)
+        app.logger.addHandler(file_handler)
+
+    # Initialize MemoryService
+    with app.app_context():
+        try:
+            memory_service = MemoryService()
+            memory_service.initialize()  # Load existing memories
+            app.memory_service = memory_service
+        except Exception as e:
+            app.logger.error(f"Failed to initialize MemoryService: {str(e)}")
+            app.memory_service = None
+
+    # Register blueprints
+    from .routes import main_bp
+    app.register_blueprint(main_bp)
+
+    # Configure LangChain tracing
+    if app.config.get('LANGCHAIN_TRACING_V2'):
+        set_debug(True)
+        set_verbose(True)
+        os.environ['LANGCHAIN_TRACING_V2'] = 'true'
+        os.environ['LANGSMITH_API_KEY'] = app.config.get('LANGSMITH_API_KEY', '')
+
+    # Create all database tables
+    with app.app_context():
+        db.create_all()
+
+    return app
+
+
+================================================
+FILE: app/config.py
+================================================
+# app/config.py
+import os
+from dotenv import load_dotenv
+from cachelib import FileSystemCache
+
+load_dotenv()
+
+class Config:
+    # API Keys
+    OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+    GROQ_API_KEY = os.getenv('GROQ_API_KEY')
+    ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+
+    # Vector store selection
+    USE_CHROMADB = os.getenv('USE_CHROMADB', 'True').lower() == 'true'
+    USE_MILVUS = os.getenv('USE_MILVUS', 'False').lower() == 'true'
+
+    # Embedding selection
+    USE_OLLAMA = os.getenv('USE_OLLAMA', 'True').lower() == 'true'
+    USE_OPENAI = os.getenv('USE_OPENAI', 'False').lower() == 'true'
+
+    # ChromaDB configurations
+    CHROMA_COLLECTION_NAME = os.getenv('CHROMA_COLLECTION_NAME', 'sql_agent_memory')
+    CHROMA_PERSIST_DIRECTORY = os.getenv('CHROMA_PERSIST_DIRECTORY', './chroma_db')
+
+
+    # Database
+    BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+    SQLALCHEMY_DATABASE_URI = os.getenv('DATABASE_URL', f"sqlite:///{os.path.join(BASE_DIR, 'sql_agent_sessions.db')}")
+
+    # Ollama configurations
+    OLLAMA_BASE_URL = os.getenv('OLLAMA_BASE_URL', 'http://localhost:11434')
+    OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'llama2')
+
+    # Milvus configurations
+
+    MILVUS_HOST = os.getenv('MILVUS_HOST', 'localhost')
+    MILVUS_PORT = os.getenv('MILVUS_PORT', '19530')
+    MILVUS_COLLECTION = os.getenv('MILVUS_COLLECTION', 'sql_agent_memory')
+
+    # Session configurations
+    SECRET_KEY = os.getenv('SECRET_KEY', 'your-secret-key')
+    SESSION_TYPE = 'filesystem'
+    SESSION_FILE_DIR = os.getenv('SESSION_FILE_DIR', os.path.join(BASE_DIR, 'flask_session'))
+    SESSION_PERMANENT = False
+    SESSION_USE_SIGNER = True
+    SESSION_CACHELIB = FileSystemCache(SESSION_FILE_DIR)
+
+    # Database
+    DATABASE_URL = os.getenv('DATABASE_URL', 'sqlite:///ecommerce.db')
+
+
+    # LLM Settings
+    # OLLAMA_MODEL = os.getenv('OLLAMA_MODEL', 'llama2')  # Default Ollama model
+    LLM_MODEL = os.getenv('LLM_MODEL', 'gpt-4o-mini')  # This can serve as a fallback model if needed
+    LLM_TEMPERATURE = float(os.getenv('LLM_TEMPERATURE', '0.1'))
+
+    # Application Settings
+    MAX_TABLES_TO_SELECT = int(os.getenv('MAX_TABLES_TO_SELECT', '5'))
+    MAX_SQL_REFINEMENT_ATTEMPTS = int(os.getenv('MAX_SQL_REFINEMENT_ATTEMPTS', '3'))
+
+    # LangChain and LangSmith Settings
+    LANGCHAIN_TRACING_V2 = os.getenv('LANGCHAIN_TRACING_V2', 'false').lower() == 'true'
+    LANGSMITH_API_KEY = os.getenv('LANGSMITH_API_KEY')
+
+    # Graph Settings
+    GRAPH_RECURSION_LIMIT = int(os.getenv('GRAPH_RECURSION_LIMIT', '20'))
+
+
+
+
+================================================
+FILE: app/models.py
+================================================
+# app/models.py
+from typing import TypedDict
+from langchain_core.pydantic_v1 import BaseModel, Field
+from typing import Dict, List, Any, Optional
+from flask_sqlalchemy import SQLAlchemy
+from datetime import datetime
+
+db = SQLAlchemy()
+
+class SessionHistory(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    session_id = db.Column(db.String(50), nullable=False)
+    run_id = db.Column(db.String(50), nullable=False)
+    query = db.Column(db.Text, nullable=False)
+    response = db.Column(db.Text, nullable=False)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def __repr__(self):
+        return f'<SessionHistory {self.id}>'
+
+class TableSchema(BaseModel):
+    name: str
+    columns: Dict[str, str]
+
+class TableSample(BaseModel):
+    name: str
+    data: List[Dict[str, Any]]
+
+class TableInfo(BaseModel):
+    table_schema: TableSchema
+    sample: TableSample
+
+class AnalyzedQuery(BaseModel):
+    original_query: str
+    analyzed_query: str
+    selected_tables: List[str]
+    explanation: str
+    is_query_relevant: bool
+
+class GeneratedSQL(BaseModel):
+    sql_query: str
+    explanation: str
+
+class ReflectedGeneratedSQL(BaseModel):
+    reflected_sql_query: str
+    reflected_explanation: str
+
+class SQLValidationResult(BaseModel):
+    is_sql_valid: bool = Field(description="Whether the SQL query is valid and safe to execute")
+    issues: List[str] = Field(default_factory=list, description="List of identified issues with the SQL query")
+    suggested_fix: str = Field(default="", description="Suggested fix for the SQL query if issues are found")
+
+class SQLExecutionResult(BaseModel):
+    success: bool
+    data: Optional[List[Dict[str, Any]]] = None
+    error_message: Optional[str] = None
+
+class EvaluationResult(BaseModel):
+    is_result_relevant: bool = Field(description="Whether the results are relevant to the original query")
+    explanation: str = Field(description="Explanation of the evaluation")
+    requires_visualization: bool = Field(description="Whether the results would benefit from visualization")
+    summary: str = Field(description="Human-friendly summary of the results")
+
+class Visualization(BaseModel):
+    image: str = Field(description="Base64 encoded image of the visualization")
+    description: str = Field(description="Description of the visualization")
+
+
+class SQLCorrectionResult(BaseModel):
+    analysis: str = Field(default="No analysis provided", description="Analysis of why the current SQL query is not producing relevant results")
+    identified_issues: str = Field(default="No issues identified", description="List of specific issues identified in the current SQL query")
+    corrected_sql_query: str = Field(default="", description="A corrected SQL query that addresses the identified issues")
+
+class AgentState(TypedDict):
+    user_query: str
+    db_info: Optional[dict]
+    analyzed_query: Optional[AnalyzedQuery]
+    generated_sql: Optional[GeneratedSQL]
+    validation_result: Optional[SQLValidationResult]
+    execution_result: Optional[SQLExecutionResult]
+    evaluation_result: Optional[EvaluationResult]
+    visualization: Optional[Visualization]
+    summary: Optional[str]
+    error: Optional[str]
+    is_query_relevant: bool
+    is_result_relevant: bool
+    regenerate_list: List[str]
+    reanalyze_list: List[str]
+    reflection: Optional[Dict[str, Any]]
+    reflected_generated_sql: Optional[ReflectedGeneratedSQL]
+    relevant_memories: Optional[List[Dict[str, Any]]]
+    session_id: str
+    sql_correction: Optional[SQLCorrectionResult]
+ 
+
+
+
+
+
+================================================
+FILE: app/routes.py
+================================================
+# app/routes.py
+import json
+from flask import Blueprint, request, jsonify, current_app, Response, stream_with_context
+from app.services.graph_service import create_analysis_graph
+from app.config import Config
+from app.services.session_service import SessionService
+from app import memory_service
+from app.models import AgentState
+import traceback
+import logging
+import time
+from flask import Blueprint, request, jsonify, current_app, Response, stream_with_context, render_template
+
+main_bp = Blueprint('main', __name__)
+logger = logging.getLogger(__name__)
+
+@main_bp.route('/')
+def index():
+    return render_template('index.html')
+
+@main_bp.route('/analyze', methods=['POST'])
+def analyze_query():
+    start_time = time.time()
+    logger.info("Starting query analysis")
+
+    data = request.json
+    user_query = data.get('query')
+
+    if not user_query:
+        return jsonify({"error": "No query provided"}), 400
+
+    try:
+        # Session setup
+        session_id = SessionService.get_or_create_session()
+        run_id = SessionService.create_run()
+
+        # Memory search
+        relevant_memories = memory_service.search_memory(user_query)
+
+        # Create analysis graph
+        analysis_graph = create_analysis_graph(memory_service)
+
+        # Prepare initial state
+        initial_state = AgentState(
+            user_query=user_query,
+            db_info=None,
+            analyzed_query=None,
+            generated_sql=None,
+            validation_result=None,
+            execution_result=None,
+            evaluation_result=None,
+            visualization=None,
+            summary=None,
+            error=None,
+            is_query_relevant=False,
+            is_result_relevant=False,
+            regenerate_list=[],
+            reanalyze_list=[],
+            reflection=None,
+            reflected_generated_sql=None,
+            relevant_memories=relevant_memories,
+            session_id=session_id,
+            run_id=run_id,
+            recent_history=[],
+            sql_correction=None
+        )
+
+        # Invoke graph
+        final_state = analysis_graph.invoke(initial_state)
+
+        # Prepare response
+        response = {
+            "summary": final_state.get('summary', "No summary available."),
+            "visualization": None
+        }
+
+        if final_state.get('visualization'):
+            response["visualization"] = {
+                "image": final_state['visualization'].image,
+                "description": final_state['visualization'].description
+            }
+
+        # Add interaction to long-term memory
+        memory_service.add_memory(
+            text=f"Query: {user_query}\nResponse: {response['summary']}",
+            metadata={"session_id": session_id, "run_id": run_id}
+        )
+
+        # Add interaction to session history
+        SessionService.add_to_session_history(
+            session_id=session_id,
+            run_id=run_id,
+            query=user_query,
+            response=response['summary']
+        )
+
+        end_time = time.time()
+        logger.info(f"Total query analysis completed in {end_time - start_time:.2f} seconds")
+
+        return jsonify(response)
+
+    except Exception as e:
+        logger.error(f"Error in analyze_query: {str(e)}", exc_info=True)
+        return jsonify({"error": f"An error occurred: {str(e)}"}), 500
+
+@main_bp.route('/chat', methods=['POST'])
+def chat():
+    data = request.json
+    user_query = data.get('query')
+
+    if not user_query:
+        return jsonify({"error": "No query provided"}), 400
+
+    try:
+        # Session setup
+        session_id = SessionService.get_or_create_session()
+        run_id = SessionService.create_run()
+
+        # Memory search
+        relevant_memories = memory_service.search_memory(user_query)
+
+        # Create analysis graph
+        analysis_graph = create_analysis_graph(memory_service)
+
+        # Prepare initial state
+        initial_state = AgentState(
+            user_query=user_query,
+            db_info=None,
+            analyzed_query=None,
+            generated_sql=None,
+            validation_result=None,
+            execution_result=None,
+            evaluation_result=None,
+            visualization=None,
+            summary=None,
+            error=None,
+            is_query_relevant=False,
+            is_result_relevant=False,
+            regenerate_list=[],
+            reanalyze_list=[],
+            reflection=None,
+            reflected_generated_sql=None,
+            relevant_memories=relevant_memories,
+            session_id=session_id,
+            run_id=run_id,
+            recent_history=[],
+            sql_correction=None
+        )
+
+        final_state = analysis_graph.invoke(initial_state)
+
+        if final_state:
+            response = {
+                "summary": final_state.get('summary', "No summary available."),
+                "visualization": None
+            }
+
+            if final_state.get('visualization'):
+                response["visualization"] = {
+                    "image": final_state['visualization'].image,
+                    "description": final_state['visualization'].description
+                }
+
+            # Add interaction to long-term memory
+            memory_service.add_memory(
+                text=f"Query: {user_query}\nResponse: {response['summary']}",
+                metadata={"session_id": session_id, "run_id": run_id}
+            )
+
+            # Add interaction to session history
+            SessionService.add_to_session_history(
+                session_id=session_id,
+                run_id=run_id,
+                query=user_query,
+                response=response['summary']
+            )
+
+            return jsonify(response)
+
+        else:
+            return jsonify({"error": "No result generated"}), 500
+
+    except Exception as e:
+        logger.error(f"Error in chat: {str(e)}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+    
+
+@main_bp.route('/stream', methods=['POST'])
+def stream_chat():
+    data = request.json
+    user_query = data.get('query')
+
+    if not user_query:
+        return jsonify({"error": "No query provided"}), 400
+
+    def generate():
+        try:
+            # Session setup
+            session_id = SessionService.get_or_create_session()
+            run_id = SessionService.create_run()
+
+            # Memory search
+            relevant_memories = memory_service.search_memory(user_query)
+
+            # Create analysis graph
+            analysis_graph = create_analysis_graph(memory_service)
+
+            # Prepare initial state
+            initial_state = AgentState(
+                user_query=user_query,
+                db_info=None,
+                analyzed_query=None,
+                generated_sql=None,
+                validation_result=None,
+                execution_result=None,
+                evaluation_result=None,
+                visualization=None,
+                summary=None,
+                error=None,
+                is_query_relevant=False,
+                is_result_relevant=False,
+                regenerate_list=[],
+                reanalyze_list=[],
+                reflection=None,
+                reflected_generated_sql=None,
+                relevant_memories=relevant_memories,
+                session_id=session_id,
+                run_id=run_id,
+                recent_history=[],
+                sql_correction=None
+            )
+
+            for state in analysis_graph.stream(initial_state):
+                # Stream intermediate results
+                yield json.dumps({"type": "update", "content": str(state)}) + "\n"
+
+            # Final result
+            response = {
+                "summary": state.get('summary', "No summary available."),
+                "visualization": None
+            }
+
+            if state.get('visualization'):
+                response["visualization"] = {
+                    "image": state['visualization'].image,
+                    "description": state['visualization'].description
+                }
+
+            # Add interaction to long-term memory
+            memory_service.add_memory(
+                text=f"Query: {user_query}\nResponse: {response['summary']}",
+                metadata={"session_id": session_id, "run_id": run_id}
+            )
+
+            # Add interaction to session history
+            SessionService.add_to_session_history(
+                session_id=session_id,
+                run_id=run_id,
+                query=user_query,
+                response=response['summary']
+            )
+
+            yield json.dumps({"type": "final", "content": response}) + "\n"
+
+        except Exception as e:
+            logger.error(f"Error in stream_chat: {str(e)}", exc_info=True)
+            yield json.dumps({"type": "error", "content": str(e)}) + "\n"
+
+    return Response(stream_with_context(generate()), content_type='application/json')
+
+
+
+================================================
+FILE: app/services/__init__.py
+================================================
+# app/services/__init__.py
+
+
+================================================
+FILE: app/services/database_service.py
+================================================
+# app/services/database_service.py
+from sqlalchemy import create_engine, inspect
+from app.config import Config
+from app.models import TableInfo, TableSchema, TableSample
+
+class DatabaseService:
+    @staticmethod
+    def get_database_info(state):
+        print("=================== Getting db info =====================")
+        engine = create_engine(Config.DATABASE_URL)
+        inspector = inspect(engine)
+        table_info = {}
+
+        for table_name in inspector.get_table_names():
+            columns = {col['name']: str(col['type']) for col in inspector.get_columns(table_name)}
+            table_info[table_name] = TableInfo(
+                table_schema=TableSchema(name=table_name, columns=columns),
+                sample=TableSample(name=table_name, data=[])
+            )
+
+        state["db_info"] = table_info
+        return state
+
+
+
+================================================
+FILE: app/services/graph_service.py
+================================================
+# app/services/graph_service.py
+from app.services.visualizer_service import data_visualizer, visualization_check
+
+import os
+import requests
+import logging
+import time
+from datetime import datetime
+from langgraph.graph import StateGraph, END
+from langchain_core.runnables.graph import MermaidDrawMethod
+from app.models import AgentState, EvaluationResult
+from app.services.database_service import DatabaseService
+from app.services.query_analyzer_service import query_analyzer_table_selector
+from app.services.sql_generator_service import sql_generator_optimizer, sql_generator_optimizer_reflection
+from app.services.sql_executor_service import execute_sql, execute_sql_reflection, execute_sql_corrected
+from app.services.result_evaluator_service import result_evaluator
+from app.services.visualizer_service import data_visualizer, visualization_check
+from app.services.sql_validator_service import sql_validator
+from app.services.summarizer_service import summarizer_node
+from app.services.sql_reflection_service import sql_reflection
+from app.services.sql_correction_service import correct_sql
+
+
+logger = logging.getLogger(__name__)
+
+def should_reflect_result(state: AgentState) -> str:
+    return "visualization_check" if state["is_result_relevant"] else "sql_corrected" # "sql_reflector"
+
+def append_to_list(state: AgentState, list_name: str) -> None:
+    try:
+        state[list_name].append("attempt")
+    except KeyError:
+        logger.error(f"List {list_name} not found in state. Creating new list.")
+        state[list_name] = ["attempt"]
+
+def should_regenerate_sql(state: AgentState) -> str:
+    if (state["validation_result"] is None or not state["validation_result"].is_sql_valid) and \
+            len(state.get("regenerate_list", [])) < 3:
+        append_to_list(state, "regenerate_list")
+        logger.info(f"Regenerating SQL. New attempt count: {len(state['regenerate_list'])}")
+        return "generator"
+    elif len(state.get("regenerate_list", [])) >= 3:
+        logger.info("Max SQL regeneration attempts reached. Moving to executor.")
+        state["reflection"] = None
+        return "executor"
+    else:
+        logger.info("SQL is valid. Moving to executor.")
+        state["reflection"] = None
+        return "executor"
+
+def is_query_relevant(state: AgentState) -> str:
+    return "generator" if state["is_query_relevant"] else "summarizer"
+
+def should_visualize(state: AgentState) -> str:
+    evaluation_result = state.get("evaluation_result")
+    if evaluation_result and isinstance(evaluation_result, EvaluationResult) and evaluation_result.requires_visualization:
+        return "visualizer"
+    return "summarizer"
+
+def create_analysis_graph(memory_service) -> StateGraph:
+    graph = StateGraph(AgentState)
+
+    # Define the graph nodes
+    graph.add_node("db_information", DatabaseService.get_database_info)
+    graph.add_node("analyzer", query_analyzer_table_selector)
+    graph.add_node("generator", sql_generator_optimizer)
+    graph.add_node("validator", sql_validator)
+    graph.add_node("executor", execute_sql)
+    graph.add_node("evaluator", result_evaluator)
+    graph.add_node("visualization_check", visualization_check)
+    graph.add_node("visualizer", data_visualizer)
+    graph.add_node("summarizer", summarizer_node)
+
+    # # Removing add memory node
+    # graph.add_node("add_to_memory", lambda state: memory_service.add_memory(
+    #     text=f"Query: {state['user_query']}\nResponse: {state['summary']}",
+    #     metadata={"session_id": state['session_id']}
+    # ))
+    # Reflection branch
+    graph.add_node("sql_corrected", correct_sql)
+    graph.add_node("executor_corrected", execute_sql_corrected)
+
+    # TODO: Add reflection nodes
+    # graph.add_node("sql_reflector", sql_reflection)
+    # graph.add_node("generator_reflection", sql_generator_optimizer_reflection)
+    # graph.add_node("executor_reflection", execute_sql_reflection)
+
+    # Build the graph with conditional edges
+    graph.set_entry_point("db_information")
+    graph.add_edge("db_information", "analyzer")
+
+    graph.add_conditional_edges(
+        "analyzer",
+        is_query_relevant,
+        {
+            "generator": "generator",
+            "summarizer": "summarizer"
+        }
+    )
+    graph.add_edge("generator", "validator")
+
+    graph.add_conditional_edges(
+        "validator",
+        should_regenerate_sql,
+        {
+            "generator": "generator",
+            "executor": "executor"
+        }
+    )
+
+    # Result Evaluation Reflection Loop
+    graph.add_edge("executor", "evaluator")
+    graph.add_conditional_edges(
+        "evaluator",
+        should_reflect_result,
+        {
+            #TODO: Add reflection nodes
+            #"sql_reflector": "sql_reflector",
+            "sql_corrected": "sql_corrected",
+            "visualization_check": "visualization_check"
+        }
+    )
+
+    # TODO: Add reflection nodes
+    # graph.add_edge("sql_reflector", "generator_reflection")
+    # graph.add_edge("generator_reflection", "executor_reflection")
+
+    graph.add_edge("sql_corrected", "executor_corrected")
+    graph.add_edge("executor_corrected", "visualization_check")
+
+    graph.add_conditional_edges(
+        "visualization_check",
+        should_visualize,
+        {
+            "visualizer": "visualizer",
+            "summarizer": "summarizer",
+        }
+    )
+
+    graph.add_edge("visualizer", "summarizer")
+    graph.add_edge("summarizer", END)
+
+    # removing add_memory node (adding data to memory will be done outside the graph)
+    #graph.add_edge("add_to_memory", END)
+
+    #save_graph_visualization(graph)
+
+    compiled_graph = graph.compile()
+
+    return compiled_graph
+
+def save_graph_visualization(graph: StateGraph):
+    try:
+        start_time = time.time()
+        logger.info("Starting graph visualization")
+
+        mermaid_string = graph.get_graph().draw_mermaid()
+
+        logger.info("Sending request to mermaid.ink API")
+        response = requests.post(
+            "https://mermaid.ink/img",
+            json={"mermaid": mermaid_string}
+        )
+        response.raise_for_status()
+        png_content = response.content
+
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        project_dir = os.path.dirname(script_dir)
+        file_path = os.path.join(project_dir, 'analysis_graph.png')
+
+        with open(file_path, 'wb') as f:
+            f.write(png_content)
+
+        end_time = time.time()
+        logger.info(f"Graph visualization saved to {file_path}")
+        logger.info(f"Graph visualization completed in {end_time - start_time:.2f} seconds")
+
+        print(f"Graph visualization saved to {file_path}")
+    except Exception as e:
+        logger.error(f"Error saving graph visualization: {str(e)}", exc_info=True)
+
+
+================================================
+FILE: app/services/memory_service.py
+================================================
+# app/services/memory_service.py
+# app/services/memory_service.py
+from langchain_milvus import Milvus
+from langchain_community.vectorstores import Chroma
+from langchain_community.embeddings import OllamaEmbeddings
+from langchain_openai import OpenAIEmbeddings
+from app.config import Config
+import logging
+
+logger = logging.getLogger(__name__)
+
+class MemoryService:
+    def __init__(self):
+        self.embedding_function = self._create_embedding_function()
+        self.vector_store = self._create_vector_store()
+        self.memory_buffer = []
+        self.buffer_size = 10
+
+    def initialize(self):
+        self.vector_store = self._create_vector_store()
+        # Load existing memories or perform any other initialization
+        logger.info("MemoryService initialized")
+
+    def _create_embedding_function(self):
+        if Config.USE_OLLAMA:
+            logger.info("Using Ollama embeddings")
+            return OllamaEmbeddings(
+                base_url=Config.OLLAMA_BASE_URL,
+                model=Config.OLLAMA_MODEL
+            )
+        elif Config.USE_OPENAI:
+            logger.info("Using OpenAI embeddings")
+            return OpenAIEmbeddings()
+        else:
+            logger.error("No valid embedding configuration found")
+            raise ValueError("No valid embedding configuration found")
+
+    def _create_vector_store(self):
+        if Config.USE_CHROMADB:
+            logger.info("Initializing ChromaDB")
+            return Chroma(
+                collection_name=Config.CHROMA_COLLECTION_NAME,
+                embedding_function=self.embedding_function,
+                persist_directory=Config.CHROMA_PERSIST_DIRECTORY
+            )
+        elif Config.USE_MILVUS:
+            logger.info("Initializing Milvus")
+            from langchain_community.vectorstores import Milvus
+            return Milvus(
+                embedding_function=self.embedding_function,
+                collection_name=Config.MILVUS_COLLECTION,
+                connection_args={"host": Config.MILVUS_HOST, "port": Config.MILVUS_PORT}
+            )
+        else:
+            logger.error("No valid vector store configuration found")
+            raise ValueError("No valid vector store configuration found")
+
+    def add_memory(self, text, metadata=None):
+        try:
+            self.vector_store.add_texts([text], metadatas=[metadata] if metadata else None)
+            if isinstance(self.vector_store, Chroma):
+                self.vector_store.persist()  # Only for ChromaDB
+            logger.info(f"Successfully added memory: {text[:50]}...")
+        except Exception as e:
+            logger.error(f"Failed to add memory: {str(e)}")
+            raise
+
+    def search_memory(self, query, k=5):
+        if not self.vector_store:
+            logger.error("Vector store not initialized")
+            return []
+        try:
+            results = self.vector_store.similarity_search(query, k=k)
+            logger.info(f"Successfully searched memory for query: {query[:50]}...")
+            return results
+        except Exception as e:
+            logger.error(f"Failed to search memory: {str(e)}")
+            return []
+
+    def clear_memory(self):
+        try:
+            if isinstance(self.vector_store, Chroma):
+                self.vector_store.delete_collection()
+                self.vector_store = self._create_vector_store()
+            elif isinstance(self.vector_store, Milvus):
+                self.vector_store.drop()
+                self.vector_store = self._create_vector_store()
+            logger.info("Successfully cleared memory")
+        except Exception as e:
+            logger.error(f"Failed to clear memory: {str(e)}")
+            raise
+
+
+================================================
+FILE: app/services/query_analyzer_service.py
+================================================
+# app/services/query_analyzer_service.py
+
+import logging
+logger = logging.getLogger(__name__)
+
+from langchain.prompts import ChatPromptTemplate
+from app.config import Config
+from app.utils.json_utils import process_node_output
+from app.utils.llm_utils import get_llm
+from app.models import AnalyzedQuery, AgentState
+import json
+import logging
+from langchain_ollama import ChatOllama
+
+logger = logging.getLogger(__name__)
+
+
+def query_analyzer_table_selector(state: AgentState) -> AgentState:
+    print ("================ Analyzing user query ==================")
+    logger.info("Entering query analyzer")
+    logger.info(f"Original user query: {state['user_query']}")
+
+    #llm = ChatOpenAI(model_name=Config.LLM_MODEL, temperature=Config.LLM_TEMPERATURE)
+    llm = get_llm("openai","gpt-3.5-turbo") # gpt-3.5-turbo, GPT-4o-mini
+    # llm = get_llm("groq", "gemma2-9b-it") # llama-3.1-70b-versatile, llama3-groq-70b-8192-tool-use-preview, gemma2-9b-it, mixtral-8x7b-32768, llama-3.1-8b-instant
+
+    relevant_memories = "\n".join([f"Memory {i+1}: {memory.page_content}" for i, memory in enumerate(state.get('relevant_memories', []))])
+
+    prompt = ChatPromptTemplate.from_template("""
+            Given the user query: "{user_query}"
+            And the following database tables:
+            {table_information}
+
+            Consider these relevant memories from past interactions:
+            {relevant_memories}
+
+            Task 1: Analyze the user query and determine if it's relevant to the provided database tables.
+            Task 2: If relevant, rephrase the query to clarify the data requirements, considering past interactions if applicable.
+            Task 3: If relevant, select up to {max_tables} most relevant tables for this query.
+            Task 4: Provide a brief explanation of your analysis and selection.
+
+            Important: The query is considered relevant if it can be answered using the available tables, even if it requires joining multiple tables or performing aggregations.
+
+            Respond in the following string JSON format:
+            {{
+                "is_query_relevant": True/False,
+                "analyzed_query": "Rephrased and clarified query (if relevant)",
+                "selected_tables": ["table1", "table2", ...] (if relevant),
+                "explanation": "Explanation of the analysis and relevance/table selection"
+            }}
+            Ensure that all selected tables exist in the provided table information.
+        """)
+
+    chain = prompt | llm
+
+    try:
+        response = chain.invoke({
+            "user_query": state["user_query"],
+            "table_information": json.dumps({name: info.table_schema.dict() for name, info in state["db_info"].items()},
+                                            indent=2),
+            "max_tables": Config.MAX_TABLES_TO_SELECT,
+            "relevant_memories": relevant_memories
+        })
+
+        logger.info(f"Raw LLM response: {response.content}")
+
+        parsed_response = process_node_output(response.content, "analyzer")
+
+        logger.info(f"Parsed response from LLM: {parsed_response}")
+
+        if not parsed_response:
+            raise ValueError("Failed to parse LLM response")
+
+        state["analyzed_query"] = AnalyzedQuery(
+            original_query=state["user_query"],
+            analyzed_query=parsed_response.get('analyzed_query', ''),
+            selected_tables=parsed_response.get('selected_tables', []),
+            explanation=parsed_response.get('explanation', ''),
+            is_query_relevant=parsed_response.get('is_query_relevant', False)
+        )
+        state["is_query_relevant"] = state["analyzed_query"].is_query_relevant
+
+        logger.info(f"Query relevance set to: {state["is_query_relevant"]}")
+        logger.info(f"Analyzed query: {state['analyzed_query'].analyzed_query}")
+        logger.info(f"Selected tables: {state['analyzed_query'].selected_tables}")
+        logger.info(f"Explanation: {state['analyzed_query'].explanation}")
+
+    except Exception as e:
+        logger.error(f"Error in query analyzer: {str(e)}")
+        state["analyzed_query"] = AnalyzedQuery(
+            original_query=state["user_query"],
+            analyzed_query="",
+            selected_tables=[],
+            explanation=f"An error occurred during analysis: {str(e)}",
+            is_query_relevant=False
+        )
+        state["is_query_relevant"] = False
+
+    logger.info(f"Final query relevance: {state['is_query_relevant']}")
+
+    return state
+
+
+
+================================================
+FILE: app/services/result_evaluator_service.py
+================================================
+# app/services/result_evaluator_service.py
+
+import pandas as pd
+from app.utils.json_utils import process_node_output
+from langchain.prompts import ChatPromptTemplate
+from app.models import EvaluationResult, AgentState
+import logging
+from app.utils.llm_utils import get_llm
+from app.services.session_service import SessionService
+
+logger = logging.getLogger(__name__)
+
+def result_evaluator(state: AgentState) -> AgentState:
+    print("================= Evaluating the results =================")
+    logger.info("Entering result evaluator")
+
+    if not state["execution_result"].success:
+        state["evaluation_result"] = EvaluationResult(
+            is_result_relevant=False,
+            explanation=f"Query execution failed: {state['execution_result'].error_message}",
+            requires_visualization=False,
+            summary="The query execution failed, so no results are available to summarize."
+        )
+        state["is_result_relevant"] = False
+        state["reflection"] = {
+            "type": "result_evaluation",
+            "issue": "Query execution failed",
+            "suggestion": "Review and fix the SQL query execution error"
+        }
+        return state
+
+    llm = get_llm("openai","gpt-3.5-turbo") # gpt-3.5-turbo, GPT-4o-mini
+    # llm = get_llm("groq", "gemma2-9b-it")  # gpt-3.5-turbo, GPT-4o-mini
+
+    df = pd.DataFrame(state["execution_result"].data)
+    results_summary = df.describe().to_string() if not df.empty else "No results"
+
+    # Ensure session_id is available in the state
+    session_id = state.get("session_id")
+    if not session_id:
+        logger.warning("Session ID not found in state")
+        session_history_summary = "No session history available"
+    else:
+        try:
+            session_history = SessionService.get_session_history(session_id=session_id)
+            session_history_summary = "\n".join([f"Query: {item.query}\nResponse: {item.response}" for item in session_history])
+        except Exception as e:
+            logger.error(f"Error fetching session history: {str(e)}", exc_info=True)
+            session_history_summary = "Error fetching session history"
+
+    prompt = ChatPromptTemplate.from_template("""
+        Given the following:
+        1. Original user query: {original_query}
+        2. Analyzed query: {analyzed_query}
+        3. Generated SQL query: {generated_sql}
+        4. Query results summary:
+        {results_summary}
+        5. Session history:
+        {session_history}
+
+        Task 1: Evaluate the relevance and quality of the query results to the original user query.
+        Task 2: If not relevant, provide explanation and suggestions on how to improve the SQL query to better answer the original user query.
+        Task 3: Act as a data analysis expert to determine whether the results require visualization. Consider the following:
+           - Simple questions requiring single answers (e.g., percentages, counts, totals) do not need visualization.
+           - Examples of queries not requiring visualization include:
+             * What is the percentage of successful orders?
+             * How many orders do we have?
+             * How many customers are there?
+             * What is the total number of orders?
+           - More complex queries or those involving comparisons or trends typically benefit from visualization.
+        Task 4: Summarize the findings in a concise, user-friendly manner.
+
+        Respond in the following JSON format:
+        {{
+            "is_result_relevant": True/False,
+            "explanation": "Detailed explanation of your evaluation",
+            "improvement_suggestion": "Suggestion on how to improve the SQL query if not relevant",
+            "requires_visualization": True/False,
+            "summary": "Your human-friendly summary here"
+        }}
+    """)
+
+    chain = prompt | llm
+
+    try:
+        response = chain.invoke({
+            "original_query": state["analyzed_query"].original_query,
+            "analyzed_query": state["analyzed_query"].analyzed_query,
+            "generated_sql": state["generated_sql"].sql_query,
+            "results_summary": results_summary,
+            "session_history": session_history_summary
+        })
+
+        parsed_response = process_node_output(response.content, "result_evaluator")
+
+        state["evaluation_result"] = EvaluationResult(
+            is_result_relevant=parsed_response.get('is_result_relevant', False),
+            explanation=parsed_response.get('explanation', "Failed to generate explanation"),
+            requires_visualization=parsed_response.get('requires_visualization', False),
+            summary=parsed_response.get('summary', "Failed to generate summary")
+        )
+        state["is_result_relevant"] = state["evaluation_result"].is_result_relevant
+
+        if not state["is_result_relevant"]:
+            state["reflection"] = {
+                "type": "result_evaluation",
+                "issue": "Results not relevant to user query",
+                "suggestion": parsed_response.get('improvement_suggestion', "No suggestion provided")
+            }
+        else:
+            state["reflection"] = None
+
+    except Exception as e:
+        logger.error(f"Error in result evaluator: {str(e)}", exc_info=True)
+        state["evaluation_result"] = EvaluationResult(
+            is_result_relevant=False,
+            explanation=f"An error occurred during evaluation: {str(e)}",
+            requires_visualization=False,
+            summary="Failed to evaluate results due to an error."
+        )
+        state["is_result_relevant"] = False
+        state["reflection"] = {
+            "type": "result_evaluation",
+            "issue": "Error during evaluation",
+            "suggestion": "Review and fix the evaluation process"
+        }
+
+    logger.info(f"Result relevance: {state['is_result_relevant']}")
+    logger.info(f"Requires visualization: {state['evaluation_result'].requires_visualization}")
+
+    return state
+
+
+
+
+================================================
+FILE: app/services/session_service.py
+================================================
+# app/services/session_service.py
+
+from flask import session
+import uuid
+from app.models import db, SessionHistory
+from sqlalchemy import desc
+import logging
+
+logger = logging.getLogger(__name__)
+
+class SessionService:
+    @staticmethod
+    def get_or_create_session():
+        if 'user_id' not in session:
+            session['user_id'] = str(uuid.uuid4())
+        return session['user_id']
+
+    @staticmethod
+    def create_run():
+        return str(uuid.uuid4())
+
+    @staticmethod
+    def get_session_history(session_id, limit=10):
+        if not session_id:
+            logger.warning("get_session_history called without session_id")
+            return []
+        try:
+            return db.session.query(SessionHistory).filter(SessionHistory.session_id == session_id)\
+                .order_by(desc(SessionHistory.timestamp))\
+                .limit(limit)\
+                .all()
+        except Exception as e:
+            logger.error(f"Error in get_session_history: {str(e)}", exc_info=True)
+            return []
+
+    @staticmethod
+    def add_to_session_history(session_id, run_id, query, response):
+        if not session_id:
+            logger.warning("add_to_session_history called without session_id")
+            return
+        try:
+            new_history = SessionHistory(
+                session_id=session_id,
+                run_id=run_id,
+                query=query,
+                response=response
+            )
+            db.session.add(new_history)
+            db.session.commit()
+            logger.info(f"Added new history entry for session {session_id}")
+        except Exception as e:
+            logger.error(f"Error in add_to_session_history: {str(e)}", exc_info=True)
+            db.session.rollback()
+
+    @staticmethod
+    def get_recent_history(session_id, limit=5):
+        if not session_id:
+            logger.warning("get_recent_history called without session_id")
+            return []
+        try:
+            recent_history = SessionService.get_session_history(session_id=session_id, limit=limit)
+            return [
+                {
+                    "query": history.query,
+                    "response": history.response,
+                    "timestamp": history.timestamp.isoformat()
+                }
+                for history in recent_history
+            ]
+        except Exception as e:
+            logger.error(f"Error in get_recent_history: {str(e)}", exc_info=True)
+            return []
+
+
+================================================
+FILE: app/services/sql_correction_service.py
+================================================
+# app/services/sql_correction_service.py
+from langchain.prompts import ChatPromptTemplate
+from app.models import AgentState, SQLCorrectionResult
+from app.utils.llm_utils import get_llm
+from app.utils.json_utils import process_node_output
+import logging
+import json
+
+logger = logging.getLogger(__name__)
+
+
+
+def correct_sql(state: AgentState) -> AgentState:
+    print("================== SQL Correction =================")
+    logger.info("Entering SQL correction")
+
+    llm = get_llm("openai", "gpt-3.5-turbo")  # You can adjust the model as needed
+
+    prompt = ChatPromptTemplate.from_template("""
+        Given the following information:
+        1. Original user query: {original_query}
+        2. Analyzed query: {analyzed_query}
+        3. Current SQL query: {current_sql}
+        4. Evaluation result: {evaluation_result}
+        5. Database schema: {table_information}
+
+        Task: Analyze why the current SQL query does not produce results relevant to the user's query. 
+        Then, provide a corrected SQL query that addresses the issues and is more likely to produce relevant results.
+
+        Consider the following:
+        - Are there any misinterpretations of the user's intent?
+        - Are there missing JOINs, WHERE clauses, or aggregations?
+        - Is the query structure appropriate for the user's question?
+        - Are there any syntax errors or logical flaws in the current SQL?
+
+        Respond in the following JSON format:
+        {{
+            "analysis": "Your analysis of why the current SQL query is not producing relevant results",
+            "identified_issues": "List of specific issues identified in the current SQL query",
+            "corrected_sql_query": "A corrected SQL query that addresses the identified issues"
+        }}
+    """)
+
+    chain = prompt | llm
+
+    try:
+        response = chain.invoke({
+            "original_query": state["analyzed_query"].original_query,
+            "analyzed_query": state["analyzed_query"].analyzed_query,
+            "current_sql": state["generated_sql"].sql_query if state["generated_sql"] else "",
+            "evaluation_result": state["evaluation_result"].dict() if state["evaluation_result"] else None,
+            "table_information": json.dumps({name: info.table_schema.dict() for name, info in state["db_info"].items()}, indent=2),
+        })
+
+        parsed_response = process_node_output(response.content, "sql_correction")
+
+        state["sql_correction"] = SQLCorrectionResult(
+            analysis=parsed_response.get("analysis", "No analysis provided"),
+            identified_issues=parsed_response.get("identified_issues", "No issues identified"),
+            corrected_sql_query=parsed_response.get("corrected_sql_query", state["generated_sql"].sql_query if state["generated_sql"] else "")
+        )
+
+    except Exception as e:
+        logger.error(f"Error in SQL correction: {str(e)}")
+        state["sql_correction"] = {
+            "error": f"An error occurred during SQL correction: {str(e)}",
+            "corrected_sql_query": state["generated_sql"].sql_query if state["generated_sql"] else ""
+        }
+
+    return state
+
+
+
+
+================================================
+FILE: app/services/sql_executor_service.py
+================================================
+# app/services/sql_executor_service.py
+
+from sqlalchemy import create_engine, text
+from app.config import Config
+from app.models import SQLExecutionResult, SQLCorrectionResult
+import pandas as pd
+from app.models import AgentState
+
+
+
+def execute_sql(state: AgentState) -> AgentState:
+    print ("============= Executing SQL Code ==============")
+    engine = create_engine(Config.DATABASE_URL)
+    try:
+        with engine.connect() as connection:
+            result = connection.execute(text(state["generated_sql"].sql_query))
+            df = pd.DataFrame(result.fetchall(), columns=result.keys())
+        state["execution_result"] = SQLExecutionResult(success=True, data=df.to_dict(orient='records'))
+    except Exception as e:
+        state["execution_result"] = SQLExecutionResult(success=False, error_message=str(e))
+    return state
+
+
+
+def execute_sql_reflection(state: AgentState) -> AgentState:
+    print ("============= [Reflection] Executing SQL Code ==============")
+    engine = create_engine(Config.DATABASE_URL)
+    try:
+        with engine.connect() as connection:
+            result = connection.execute(text(state["reflected_generated_sql"].reflected_sql_query))
+            df = pd.DataFrame(result.fetchall(), columns=result.keys())
+        state["execution_result"] = SQLExecutionResult(success=True, data=df.to_dict(orient='records'))
+    except Exception as e:
+        state["execution_result"] = SQLExecutionResult(success=False, error_message=str(e))
+    return state
+
+
+
+def execute_sql_corrected(state: AgentState) -> AgentState:
+    print ("============= [Correction] Executing SQL Code ==============")
+    engine = create_engine(Config.DATABASE_URL)
+    try:
+        with engine.connect() as connection:
+            result = connection.execute(text(state["sql_correction"].corrected_sql_query))
+            df = pd.DataFrame(result.fetchall(), columns=result.keys())
+        state["execution_result"] = SQLExecutionResult(success=True, data=df.to_dict(orient='records'))
+    except Exception as e:
+        state["execution_result"] = SQLExecutionResult(success=False, error_message=str(e))
+    return state
+
+
+================================================
+FILE: app/services/sql_generator_service.py
+================================================
+# app/services/sql_generator_service.py
+
+from langchain.prompts import ChatPromptTemplate
+from app.models import GeneratedSQL, ReflectedGeneratedSQL
+import json
+import logging
+from app.models import AgentState
+from app.utils.json_utils import process_node_output
+from app.utils.llm_utils import get_llm
+
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+def sql_generator_optimizer(state: AgentState) -> AgentState:
+    print("============== Generate SQL Code ================")
+
+    #llm = ChatOpenAI(model_name=Config.LLM_MODEL, temperature=Config.LLM_TEMPERATURE)
+    llm = get_llm("openai","gpt-3.5-turbo") # gpt-3.5-turbo, GPT-4o-mini
+    # llm = get_llm("groq", "gemma2-9b-it") # llama-3.1-70b-versatile, llama3-groq-70b-8192-tool-use-preview, gemma2-9b-it, mixtral-8x7b-32768, llama-3.1-8b-instant
+
+    relevant_memories = state.get('relevant_memories', [])
+    memories_text = "\n".join([f"Memory {i+1}: {memory.page_content}" for i, memory in enumerate(relevant_memories)])
+
+    prompt = ChatPromptTemplate.from_template("""
+        Given the analyzed query: "{analyzed_query}"
+        And the following selected table information:
+        {table_information}
+        
+        Consider these relevant memories from past interactions:
+        {relevant_memories}
+        
+        Task 1: Generate an optimized SQL query to answer the analyzed query.
+        Task 2: Provide a brief explanation of your query and any optimizations applied.
+
+        Important: 
+        - Ensure the generated SQL is valid and complete. Do not use placeholders or omit any necessary parts of the query.
+        - Ensure the SQL code does not fetch all tables or databases
+        - Ensure there is no any delete or modify commands in the generated SQL code.
+
+        Respond in the following JSON format:
+        {{
+            "sql_query": "Your complete and valid SQL query",
+            "explanation": "Explanation of the query and optimizations"
+        }}
+        Ensure that the SQL query is valid for the database type being used and uses only the selected tables.
+    """)
+
+    selected_table_info = {
+        name: info.table_schema.dict() for name, info in state["db_info"].items()
+        if name in state["analyzed_query"].selected_tables
+    }
+
+    chain = prompt | llm
+
+    try:
+        response = chain.invoke({
+            "analyzed_query": state["analyzed_query"].analyzed_query,
+            "table_information": json.dumps(selected_table_info, indent=2),
+            "relevant_memories": memories_text
+
+        })
+
+        # Use the safe_parse_json function to handle both JSON object and string JSON
+        parsed_response = process_node_output(response.content, "generator")
+
+        sql_query = parsed_response.get('sql_query', '').replace('\\n', '\n')
+
+        state["generated_sql"] = GeneratedSQL(
+            sql_query=sql_query,
+            explanation=parsed_response.get('explanation','')
+        )
+    except Exception as e:
+        logger.error(f"Error in sql_generator_optimizer: {str(e)}")
+        state["generated_sql"] = GeneratedSQL(
+            sql_query="SELECT 'Error: Failed to generate SQL query'",
+            explanation=f"An error occurred: {str(e)}"
+        )
+
+    logger.info(f"Generated SQL: {state['generated_sql'].sql_query}")
+    logger.info(f"Explanation: {state['generated_sql'].explanation}")
+
+    return state
+
+
+def sql_generator_optimizer_reflection(state: AgentState) -> AgentState:
+    print("============== [Reflection] Generate SQL Code ================")
+    logger.info("Entering SQL generator optimizer reflection")
+    #llm = ChatOpenAI(model_name=Config.LLM_MODEL, temperature=Config.LLM_TEMPERATURE)
+    llm = get_llm("openai","gpt-3.5-turbo") # gpt-3.5-turbo, GPT-4o-mini
+    # llm = get_llm("groq", "gemma2-9b-it") # llama-3.1-70b-versatile, llama3-groq-70b-8192-tool-use-preview, gemma2-9b-it, mixtral-8x7b-32768, llama-3.1-8b-instant
+
+    prompt = ChatPromptTemplate.from_template("""
+        Given the analyzed query: "{analyzed_query}"
+        And the following selected table information: {table_information},
+        reflection {reflection}.
+
+        Task 1: Consider the suggestion from {reflection} and Generate an optimized SQL query to answer the user query.
+        Task 2: Provide a brief explanation of your query and any optimizations applied.
+
+        Important: 
+        - Ensure the generated SQL is valid and complete. Do not use placeholders or omit any necessary parts of the query.
+        - Ensure the SQL code does not fetch all tables or databases
+        - Ensure there is no any delete or modify commands in the generated SQL code.
+
+        Respond in the following JSON format:
+        {{
+            "reflected_sql_query": "Your complete and valid SQL query",
+            "reflected_explanation": "Explanation of the query and optimizations"
+        }}
+        Ensure that the SQL query is valid for the database type being used and uses only the selected tables.
+    """)
+
+    selected_table_info = {
+        name: info.table_schema.dict() for name, info in state["db_info"].items()
+        if name in state["analyzed_query"].selected_tables
+    }
+
+    chain = prompt | llm
+
+    try:
+        response = chain.invoke({
+            "analyzed_query": state["analyzed_query"].analyzed_query,
+            "table_information": json.dumps(selected_table_info, indent=2),
+            "reflection": state["reflection"],
+        })
+
+        parsed_response = process_node_output(response.content, "generator_reflection")
+
+        state["reflected_generated_sql"] = ReflectedGeneratedSQL(
+            reflected_sql_query=parsed_response.get('sql_query', "SELECT 'Error: Failed to generate SQL query'"),
+            reflected_explanation=parsed_response.get('explanation', "Failed to generate explanation")
+        )
+    except Exception as e:
+        logger.error(f"Error in sql_generator_optimizer_reflection: {str(e)}")
+        state["reflected_generated_sql"] = ReflectedGeneratedSQL(
+            reflected_sql_query="SELECT 'Error: Failed to generate SQL query'",
+            reflected_explanation=f"An error occurred: {str(e)}"
+        )
+
+    logger.info(f"Reflected Generated SQL: {state['reflected_generated_sql'].reflected_sql_query}")
+    logger.info(f"Reflected explanation: {state['reflected_generated_sql'].reflected_explanation}")
+
+    return state
+
+
+================================================
+FILE: app/services/sql_reflection_service.py
+================================================
+
+# app/services/sql_reflection_service.py
+from langchain.prompts import ChatPromptTemplate
+from app.models import AgentState
+from app.utils.llm_utils import get_llm
+from app.utils.json_utils import process_node_output
+import logging
+
+logger = logging.getLogger(__name__)
+
+def sql_reflection(state: AgentState) -> AgentState:
+    print ("================== SQL Reflection =================" )
+    logger.info("Entering SQL reflection")
+
+    #llm = ChatOpenAI(model_name=Config.LLM_MODEL, temperature=Config.LLM_TEMPERATURE)
+    llm = get_llm("openai","gpt-3.5-turbo") # gpt-3.5-turbo, GPT-4o-mini
+    # llm = get_llm("groq", "gemma2-9b-it") # llama-3.1-70b-versatile, llama3-groq-70b-8192-tool-use-preview, gemma2-9b-it, mixtral-8x7b-32768, llama-3.1-8b-instant
+
+    prompt = ChatPromptTemplate.from_template("""
+        Given the following information:
+        1. Original user query: {original_query}
+        2. Analyzed query: {analyzed_query}
+        3. Current SQL query: {current_sql}
+        4. Evaluation result: {evaluation_result}
+        5. Reflection: {reflection}
+
+        Task: Analyze the current SQL query and suggest improvements to make it more relevant to the original user query.
+
+        Respond in the following JSON format:
+        {{
+            "analysis": "Your analysis of the current SQL query",
+            "suggested_improvements": "Detailed suggestions for improving the SQL query",
+            "revised_sql_query": "A revised SQL query based on your suggestions"
+        }}
+    """)
+
+    chain = prompt | llm
+
+    try:
+        response = chain.invoke({
+            "original_query": state["analyzed_query"].original_query,
+            "analyzed_query": state["analyzed_query"].analyzed_query,
+            "current_sql": state["generated_sql"].sql_query if state["generated_sql"] else "",
+            "evaluation_result": state["evaluation_result"].dict() if state["evaluation_result"] else None,
+            "reflection": state["reflection"]
+        })
+
+        parsed_response = process_node_output(response.content, "sql_reflection")
+
+        state["reflection"] = {
+            "type": "sql_reflection",
+            "analysis": parsed_response.get("analysis", "No analysis provided"),
+            "suggested_improvements": parsed_response.get("suggested_improvements", "No improvements suggested"),
+            "revised_sql_query": parsed_response.get("revised_sql_query", state["generated_sql"].sql_query if state["generated_sql"] else "")
+        }
+
+
+    except Exception as e:
+        logger.error(f"Error in SQL reflection: {str(e)}")
+        state["reflection"] = {
+            "type": "sql_reflection",
+            "error": f"An error occurred during SQL reflection: {str(e)}",
+            "suggested_improvements": "Unable to suggest improvements due to an error",
+            "revised_sql_query": state["generated_sql"].sql_query if state["generated_sql"] else ""
+        }
+    return state
+
+
+================================================
+FILE: app/services/sql_validator_service.py
+================================================
+# app/services/sql_validator_service.py
+
+
+from langchain.prompts import ChatPromptTemplate
+from app.models import SQLValidationResult, AgentState
+from app.utils.json_utils import process_node_output
+import logging
+from app.utils.llm_utils import get_llm
+import json
+
+logger = logging.getLogger(__name__)
+
+def sql_validator(state: AgentState) -> AgentState:
+    print("============== Validating SQL Code ================")
+
+    #llm = ChatOpenAI(model_name=Config.LLM_MODEL, temperature=Config.LLM_TEMPERATURE)
+    llm = get_llm("openai","gpt-3.5-turbo") # gpt-3.5-turbo, GPT-4o-mini
+    # llm = get_llm("groq", "gemma2-9b-it") # llama-3.1-70b-versatile, llama3-groq-70b-8192-tool-use-preview, gemma2-9b-it, mixtral-8x7b-32768, llama-3.1-8b-instant
+
+    prompt = ChatPromptTemplate.from_template("""
+        Given the following:
+        1. Original user query: {original_query}
+        2. Analyzed query: {analyzed_query}
+        3. Generated SQL query: {sql_query}
+        4. SQL query explanation: {sql_explanation}
+        5. Selected tables and their schemas:
+        {table_schemas}
+
+        Task 1: Validate the SQL query for correctness, safety, and relevance to the original query.
+        Task 2: Provide your suggestions to improve the Generated SQL query If the generated SQL query is not Valid.
+
+        Please check for the following:
+        1. SQL syntax errors
+        2. Potential SQL injection vulnerabilities
+        3. Use of non-existent tables or columns
+        4. Logical errors in JOIN conditions or WHERE clauses
+        5. Appropriate use of aggregation functions and GROUP BY clauses
+        6. Relevance of the query to the original user question
+        7. Potential performance issues (e.g., missing indexes, inefficient JOINs) 
+        8. Avoid Selecting Entire Tables or Columns Without Limits.
+
+        Respond in the following JSON format:
+        {{
+            "is_sql_valid": True/False,
+            "issues": ["issue1", "issue2", ...],
+            "suggested_fix": "Suggested SQL query fix or improvements"
+        }}
+
+        If the sql query is valid and safe, set is_sql_valid to True and leave issues and suggested_fix empty.
+        If issues are found, set is_sql_valid to False, list the issues, and provide a suggested fix.
+    """)
+
+    selected_table_schemas = {
+        name: state["db_info"][name].table_schema.dict()
+        for name in state["analyzed_query"].selected_tables
+    }
+
+    chain = prompt | llm
+
+    try:
+        response = chain.invoke({
+            "original_query": state["analyzed_query"].original_query,
+            "analyzed_query": state["analyzed_query"].analyzed_query,
+            "sql_query": state["generated_sql"].sql_query,
+            "sql_explanation": state["generated_sql"].explanation,
+            "table_schemas": json.dumps(selected_table_schemas, indent=2)
+        })
+
+        validation_result = process_node_output(response.content, "sql_validator")
+
+        is_sql_valid = validation_result.get('is_sql_valid')
+        if is_sql_valid is None:
+            logger.warning("Validation result did not contain 'is_valid' field. Assuming SQL is invalid.")
+            is_sql_valid = False
+
+        state["validation_result"] = SQLValidationResult(
+            is_sql_valid=validation_result.get('is_sql_valid'),
+            issues=validation_result.get('issues', []),
+            suggested_fix=validation_result.get('suggested_fix', '')
+        )
+
+        # Add reflection information to the state
+        if is_sql_valid:
+            state["reflection"] = None
+        else:
+            state["reflection"] = {
+                "type": "sql_validation",
+                "issues": validation_result.get('issues', []),
+                "suggested_fix": validation_result.get('suggested_fix', '')
+            }
+
+    except Exception as e:
+        logger.error(f"Error in SQL validation: {str(e)}")
+        state["validation_result"] = SQLValidationResult(
+            is_sql_valid=False,
+            issues=["Unexpected error in validation process"],
+            suggested_fix="Please review the SQL query and try again."
+        )
+        state["reflection"] = {
+            "type": "sql_validation",
+            "issues": ["Unexpected error in validation process"],
+            "suggested_fix": "Please review the SQL query and try again."
+        }
+
+    return state
+
+
+================================================
+FILE: app/services/summarizer_service.py
+================================================
+# app/services/summarizer_service.py
+
+from langchain.prompts import ChatPromptTemplate
+from app.models import AgentState
+import json
+from app.utils.llm_utils import get_llm
+
+def summarizer_node(state: AgentState) -> AgentState:
+    print("=================== Summarization =====================")
+    if not state["analyzed_query"].is_query_relevant:
+        state['summary'] = f"I'm sorry, but your query '{state['user_query']}' is not relevant to the available database information. {state['analyzed_query'].explanation}"
+        return state
+
+    #llm = ChatOpenAI(model_name=Config.LLM_MODEL, temperature=Config.LLM_TEMPERATURE)
+    llm = get_llm("openai","gpt-3.5-turbo") # gpt-3.5-turbo, GPT-4o-mini
+    # llm = get_llm("groq", "gemma2-9b-it") # llama-3.1-70b-versatile, llama3-groq-70b-8192-tool-use-preview, gemma2-9b-it, mixtral-8x7b-32768, llama-3.1-8b-instant
+
+    prompt = ChatPromptTemplate.from_template("""
+        Given the following information:
+        1. Original user query: {user_query}
+        2. Analyzed query: {analyzed_query}
+        3. SQL query executed: {sql_query}
+        4. Query execution result: {execution_result}
+        5. Result evaluation: {evaluation_result}
+
+        Please provide an insightful answer to the user's original query. 
+        Your response should be clear, concise, and directly address the user's question 
+        while incorporating the relevant information from the query results.
+
+        Answer:
+    """)
+
+    chain = prompt | llm | (lambda x: x.content)
+
+    response = chain.invoke({
+        "user_query": state['user_query'],
+        "analyzed_query": state['analyzed_query'].analyzed_query,
+        "sql_query": state['generated_sql'].sql_query if state['generated_sql'] else "",
+        "execution_result": json.dumps(state['execution_result'].data) if state['execution_result'] else "",
+        "evaluation_result": state['evaluation_result'].explanation if state['evaluation_result'] else ""
+    })
+
+    state['summary'] = response
+    return state
+
+
+================================================
+FILE: app/services/visualizer_service.py
+================================================
+# app/services/visualizer_service.py
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from io import BytesIO
+import base64
+from app.models import Visualization, AgentState
+from app.utils.llm_utils import get_llm
+from langchain.prompts import ChatPromptTemplate
+import json
+import logging
+from matplotlib.dates import DateFormatter
+import matplotlib.dates as mdates
+
+logger = logging.getLogger(__name__)
+
+def visualization_check(state: AgentState) -> AgentState:
+    print("=================== Visualization Checkpoint =====================")
+    return state
+
+def create_visualization(data, query, visualization_type, x_column, y_column=None, title=None, palette='viridis', style='darkgrid'):
+    df = pd.DataFrame(data)
+    sns.set_style(style)
+    sns.set_palette(palette)
+    plt.figure(figsize=(12, 7))
+
+    # Check if x_column is a datetime
+    is_time_series = pd.api.types.is_datetime64_any_dtype(df[x_column])
+    if is_time_series:
+        df[x_column] = pd.to_datetime(df[x_column])
+
+    # Check if y_column is provided and valid
+    y_column_provided = y_column and y_column.strip() and y_column in df.columns
+    
+    if not y_column_provided:
+        y_column = x_column
+        x_column = df.index.name if df.index.name else 'Index'
+
+    if visualization_type == "bar":
+        ax = sns.barplot(data=df, x=x_column, y=y_column)
+        plt.xticks(rotation=45, ha='right')
+    elif visualization_type == "line":
+        ax = sns.lineplot(data=df, x=x_column, y=y_column, marker='o')
+        plt.plot(df[x_column], df[y_column], alpha=0)  # This creates anchor points for the spline
+        if is_time_series:
+            plt.gcf().autofmt_xdate()
+            ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
+            ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+    elif visualization_type == "scatter":
+        ax = sns.scatterplot(data=df, x=x_column, y=y_column)
+    elif visualization_type == "pie":
+        plt.pie(df[y_column], labels=df[x_column], autopct='%1.1f%%', startangle=90, wedgeprops=dict(width=0.5))
+        plt.axis('equal')
+    elif visualization_type == "histogram":
+        ax = sns.histplot(data=df, x=x_column, y=y_column, kde=True)
+    elif visualization_type == "box":
+        ax = sns.boxplot(data=df, x=x_column, y=y_column)
+        plt.xticks(rotation=45, ha='right')
+    elif visualization_type == "heatmap":
+        ax = sns.heatmap(df.pivot(x_column, y_column, values=df.columns[-1]), annot=True, cmap='YlGnBu')
+    else:
+        raise ValueError(f"Unsupported visualization type: {visualization_type}")
+
+    plt.title(title or f"Visualization for: {query}", fontsize=16, fontweight='bold', pad=20)
+    plt.tight_layout()
+
+    # Add some styling to make the plot more visually appealing
+    if visualization_type != "pie":
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.spines['bottom'].set_linewidth(0.5)
+        ax.spines['left'].set_linewidth(0.5)
+        
+    for spine in plt.gca().spines.values():
+        spine.set_edgecolor('#888888')
+
+    plt.grid(True, linestyle='--', alpha=0.7)
+    
+    # Make the plot area have rounded corners
+    plt.gca().patch.set_facecolor('#F0F0F0')
+    plt.gcf().patch.set_facecolor('white')
+    plt.gca().patch.set_alpha(0.3)
+    
+    buffer = BytesIO()
+    plt.savefig(buffer, format='png', dpi=300, bbox_inches='tight', facecolor='white', edgecolor='none')
+    buffer.seek(0)
+    image_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+    plt.close()
+
+    if y_column_provided:
+        description = f"{visualization_type.capitalize()} chart visualization of {x_column} vs {y_column} for the query: {query}"
+    else:
+        description = f"{visualization_type.capitalize()} chart visualization of {x_column} for the query: {query}"
+    
+    return Visualization(image=image_base64, description=description)
+
+def select_visualization(state: AgentState) -> dict:
+    llm = get_llm("openai","gpt-3.5-turbo")
+    
+    prompt = ChatPromptTemplate.from_template("""
+    Given the following information:
+    1. Original user query: {user_query}
+    2. Analyzed query: {analyzed_query}
+    3. SQL query executed: {sql_query}
+    4. Query execution result (first 5 rows): {sample_data}
+    5. Data columns and types: {data_types}
+
+    You are an expert data analyst. Select the most appropriate visualization type and parameters to best represent the data and answer the user's query.
+    Consider the data types, the number of data points, and the nature of the question being asked.
+    If there's a date or time column, consider using it for the x-axis in a time series visualization.
+
+    Respond in the following JSON format:
+    {{
+        "visualization_type": "bar|line|scatter|pie|histogram|box|heatmap",
+        "x_column": "name of the column for x-axis",
+        "y_column": "name of the column for y-axis (if applicable)",
+        "title": "A descriptive title for the visualization",
+        "explanation": "A brief explanation of why this visualization was chosen"
+    }}
+    """)
+
+    df = pd.DataFrame(state["execution_result"].data)
+    sample_data = df.head().to_dict()
+    data_types = df.dtypes.to_dict()
+
+    chain = prompt | llm
+
+    try:
+        response = chain.invoke({
+            "user_query": state["user_query"],
+            "analyzed_query": state["analyzed_query"].analyzed_query,
+            "sql_query": state["generated_sql"].sql_query,
+            "sample_data": json.dumps(sample_data),
+            "data_types": str(data_types)
+        })
+        
+        visualization_params = json.loads(response.content)
+        logger.info(f"Selected visualization: {visualization_params}")
+        return visualization_params
+    except Exception as e:
+        logger.error(f"Error in visualization selection: {str(e)}")
+        return {"visualization_type": "bar", "x_column": df.columns[0], "y_column": df.columns[1] if len(df.columns) > 1 else None}
+
+def data_visualizer(state: AgentState) -> AgentState:
+    print("=================== Data Visualization =====================")
+    if not state["execution_result"].success or not state["evaluation_result"].requires_visualization:
+        state["visualization"] = None
+    else:
+        visualization_params = select_visualization(state)
+        state["visualization"] = create_visualization(
+            state["execution_result"].data,
+            state["analyzed_query"].original_query,
+            visualization_params["visualization_type"],
+            visualization_params["x_column"],
+            visualization_params.get("y_column"),
+            visualization_params.get("title")
+        )
+        state["visualization_explanation"] = visualization_params.get("explanation", "")
+    return state
+
+
+
+
+================================================
+FILE: app/static/css/styles.css
+================================================
+/* app/static/css/style.css */
+
+body {
+    font-family: Arial, sans-serif;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    margin: 0;
+    background-color: #f0f0f0;
+}
+
+.chat-container {
+    width: 400px;
+    height: 600px;
+    border: 1px solid #ccc;
+    border-radius: 10px;
+    display: flex;
+    flex-direction: column;
+    background-color: white;
+}
+
+.chat-header {
+    background-color: #007bff;
+    color: white;
+    padding: 10px;
+    text-align: center;
+    border-top-left-radius: 10px;
+    border-top-right-radius: 10px;
+}
+
+.chat-messages {
+    flex-grow: 1;
+    overflow-y: auto;
+    padding: 10px;
+}
+
+.chat-input {
+    display: flex;
+    padding: 10px;
+}
+
+.chat-input input {
+    flex-grow: 1;
+    padding: 5px;
+    border: 1px solid #ccc;
+    border-radius: 3px;
+}
+
+.chat-input button {
+    margin-left: 5px;
+    padding: 5px 10px;
+    background-color: #007bff;
+    color: white;
+    border: none;
+    border-radius: 3px;
+    cursor: pointer;
+}
+
+.message {
+    margin-bottom: 10px;
+    padding: 5px 10px;
+    border-radius: 5px;
+    max-width: 70%;
+}
+
+.user-message {
+    background-color: #007bff;
+    color: white;
+    align-self: flex-end;
+}
+
+.bot-message {
+    background-color: #f0f0f0;
+    align-self: flex-start;
+}
+
+.visualization-image {
+    max-width: 100%;
+    height: auto;
+    margin-top: 10px;
+}
+
+
+================================================
+FILE: app/static/js/chatbot.js
+================================================
+// static/js/chatbot.js
+
+document.addEventListener('DOMContentLoaded', function() {
+    const chatMessages = document.getElementById('chat-messages');
+    const userInput = document.getElementById('user-input');
+    const sendButton = document.querySelector('.chat-input button');
+
+    function addMessage(sender, content, isImage = false) {
+        const messageElement = document.createElement('div');
+        messageElement.classList.add('message', sender === 'user' ? 'user-message' : 'bot-message');
+
+        if (isImage) {
+            const img = document.createElement('img');
+            img.src = `data:image/png;base64,${content}`;
+            img.classList.add('visualization-image');
+            messageElement.appendChild(img);
+        } else {
+            messageElement.textContent = content;
+        }
+
+        chatMessages.appendChild(messageElement);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    }
+
+    function sendMessage() {
+        const message = userInput.value.trim();
+        if (message) {
+            addMessage('user', message);
+            userInput.value = '';
+            fetchBotResponse(message);
+        }
+    }
+
+    function fetchBotResponse(message) {
+        addMessage('bot', 'Processing your query...');
+
+        fetch('/chat', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ query: message }),
+        })
+        .then(response => response.json())
+        .then(data => {
+            // Remove the "Processing your query..." message
+            chatMessages.removeChild(chatMessages.lastChild);
+
+            if (data.error) {
+                addMessage('bot', `Error: ${data.error}`);
+                return;
+            }
+
+            // Display visualization if available
+            if (data.visualization && data.visualization.image) {
+                addMessage('bot', data.visualization.image, true);
+                if (data.visualization.description) {
+                    addMessage('bot', data.visualization.description);
+                }
+            }
+
+            // Always display the summary
+            if (data.summary) {
+                addMessage('bot', data.summary);
+            } else {
+                addMessage('bot', 'No summary available.');
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            addMessage('bot', 'Sorry, there was an error processing your request.');
+        });
+    }
+
+    // Event listeners
+    sendButton.addEventListener('click', sendMessage);
+
+    userInput.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+            sendMessage();
+        }
+    });
+
+    // Initial greeting
+    addMessage('bot', 'Hello! How can I assist you today?');
+});
+
+
+================================================
+FILE: app/templates/index.html
+================================================
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Advanced SQL Agent Chatbot</title>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+         :root {
+            --primary: #6a11cb;
+            --secondary: #c038ff;
+            --dark-purple: #4a0e95;
+            --background: #f4f7f9;
+            --text: #333333;
+            --light-text: #ffffff;
+            --border: #e1e4e8;
+            --third: #a047ff;
+            --bubble: #d9dddc;
+            --bubble2: #eee5f8;
+        }
+        
+        body {
+            font-family: 'Poppins', sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: var(--background);
+            color: var(--text);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+        }
+        
+        .chat-button {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background-color: var(--dark-purple);
+            color: var(--light-text);
+            border: none;
+            border-radius: 50%;
+            width: 60px;
+            height: 60px;
+            font-size: 24px;
+            cursor: pointer;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            transition: all 0.3s ease;
+            z-index: 1000;
+        }
+        
+        .chat-button:hover {
+            transform: scale(1.1);
+            box-shadow: 0 6px 12px rgba(196, 148, 19, 0.753);
+        }
+        
+        .chat-container {
+            width: 90%;
+            max-width: 800px;
+            height: 80vh;
+            background-color: #ffffff;
+            border-radius: 20px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            transition: all 0.3s ease;
+        }
+        
+        .chat-header {
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            color: var(--light-text);
+            padding: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .chat-title {
+            font-size: 24px;
+            font-weight: 600;
+        }
+        
+        .window-controls {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .window-control {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            border: none;
+            cursor: pointer;
+            transition: opacity 0.3s ease;
+        }
+        
+        .window-control:hover {
+            opacity: 0.8;
+        }
+        
+        #minimize-btn {
+            background-color: #ffbd44;
+        }
+        
+        #maximize-btn {
+            background-color: #00ca4e;
+        }
+        
+        #close-btn {
+            background-color: #ff605c;
+        }
+        
+        .chat-messages {
+            flex-grow: 1;
+            padding: 20px;
+            overflow-y: auto;
+            background-color: var(--background);
+        }
+        
+        .message {
+            margin-bottom: 15px;
+            padding: 15px;
+            border-radius: 18px;
+            max-width: 80%;
+            animation: fadeIn 0.3s ease-out;
+            font-size: 16px;
+            line-height: 1.4;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
+        }
+        
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .user-message {
+            background-color: var(--bubble2);
+            color: var(--text);
+            align-self: flex-end;
+            margin-left: auto;
+            border-bottom-right-radius: 0;
+        }
+        
+        .bot-message {
+            background-color: var(--bubble);
+            color: var(--text);
+            align-self: flex-start;
+            border-bottom-left-radius: 0;
+            border: 1px solid var(--border);
+        }
+        
+        .chat-input {
+            display: flex;
+            padding: 20px;
+            background-color: #ffffff;
+            border-top: 1px solid var(--border);
+        }
+        
+        #user-input {
+            flex-grow: 1;
+            padding: 15px;
+            border: 1px solid var(--border);
+            border-radius: 30px;
+            font-size: 16px;
+            outline: none;
+            transition: border-color 0.3s ease;
+        }
+        
+        #user-input:focus {
+            border-color: var(--primary);
+        }
+        
+        #send-button {
+            padding: 15px 30px;
+            background-color: var(--primary);
+            color: var(--light-text);
+            border: none;
+            border-radius: 30px;
+            margin-left: 15px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+            transition: background-color 0.3s ease;
+        }
+        
+        #send-button:hover {
+            background-color: var(--secondary);
+        }
+        
+        .visualization-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin: 20px 0;
+            padding: 20px;
+            background-color: #ffffff;
+            border-radius: 10px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
+        }
+        
+        .visualization {
+            max-width: 100%;
+            max-height: 300px;
+            object-fit: contain;
+            border-radius: 5px;
+        }
+        
+        .loading {
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            padding: 15px;
+            background-color: rgba(255, 255, 255, 0.8);
+            border-radius: 10px;
+            margin-bottom: 15px;
+            animation: fadeIn 0.5s ease-out;
+        }
+        
+        .loading-text {
+            color: #777777;
+            margin-right: 15px;
+            font-size: 13px;
+        }
+        
+        .loading-spinner {
+            border: 4px solid var(--border);
+            border-top: 4px solid var(--primary);
+            border-radius: 50%;
+            width: 15px;
+            height: 15px;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+        
+        .chat-container.minimized {
+            height: 60px;
+            overflow: hidden;
+        }
+        
+        .chat-container.maximized {
+            width: 100%;
+            height: 100vh;
+            max-width: none;
+            border-radius: 0;
+        }
+    </style>
+</head>
+
+<body>
+    <button class="chat-button" id="chat-button" onclick="toggleChat()">💬</button>
+    <div class="chat-container" id="chat-container">
+        <div class="chat-header">
+            <div class="window-controls">
+                <button id="minimize-btn" class="window-control" onclick="minimizeChat()"></button>
+                <button id="maximize-btn" class="window-control" onclick="maximizeChat()"></button>
+                <button id="close-btn" class="window-control" onclick="closeChat()"></button>
+            </div>
+            <div class="chat-title">Advanced SQL Agent</div>
+            <div style="width: 60px;"></div>
+            <!-- Spacer for alignment -->
+        </div>
+        <div class="chat-messages" id="chat-messages"></div>
+        <div class="chat-input">
+            <input type="text" id="user-input" placeholder="Ask a question about your data...">
+            <button id="send-button">Send</button>
+        </div>
+    </div>
+
+    <script>
+        const chatContainer = document.getElementById('chat-container');
+        const chatButton = document.getElementById('chat-button');
+        const chatMessages = document.getElementById('chat-messages');
+        const userInput = document.getElementById('user-input');
+        const sendButton = document.getElementById('send-button');
+
+        function toggleChat() {
+            chatContainer.style.display = chatContainer.style.display === 'none' ? 'flex' : 'none';
+            chatButton.style.display = chatButton.style.display === 'none' ? 'block' : 'none';
+        }
+
+        function minimizeChat() {
+            chatContainer.classList.toggle('minimized');
+        }
+
+        function maximizeChat() {
+            chatContainer.classList.toggle('maximized');
+        }
+
+        function closeChat() {
+            chatContainer.style.display = 'none';
+            chatButton.style.display = 'block';
+        }
+
+        function addMessage(message, isUser = false) {
+            const messageElement = document.createElement('div');
+            messageElement.classList.add('message');
+            messageElement.classList.add(isUser ? 'user-message' : 'bot-message');
+            messageElement.textContent = message;
+            chatMessages.appendChild(messageElement);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        function addVisualization(imageData, description) {
+            const visualizationContainer = document.createElement('div');
+            visualizationContainer.classList.add('visualization-container');
+
+            const visualizationElement = document.createElement('img');
+            visualizationElement.src = `data:image/png;base64,${imageData}`;
+            visualizationElement.alt = description;
+            visualizationElement.classList.add('visualization');
+
+            visualizationContainer.appendChild(visualizationElement);
+            chatMessages.appendChild(visualizationContainer);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        function addLoadingAnimation() {
+            const loadingElement = document.createElement('div');
+            loadingElement.classList.add('loading');
+            loadingElement.innerHTML = `
+                    <span class="loading-text">Analyzing your data...</span>
+                    <div class="loading-spinner"></div>
+                `;
+            chatMessages.appendChild(loadingElement);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+            return loadingElement;
+        }
+
+        async function sendMessage() {
+            const message = userInput.value.trim();
+            if (message) {
+                addMessage(message, true);
+                userInput.value = '';
+
+                const loadingElement = addLoadingAnimation();
+
+                try {
+                    const response = await fetch('http://localhost:5000/chat', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            query: message
+                        }),
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+
+                    const data = await response.json();
+                    loadingElement.remove();
+                    addMessage(data.summary);
+
+                    if (data.visualization && data.visualization.image) {
+                        addVisualization(data.visualization.image, data.visualization.description);
+                    }
+                } catch (error) {
+                    console.error('Error:', error);
+                    loadingElement.remove();
+                    addMessage('Sorry, there was an error processing your request. Please try again.');
+                }
+            }
+        }
+
+        sendButton.addEventListener('click', sendMessage);
+        userInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+
+        // Initialize chat as hidden
+        chatContainer.style.display = 'none';
+    </script>
+</body>
+
+</html>
+
+
+================================================
+FILE: app/utils/__init__.py
+================================================
+# app/utils/__init__.py
+
+
+================================================
+FILE: app/utils/json_encoder.py
+================================================
+# app/utils/json_encoder.py
+
+from langchain_core.pydantic_v1 import BaseModel
+from flask.json.provider import JSONProvider
+import json
+
+class CustomJSONEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, BaseModel):
+            return obj.dict()
+        return super().default(obj)
+
+class CustomJSONProvider(JSONProvider):
+    def dumps(self, obj, **kwargs):
+        return json.dumps(obj, cls=CustomJSONEncoder, **kwargs)
+
+    def loads(self, s, **kwargs):
+        return json.loads(s, **kwargs)
+
+
+
+
+================================================
+FILE: app/utils/json_utils.py
+================================================
+# app/utils/json_utils.py
+
+import json
+import re
+from typing import Any, Dict, List
+import logging
+
+logger = logging.getLogger(__name__)
+
+def safe_parse_json(content: Any) -> Dict[str, Any]:
+    """
+    Safely parse JSON content, whether it's a string or already a dict.
+    """
+    if isinstance(content, dict):
+        return content
+    if isinstance(content, str):
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to parse content as JSON. Error: {str(e)}")
+            logger.error(f"Content: {content}")
+            # Attempt to extract key information if JSON parsing fails
+            return extract_info_from_text(content)
+    logger.error(f"Unexpected content type: {type(content)}")
+    return {}
+
+def extract_info_from_text(text: str) -> Dict[str, Any]:
+    """
+    Attempt to extract key information from text if JSON parsing fails.
+    """
+    result = {}
+
+    # Define patterns for different types of fields
+    patterns = {
+        'string': r'"(\w+)":\s*"([^"]*)"',
+        'boolean': r'"(\w+)":\s*(true|false)',
+        'number': r'"(\w+)":\s*(-?\d+(?:\.\d+)?)',
+        'list': r'"(\w+)":\s*(\[.*?\])',
+        'nested_dict': r'"(\w+)":\s*(\{.*?\})'
+    }
+
+    # Extract information based on patterns
+    for pattern_type, pattern in patterns.items():
+        matches = re.findall(pattern, text, re.IGNORECASE | re.DOTALL)
+        for match in matches:
+            key, value = match
+            if pattern_type == 'boolean':
+                result[key] = value.lower() == 'true'
+            elif pattern_type == 'number':
+                result[key] = float(value) if '.' in value else int(value)
+            elif pattern_type in ['list', 'nested_dict']:
+                try:
+                    result[key] = json.loads(value)
+                except json.JSONDecodeError:
+                    result[key] = value  # Store as string if parsing fails
+            else:
+                result[key] = value
+
+    return result
+
+def extract_specific_info(parsed_data: Dict[str, Any], node_type: str) -> Dict[str, Any]:
+    """
+    Extract specific information based on the node type.
+    """
+    if node_type == "analyzer":
+        return {
+            "is_query_relevant": parsed_data.get("is_query_relevant", False),
+            "analyzed_query": parsed_data.get("analyzed_query", ""),
+            "selected_tables": parsed_data.get("selected_tables", []),
+            "explanation": parsed_data.get("explanation", "")
+        }
+    elif node_type == "sql_generator":
+        return {
+            "sql_query": parsed_data.get("sql_query", ""),
+            "explanation": parsed_data.get("explanation", "")
+        }
+    elif node_type == "sql_validator":
+        return {
+            "is_sql_valid": parsed_data.get("is_sql_valid", False),
+            "issues": parsed_data.get("issues", []),
+            "suggested_fix": parsed_data.get("suggested_fix", "")
+        }
+    elif node_type == "result_evaluator":
+        return {
+            "is_result_relevant": parsed_data.get("is_result_relevant", False),
+            "explanation": parsed_data.get("explanation", ""),
+            "requires_visualization": parsed_data.get("requires_visualization", False),
+            "summary": parsed_data.get("summary", "")
+        }
+    else:
+        return parsed_data  # Return all data if node type is not recognized
+
+# Example usage in a node's processing function:
+def process_node_output(content: Any, node_type: str) -> Dict[str, Any]:
+    parsed_data = safe_parse_json(content)
+    return extract_specific_info(parsed_data, node_type)
+
+
+
+
+########################
+# Helper function to convert the string json format to json
+import json
+import re
+
+
+def convert_to_json(content):
+    # Strip leading/trailing whitespace
+    content = content.strip()
+
+    # Check if the content is already valid JSON
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError:
+        pass  # Not valid JSON, continue with conversion
+
+    # Remove ```json and ``` if present
+    content = re.sub(r'^```json\s*|\s*```$', '', content, flags=re.MULTILINE)
+
+    # Remove any remaining ``` at the start or end
+    content = re.sub(r'^```\s*|\s*```$', '', content, flags=re.MULTILINE)
+
+    # Attempt to parse the cleaned content as JSON
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError as e:
+        print(f"Error parsing JSON: {e}")
+        print(f"Problematic content:\n{content}")
+
+        # If parsing fails, attempt to create a dict from key-value pairs
+        result = {}
+        for line in content.split('\n'):
+            match = re.match(r'^\s*"?([^"]+)"?\s*:\s*(.+)$', line)
+            if match:
+                key, value = match.groups()
+                key = key.strip('"')
+                value = value.strip().strip(',').strip('"')
+                if value.lower() == 'true':
+                    value = True
+                elif value.lower() == 'false':
+                    value = False
+                elif value.replace('.', '').isdigit():
+                    value = float(value) if '.' in value else int(value)
+                result[key] = value
+
+        if result:
+            return result
+        else:
+            raise ValueError("Unable to parse content into JSON or key-value pairs")
+
+
+# Example usage:
+# json_data = convert_to_json(your_model_output)
+
+########################
+
+
+================================================
+FILE: app/utils/llm_utils.py
+================================================
+# app/utils/llm_utils.py
+
+from langchain_openai import ChatOpenAI
+from langchain_anthropic import ChatAnthropic
+from langchain_groq import ChatGroq
+from langchain_ollama import ChatOllama
+from app.config import Config
+
+def get_llm(provider, model_name):
+    temperature = Config.LLM_TEMPERATURE
+
+    if provider == 'openai':
+        return ChatOpenAI(model_name=model_name, temperature=temperature)
+    elif provider == 'anthropic':
+        return ChatAnthropic(model=model_name, temperature=temperature)
+    elif provider == 'groq':
+        return ChatGroq(model_name=model_name, temperature=temperature)
+    elif provider == 'ollama':
+        return ChatOllama(model=model_name, temperature=temperature)
+    else:
+        raise ValueError(f"Unsupported LLM provider: {provider}")
+
+
+
+
+
+
+================================================
+FILE: csv_files/cart_items.csv
+================================================
+cart_item_id,cart_id,product_id,quantity
+1,49,65,1
+2,42,87,3
+3,16,17,5
+4,7,24,5
+5,12,11,4
+6,33,83,1
+7,28,64,3
+8,38,13,4
+9,16,38,4
+10,27,81,1
+11,48,89,2
+12,12,67,2
+13,4,66,3
+14,20,29,5
+15,13,56,5
+16,1,35,5
+17,45,90,4
+18,41,16,2
+19,7,70,1
+20,30,72,1
+21,33,62,4
+22,22,78,1
+23,8,43,5
+24,45,33,4
+25,40,97,3
+26,25,49,4
+27,17,73,3
+28,39,58,3
+29,29,9,2
+30,45,30,4
+31,12,54,2
+32,39,35,4
+33,5,31,5
+34,41,83,2
+35,38,49,2
+36,23,20,2
+37,33,26,2
+38,38,23,3
+39,4,74,2
+40,40,89,4
+41,26,72,2
+42,9,55,1
+43,37,71,5
+44,23,20,5
+45,2,90,1
+46,4,33,5
+47,40,93,1
+48,7,19,2
+49,41,13,5
+50,26,88,3
+51,21,14,5
+52,32,34,2
+53,34,18,2
+54,46,48,1
+55,21,10,1
+56,21,91,4
+57,24,96,5
+58,35,15,2
+59,36,17,4
+60,24,10,5
+61,6,76,1
+62,23,21,4
+63,47,45,3
+64,26,68,5
+65,26,20,2
+66,40,95,1
+67,50,58,4
+68,33,49,1
+69,11,67,5
+70,42,60,4
+71,39,22,4
+72,32,11,1
+73,50,31,5
+74,26,63,5
+75,9,40,1
+76,43,25,1
+77,28,100,2
+78,32,52,2
+79,17,97,4
+80,19,71,5
+81,45,71,2
+82,32,28,2
+83,10,100,3
+84,47,21,1
+85,45,14,5
+86,4,74,2
+87,31,48,1
+88,19,38,3
+89,16,67,2
+90,33,27,5
+91,50,41,1
+92,30,81,1
+93,30,28,1
+94,9,10,1
+95,48,1,3
+96,24,90,3
+97,24,80,3
+98,21,17,1
+99,38,96,1
+100,17,83,5
+101,43,91,4
+102,46,46,2
+103,15,73,3
+104,48,4,4
+105,4,78,3
+106,6,61,5
+107,17,98,1
+108,8,87,5
+109,20,83,4
+110,11,42,2
+111,33,86,4
+112,41,7,2
+113,5,76,4
+114,22,73,1
+115,11,76,1
+116,39,84,1
+117,14,18,5
+118,5,54,2
+119,19,89,4
+120,6,54,2
+121,1,92,4
+122,35,23,1
+123,20,3,5
+124,13,51,5
+125,18,87,5
+126,28,96,2
+127,10,13,1
+128,42,74,5
+129,6,36,1
+130,49,66,3
+131,40,79,2
+132,15,83,1
+133,12,6,2
+134,44,71,1
+135,46,96,5
+136,42,54,5
+137,12,32,5
+138,2,99,3
+139,16,12,5
+140,32,84,5
+141,19,5,2
+142,23,59,3
+143,30,50,4
+144,24,78,1
+145,2,1,3
+146,24,88,3
+147,32,1,4
+148,4,70,1
+149,31,31,1
+150,33,69,5
+
+
+
+================================================
+FILE: csv_files/customers.csv
+================================================
+customer_id,first_name,last_name,email,phone,address,city,country,registration_date
+1,Nicholas,Mora,williamgordon@example.org,001-659-673-7540x4649,"Unit 4830 Box 6751
+DPO AE 32884",New Kaitlyn,Moldova,1972-12-30
+2,Debbie,Conley,erica57@example.net,991-965-5768x5049,"580 Christine Springs
+Lake Ryanchester, MI 10963",North Alexandra,Kenya,2001-03-16
+3,Brian,Walter,williamtownsend@example.net,602-881-7300x802,"310 Steve Trafficway Apt. 774
+Stevenhaven, NV 97609",East Cindyberg,Kuwait,1992-09-18
+4,Cole,Liu,cynthiawalters@example.org,001-720-587-1919,"1404 Molina Circle
+Calebshire, FL 49122",Port Sarah,Nigeria,1992-09-28
+5,Angela,Hall,kvilla@example.net,776-929-6418,"4866 Caitlin Shoals Suite 015
+South Martinview, WV 83296",North Richard,British Virgin Islands,2013-08-21
+6,Keith,Klein,balexander@example.net,(507)591-4531x2077,"655 Contreras Lake
+Scotttown, NV 24604",East Stacy,Sri Lanka,2000-07-19
+7,Gabriel,Diaz,kgonzalez@example.com,+1-464-394-1358x1080,"7888 Laura Locks Apt. 812
+Lake Kylieland, NY 44364",Stevenland,Madagascar,1981-05-12
+8,Christopher,Johnson,rrice@example.org,+1-773-669-8432x644,"9836 Griffin Haven
+Jacksonbury, VI 52101",Shannonville,Mexico,1994-06-22
+9,Monique,Torres,walter30@example.org,542.577.4665,"74756 Margaret Key
+South Brianchester, FM 29589",Greggland,United States of America,2007-08-02
+10,Stacy,Morris,cherylgordon@example.org,+1-956-785-3937x947,"97044 Anna Squares Apt. 938
+Port Amy, AL 13838",New Donaldville,Saint Lucia,1995-03-27
+11,Elizabeth,Nelson,angela00@example.org,(642)989-0101x99959,"907 Davidson Highway
+Gonzalezhaven, ND 45750",Garretthaven,Swaziland,1998-05-20
+12,Kevin,Monroe,housekatrina@example.org,711-973-5005x031,"33323 David Trail Suite 482
+Atkinsview, GU 02319",Wilsonmouth,Liechtenstein,1974-12-17
+13,Gregory,Garza,zthompson@example.net,+1-233-932-5643x8650,"439 Kimberly Views Suite 255
+Sanchezfurt, IA 49040",Port Tinaberg,North Macedonia,2023-04-30
+14,Monica,Tyler,vcollins@example.org,213.706.7627,"0833 Emily Isle Apt. 493
+Spearston, MN 11848",Morrismouth,Hong Kong,1982-04-09
+15,Eddie,Acosta,darrell66@example.org,+1-797-515-9158,"714 Samantha Summit
+Lake Yvonneton, MI 69970",Lake Robertmouth,Morocco,1993-12-27
+16,Gregory,Nguyen,melissacervantes@example.org,981.545.5427x527,"2174 Erin Plains Suite 580
+Peckton, NY 20660",East Rickchester,Sao Tome and Principe,2000-05-31
+17,Christine,Flores,aprilrichard@example.com,613-575-8640x5619,"169 Alvarez Court
+South Joestad, KY 04009",North Kelsey,Niue,2003-12-13
+18,Marcus,Johnson,amccarthy@example.org,(770)420-3982x601,"766 Isaac Knoll Apt. 302
+Wrightburgh, VT 15095",Welchtown,Greenland,2011-12-13
+19,Jennifer,Nunez,wadams@example.org,(433)462-7555,"3798 Betty Lock
+West Kimberly, GU 70024",Janeborough,Zambia,1979-08-25
+20,Michael,Durham,christina38@example.com,991.460.4282x44808,"1321 Mark Spring Apt. 854
+East Kelly, TN 56398",North Robert,Belarus,1979-06-21
+21,Jennifer,Nichols,brian67@example.net,001-781-935-9646x86750,"5560 Mckee Haven Apt. 545
+New David, NM 16389",North Gregory,French Polynesia,1990-12-01
+22,Hannah,Jimenez,frederickjohnson@example.org,(987)901-5106x0247,"5208 Travis Roads
+Hillmouth, MP 71736",Turnershire,Liberia,1997-12-19
+23,Rachel,Smith,srivers@example.net,300-918-9364,"24474 Beth Keys Suite 436
+Lopezland, ND 35358",Rebeccatown,United States of America,2002-05-17
+24,Jacqueline,Miles,paul11@example.com,(766)323-3603x26815,"68854 Colton Islands
+Lake Kenneth, OR 61730",Robertton,Myanmar,2004-04-10
+25,Robert,Evans,bryan61@example.com,(709)616-6890x271,"9773 Cole Mission Apt. 045
+Davidtown, CO 19998",Nathanville,Uzbekistan,1980-04-14
+26,Carla,Martin,vturner@example.com,001-652-967-9295x81246,"90546 Patrick Valley Suite 007
+New Jose, SD 14266",Curtisfort,Vietnam,1999-01-04
+27,Jennifer,Smith,pking@example.com,+1-401-675-1860x0911,"8299 Ward Motorway
+Port Davidborough, IA 35615",Brockport,British Indian Ocean Territory (Chagos Archipelago),1985-01-30
+28,Steven,Cox,don86@example.org,001-940-679-3239x74780,"9201 Pierce Springs Suite 453
+Jeanton, MD 17440",North Blakeshire,Bhutan,2016-07-25
+29,Cassandra,Collins,johnnyramirez@example.org,001-669-625-1639x8779,"5675 Lawrence Inlet
+Muellerchester, MO 39049",Port Jamesport,Rwanda,1982-06-28
+30,Joann,Mitchell,ashley46@example.com,001-558-701-2476,"6228 Kimberly Turnpike Suite 240
+Randallmouth, RI 16129",New Lori,Nepal,2013-05-13
+31,Amy,Gill,cpearson@example.org,+1-562-309-1113x516,"4205 Ashley Burg Apt. 416
+New Tristanmouth, RI 78918",Lake Jacobfurt,Philippines,1970-06-26
+32,Joshua,Kelly,christopher62@example.net,481.817.3380,"225 Kimberly Hills
+Nancystad, ME 95354",East Williambury,Bhutan,1974-06-25
+33,Gabriel,Barnes,jerryturner@example.net,(609)768-6614x3811,"24753 Alyssa Parks Apt. 666
+Glenport, IL 20418",North Jennifer,Namibia,2022-10-04
+34,Richard,Newman,jill33@example.com,954.330.8888,"1797 Arellano Junctions
+Port Abigailmouth, SC 94019",Haastown,Timor-Leste,2004-03-25
+35,Catherine,Smith,amy28@example.com,001-903-615-1564x89760,"USNV Shaw
+FPO AE 80559",New Ronaldborough,Somalia,2003-03-01
+36,Shelby,Ball,misty81@example.com,4049816298,"21547 Lance Curve Apt. 576
+Brownfort, WA 48851",West Tammyburgh,Andorra,1989-02-12
+37,Steven,Nelson,cstein@example.com,6989742437,"1628 Randall Expressway
+Hardington, IA 15500",Stevenborough,Somalia,1984-05-07
+38,Rebekah,Watts,alexanderjon@example.net,4573913220,"076 Rowland Ranch
+Lake Gary, CA 44197",New Jennifermouth,Philippines,2015-03-26
+39,Misty,Roberts,gatesdennis@example.net,001-479-277-1397x08670,"Unit 3637 Box 5885
+DPO AA 91325",Timothychester,Marshall Islands,2013-11-29
+40,William,Bell,nancy03@example.org,405-642-7708,"33653 Ruben Ferry Apt. 045
+East James, TN 41147",Justinstad,Cyprus,1983-08-04
+41,Jeffrey,Oneill,jonathanmorrison@example.net,299-416-2753x404,"9064 Tucker Views
+South Davidland, FL 97087",Mariahville,Italy,2013-06-17
+42,Heather,Martinez,inguyen@example.net,2668801364,"12737 Crawford River
+North Robertville, MO 29388",Coxshire,Maldives,2007-01-07
+43,Micheal,Webb,burtonmegan@example.org,2266388573,"8180 Smith Landing Apt. 509
+East Michelleview, RI 57886",East Roy,Austria,1994-05-23
+44,Valerie,Munoz,jonesmichael@example.org,7302828651,"448 Rojas Plains Suite 555
+Baileychester, MO 50527",Lake Michael,Russian Federation,1971-03-18
+45,Joshua,Griffin,brandon93@example.net,7057878199,"6028 Jessica Mission
+Robertside, MD 59610",Torresview,Niger,1993-02-27
+46,Michelle,Shaw,dunnsydney@example.org,598-606-3787x3786,"9488 Wells Dam Suite 745
+Anthonyside, GA 84663",New Jeffreytown,Pitcairn Islands,1985-08-28
+47,Keith,Rodriguez,sandra59@example.com,442.588.2613,"4728 Maria Prairie
+Lake Rebeccaborough, NY 99762",Shawside,Grenada,1995-10-07
+48,Sean,Quinn,lhaynes@example.org,+1-601-576-8375x145,"514 Christine Shore Apt. 749
+Lake Christyfort, WI 49949",North Kathrynchester,Belarus,1977-01-22
+49,Thomas,Horn,gloriabaker@example.org,233-643-6619x897,"8087 Pruitt Union
+North Chelseachester, MP 18643",Lambertborough,Macao,2006-07-09
+50,Lori,Zimmerman,kevinmarsh@example.net,5569943259,"754 Parker Village
+Valeriechester, IN 97283",Johnsonland,Azerbaijan,2008-12-30
+51,Michael,Clark,robert78@example.com,354.430.6660x339,"342 Murphy Junctions
+North John, MA 02516",Lake Laurie,Senegal,2022-04-23
+52,Tracy,Anderson,qbrown@example.com,9307204564,"46408 Walton Throughway
+East Tammytown, MO 20845",Jonathanside,Italy,1996-08-27
+53,Patrick,Mcdowell,cabrerageoffrey@example.org,(569)414-7106x5051,"4334 Robin Viaduct Suite 883
+West Austinberg, IN 37332",Ronaldmouth,Algeria,2021-06-14
+54,Michelle,Allen,vgrimes@example.net,755.992.4779x43961,"8254 David Drive Suite 973
+East Theresa, IN 86877",West Lucas,British Virgin Islands,2016-09-27
+55,Kyle,Lopez,jeffreyclark@example.org,(211)218-3682,"629 Lisa Square
+Shawshire, VI 15856",Georgeborough,Bahamas,1998-03-07
+56,Michael,Coleman,robersonamanda@example.org,+1-482-752-5295x7839,"9044 Booker Fork
+Wolfefort, RI 85402",Wilsonfort,Taiwan,1992-05-29
+57,Greg,Martinez,wchang@example.com,446.557.9152,"6474 Turner Burgs Suite 439
+Kristiton, AS 34020",Hansonchester,Brunei Darussalam,2017-02-08
+58,Tracie,Reed,kinglarry@example.org,885.916.2814x73724,"23636 Michael Station Suite 025
+Lopezbury, GU 18344",North Dustinmouth,Uruguay,1979-12-25
+59,Melissa,Stone,jdiaz@example.com,771.230.5559x718,"5175 Mark Club Apt. 738
+Lake Jesseport, MS 40435",Davidchester,Cameroon,2014-04-09
+60,Eileen,Johnson,brookslouis@example.org,+1-819-790-4284x692,"667 Johnny Pass Suite 998
+Rachelton, HI 32086",New Janice,Grenada,1970-02-17
+61,Paige,Patton,markramirez@example.com,001-841-584-3158x450,"444 Ellison Glens Suite 727
+Garrettview, MT 69571",Fosterstad,Botswana,1974-04-26
+62,Michael,Camacho,glasschristopher@example.net,(514)643-8363x513,"284 Michael Skyway
+Lake Matthew, NJ 27974",Hicksshire,Qatar,2002-04-19
+63,Jennifer,Lopez,reginaldjohnson@example.com,+1-286-348-3576x9388,"9835 Patel Freeway
+Port Sherryville, FL 50041",Edwardsville,Lao People's Democratic Republic,1980-08-07
+64,Jeffrey,Smith,wilsoncameron@example.org,8637345190,"29928 Sarah Canyon Apt. 827
+East Nicholasfurt, GU 91573",Tateland,Saint Vincent and the Grenadines,2015-05-09
+65,Michele,Doyle,petersontina@example.org,+1-405-720-2057x51384,"51582 Molly Loop Apt. 369
+New Peterton, MN 52421",Wilsonburgh,Libyan Arab Jamahiriya,2002-06-11
+66,Erica,Woods,melissa82@example.net,722-714-7193,"1289 Samantha Ville
+Valdezstad, WI 09101",Lake Sarafort,Taiwan,2011-05-23
+67,Brittany,Gregory,tinawerner@example.net,+1-548-586-7312x895,"1484 Simmons Lock Apt. 899
+Greenemouth, GA 77262",Whiteborough,Gibraltar,2001-06-07
+68,Melissa,Watson,alison64@example.org,001-385-922-4728x3350,"6514 Allen Street Apt. 377
+Thompsonside, LA 64687",Raymondton,Angola,2018-02-17
+69,Stacie,Boyer,shanelewis@example.org,001-440-990-0934x883,"125 Carlson Pines Suite 328
+Port Robert, IA 98764",Wiseland,Mexico,2020-11-06
+70,Lisa,Esparza,deborahhall@example.org,404-836-2961x196,"3738 Ryan Freeway Apt. 675
+New Charles, AR 25043",Port Katherine,Spain,1980-01-30
+71,Katherine,Giles,antonio69@example.org,556-533-0734x62988,"4710 Wilson Track
+East Andreastad, PR 72754",Christianside,Egypt,1990-01-15
+72,Randy,Williams,joshuamiller@example.com,658-456-3849x394,"630 Bates Mount
+Jenniferview, MS 23043",Simpsonhaven,Kuwait,2006-03-24
+73,Eric,Bowman,mark41@example.net,844-394-7738x1247,"0464 William Center Apt. 419
+Jimmouth, UT 78680",East Williamville,Ghana,1980-01-09
+74,Teresa,Rodriguez,enunez@example.org,627.552.1040,"566 Erika Common
+Lake Stevenstad, WY 95129",Riddleland,Bosnia and Herzegovina,1997-10-01
+75,Amy,Johnson,garciadenise@example.org,800-221-4402x890,"989 Shelton Fords Apt. 971
+East Marissafurt, VI 39400",Walkertown,Azerbaijan,2012-07-05
+76,William,Gregory,carlos35@example.org,291.318.2924x829,"46753 Heather Park
+Danielleshire, MD 09576",Jenniferside,Bolivia,1992-11-07
+77,Tyler,Clark,brooke48@example.net,(304)862-7747x84928,"977 Henry Shore
+Griffintown, SC 88651",Heidiport,Malaysia,2016-12-14
+78,Terri,Perry,wallsandrew@example.net,688.254.2087,"7202 Daniels Roads Suite 899
+Lake Ernesthaven, HI 74672",New Omarshire,Turks and Caicos Islands,2003-10-04
+79,Duane,Trujillo,christie91@example.net,(667)373-9700,"2683 Gilbert Lane
+East Sarahside, WY 01639",Lanebury,Wallis and Futuna,2009-07-10
+80,Michael,Gibson,fletcherrobert@example.com,6388346978,"488 Anthony Lakes
+Ramirezbury, WV 30060",Melanieton,Bangladesh,1993-09-29
+81,Jon,Baker,chris26@example.net,345.294.2668x603,"USNS Mcdonald
+FPO AA 20659",Yuhaven,Palau,2009-08-05
+82,Jaime,Willis,rojastimothy@example.com,349.400.0447x365,"815 Christopher Hill
+Tiffanyport, IA 33940",South Feliciabury,Kuwait,1997-07-29
+83,Kimberly,Carpenter,watsonscott@example.com,+1-879-846-6323x42242,"40261 Mark Drive
+Port Catherinehaven, FM 08030",Joneschester,Lao People's Democratic Republic,1973-08-09
+84,Gary,Waller,sierraallen@example.com,+1-639-918-9247x428,"7094 Jessica Turnpike Apt. 868
+Lopezborough, FL 60291",Hernandezberg,Saint Martin,2005-06-09
+85,Gary,Wheeler,mandyboyd@example.org,405.829.4739x24022,"4486 Lindsey Curve
+East David, NE 10983",North Julia,Honduras,2010-09-24
+86,Isabel,Chang,wilkersonmatthew@example.net,530-941-5079,"659 Kirk Trail
+Lake Christinaside, IA 34743",Port Jillmouth,Egypt,2023-10-23
+87,Michael,Davis,mholmes@example.net,282-237-4474x064,"09677 Sweeney Vista Suite 596
+Justinview, AR 11279",North Brandon,United States Minor Outlying Islands,1993-09-19
+88,Edwin,Sullivan,eric17@example.net,(975)377-4590x5988,"2769 Steve Hollow Apt. 303
+North Michael, AR 27872",Lucastown,Uganda,2005-09-02
+89,Daniel,Hughes,cheyennethompson@example.org,347.986.8300,"34427 Sheppard Squares
+West Douglasberg, NH 19932",Maxwelltown,Nicaragua,2024-07-25
+90,Austin,Greer,riddlejay@example.org,522.499.6685x882,"15925 Benson Highway
+Larryfurt, NJ 18691",Ravenland,Cayman Islands,2012-06-08
+91,Kelsey,Scott,tharper@example.net,(520)201-5881x5914,"38958 Mccoy Hill Suite 551
+West Angelamouth, AL 37130",North Sheilaborough,Nepal,1983-07-01
+92,Kelli,Fernandez,robin28@example.net,(879)852-0313x0751,"3043 Jones Rapid Apt. 196
+Zacharystad, CA 59033",Karenfurt,French Southern Territories,1971-09-01
+93,Jessica,Bryant,johnpeterson@example.com,932-947-2534,"67454 Baldwin Vista
+Carrollmouth, RI 62524",South Aliciaside,Guadeloupe,2003-06-03
+94,Joshua,Martin,avaldez@example.net,+1-498-489-4916x477,"81005 Willis Expressway Apt. 956
+Wattstown, MO 65722",Santosberg,Mauritania,1994-12-06
+95,Anna,Olson,angela80@example.net,642-844-8293x1177,"0118 Foster Walks
+West Erica, AS 50994",South Jennifer,Morocco,1982-03-16
+96,Megan,Ramirez,kjohnson@example.net,293-597-4997,"496 Rosales Gateway Suite 190
+Jillberg, SD 82745",Greenland,Netherlands Antilles,1981-11-29
+97,Monica,Norman,tayloradam@example.net,(974)562-8856,"58344 Jenna Ports
+Lake Raymond, KS 95457",Harperchester,Angola,1980-08-06
+98,James,Smith,oortega@example.com,226.284.8079,"642 Stacy Plaza Suite 671
+Lake Lindsay, DC 93820",Gonzalezfurt,Palestinian Territory,2005-12-07
+99,Theresa,Carpenter,hallcandace@example.org,(532)973-3092,"0622 Charles Dale
+Devontown, MA 70700",North Nicholas,Mali,1982-12-14
+100,Rachel,Reyes,tyler83@example.org,(343)467-8576x8491,"632 Cantu Port
+Johnsonhaven, IL 22085",North Eddieburgh,Fiji,1993-10-04
+
+
+
+================================================
+FILE: csv_files/order_items.csv
+================================================
+order_item_id,order_id,product_id,quantity,price_per_item
+1,24,51,1,95.97
+2,90,17,4,94.0
+3,25,4,2,63.85
+4,67,15,4,31.77
+5,16,92,1,6.54
+6,28,37,1,43.28
+7,48,22,3,34.65
+8,82,73,5,10.47
+9,46,65,4,44.41
+10,85,37,5,67.27
+11,7,53,2,90.97
+12,41,45,1,61.85
+13,11,6,4,9.34
+14,9,71,5,14.54
+15,99,82,1,69.61
+16,4,49,4,51.24
+17,92,11,2,66.09
+18,72,5,3,33.68
+19,83,82,3,64.72
+20,31,99,1,21.87
+21,1,35,4,52.42
+22,74,40,2,16.24
+23,98,64,1,47.88
+24,25,56,1,49.92
+25,90,71,3,28.47
+26,8,1,5,51.38
+27,38,15,5,49.12
+28,60,34,4,8.61
+29,70,81,2,69.78
+30,66,83,5,80.81
+31,69,61,1,79.9
+32,53,94,4,22.56
+33,59,56,5,77.6
+34,47,61,4,98.75
+35,60,37,1,7.27
+36,66,77,5,45.47
+37,72,44,5,60.72
+38,36,72,1,29.79
+39,83,77,4,69.99
+40,85,35,1,48.6
+41,91,96,1,78.23
+42,69,73,5,97.39
+43,24,6,1,22.08
+44,55,60,5,95.84
+45,74,80,4,87.05
+46,89,79,2,29.37
+47,17,74,1,30.96
+48,89,87,3,11.48
+49,46,80,3,26.74
+50,15,69,3,96.99
+51,56,44,4,53.52
+52,45,5,5,64.31
+53,49,67,2,89.15
+54,40,76,3,88.3
+55,11,58,2,28.51
+56,89,59,3,50.1
+57,32,51,4,22.76
+58,54,20,4,28.17
+59,33,11,5,42.24
+60,47,50,3,59.35
+61,14,87,4,26.31
+62,58,40,2,94.23
+63,72,18,3,21.5
+64,75,63,5,79.31
+65,25,75,3,23.74
+66,4,67,5,79.23
+67,53,21,2,35.5
+68,1,11,5,16.26
+69,90,82,1,26.82
+70,7,67,1,10.56
+71,68,36,4,17.13
+72,85,27,3,75.82
+73,67,72,2,24.09
+74,14,5,3,82.5
+75,64,25,4,25.94
+76,84,57,2,16.6
+77,16,63,5,83.33
+78,33,84,2,19.26
+79,80,58,3,11.55
+80,17,32,5,21.93
+81,11,51,1,41.01
+82,9,21,5,76.94
+83,74,80,2,23.15
+84,3,65,5,61.35
+85,93,41,2,21.9
+86,63,98,4,10.25
+87,27,98,2,91.96
+88,46,86,2,71.9
+89,1,13,4,91.22
+90,86,96,2,66.34
+91,21,44,5,40.2
+92,78,80,5,55.81
+93,54,47,4,32.87
+94,43,87,3,33.72
+95,88,90,4,41.36
+96,7,22,4,26.9
+97,74,36,2,83.21
+98,97,7,3,45.34
+99,7,55,4,83.29
+100,48,79,5,84.93
+101,50,56,4,6.2
+102,53,55,1,16.37
+103,88,3,5,87.77
+104,10,20,5,82.49
+105,64,16,5,44.97
+106,49,34,4,31.04
+107,72,21,3,49.42
+108,86,72,4,92.34
+109,55,88,3,16.96
+110,15,100,2,27.84
+111,68,94,3,81.22
+112,75,96,2,74.24
+113,89,92,3,18.69
+114,100,48,1,98.74
+115,77,20,5,9.77
+116,8,66,5,23.29
+117,61,3,1,66.41
+118,64,97,2,8.39
+119,44,85,4,68.65
+120,21,56,1,37.35
+121,20,65,1,17.36
+122,49,84,3,99.62
+123,32,68,2,44.74
+124,60,1,1,91.27
+125,11,78,3,95.19
+126,14,60,2,56.08
+127,3,30,3,18.74
+128,77,97,3,56.09
+129,12,20,2,18.79
+130,14,56,1,96.34
+131,43,67,5,22.55
+132,85,62,3,78.85
+133,72,89,2,97.12
+134,84,1,5,75.94
+135,59,41,5,82.45
+136,81,62,3,44.41
+137,6,84,2,50.61
+138,2,37,5,11.24
+139,73,62,5,90.24
+140,81,93,4,63.84
+141,92,6,4,35.4
+142,5,73,3,92.69
+143,70,79,3,99.34
+144,43,37,2,7.76
+145,26,98,4,29.62
+146,2,59,3,80.33
+147,76,82,5,69.13
+148,45,68,2,33.75
+149,49,1,1,9.05
+150,16,42,3,29.46
+151,28,60,4,8.08
+152,23,86,4,20.49
+153,38,80,3,47.05
+154,65,37,2,20.97
+155,2,68,2,24.37
+156,93,78,3,29.53
+157,65,67,3,6.11
+158,39,31,3,42.16
+159,19,50,5,28.74
+160,88,57,4,70.3
+161,89,35,4,55.08
+162,72,19,4,21.1
+163,81,25,1,95.56
+164,84,88,1,64.8
+165,66,15,3,95.71
+166,77,14,2,48.67
+167,14,22,1,8.79
+168,29,8,2,73.02
+169,27,25,1,97.89
+170,23,19,4,11.34
+171,28,13,2,13.54
+172,69,30,3,85.25
+173,32,13,2,35.64
+174,34,87,1,92.3
+175,44,55,4,40.8
+176,50,89,3,96.63
+177,43,88,2,88.19
+178,85,71,2,52.7
+179,32,41,2,39.98
+180,93,12,1,27.63
+181,49,99,1,74.38
+182,51,48,3,11.96
+183,98,87,2,77.97
+184,72,49,5,78.26
+185,86,46,3,96.8
+186,93,21,2,94.37
+187,100,47,1,69.93
+188,60,45,5,72.71
+189,83,25,1,35.59
+190,65,70,2,72.22
+191,89,67,4,20.79
+192,9,29,2,81.64
+193,73,94,3,67.86
+194,19,92,2,7.63
+195,81,16,2,59.18
+196,71,65,1,63.53
+197,46,66,4,5.53
+198,69,88,1,60.15
+199,49,62,3,85.13
+200,56,86,2,48.78
+
+
+
+================================================
+FILE: csv_files/orders.csv
+================================================
+order_id,customer_id,order_status,order_date,total_amount
+1,83,Processing,2024-08-22 21:37:31,225.71
+2,72,Cancelled,2024-07-28 03:35:03,112.53
+3,44,Cancelled,2024-04-13 12:51:23,47.06
+4,22,Shipped,2024-08-31 22:10:45,269.21
+5,12,Shipped,2024-07-24 13:46:38,371.92
+6,40,Cancelled,2024-05-17 17:02:58,106.39
+7,17,Cancelled,2024-01-17 19:58:47,184.65
+8,28,Shipped,2024-02-18 01:56:33,340.51
+9,12,Pending,2024-07-10 13:32:39,318.28
+10,89,Cancelled,2024-04-04 12:59:38,361.07
+11,22,Cancelled,2024-02-12 19:20:02,226.25
+12,60,Processing,2024-04-23 01:35:07,472.61
+13,19,Cancelled,2024-06-13 19:38:14,369.72
+14,66,Pending,2024-08-13 17:23:48,289.03
+15,57,Shipped,2024-05-30 09:22:56,497.4
+16,15,Cancelled,2024-08-08 23:11:59,223.68
+17,40,Delivered,2024-02-13 00:39:05,437.25
+18,66,Delivered,2024-07-03 17:33:50,320.82
+19,54,Shipped,2024-01-14 13:29:33,458.22
+20,2,Pending,2024-06-03 23:00:31,262.8
+21,7,Pending,2024-07-06 23:38:12,403.48
+22,69,Shipped,2024-03-27 16:18:44,37.86
+23,26,Shipped,2024-07-17 09:16:36,88.51
+24,7,Cancelled,2024-05-24 22:51:00,77.48
+25,39,Pending,2024-05-05 18:46:06,214.11
+26,11,Pending,2024-02-08 12:18:55,343.98
+27,14,Cancelled,2024-06-15 02:16:29,342.01
+28,5,Delivered,2024-03-02 12:35:49,57.1
+29,62,Processing,2024-08-29 07:20:34,283.98
+30,19,Shipped,2024-03-24 03:51:48,475.36
+31,12,Shipped,2024-06-29 17:17:00,165.23
+32,67,Delivered,2024-07-01 07:26:40,400.45
+33,44,Cancelled,2024-08-01 12:33:58,252.78
+34,75,Processing,2024-08-10 09:34:03,399.6
+35,35,Pending,2024-04-27 00:08:52,205.82
+36,60,Pending,2024-08-27 12:19:55,205.67
+37,18,Delivered,2024-09-07 14:49:32,120.14
+38,29,Delivered,2024-02-06 12:45:02,266.87
+39,7,Delivered,2024-07-19 13:43:17,70.61
+40,34,Shipped,2024-02-11 06:19:06,313.84
+41,86,Pending,2024-02-13 07:59:10,264.82
+42,68,Pending,2024-02-26 07:24:51,225.5
+43,30,Shipped,2024-03-16 15:24:45,411.42
+44,47,Processing,2024-08-12 16:16:45,370.15
+45,65,Cancelled,2024-07-18 14:20:08,266.81
+46,93,Cancelled,2024-04-25 23:14:09,292.55
+47,84,Delivered,2024-01-30 13:26:38,32.11
+48,24,Pending,2024-08-09 18:36:25,170.14
+49,66,Delivered,2024-07-21 06:13:46,183.42
+50,53,Cancelled,2024-06-12 11:54:13,379.1
+51,14,Cancelled,2024-05-13 16:00:53,64.69
+52,18,Shipped,2024-04-07 22:16:30,460.13
+53,10,Pending,2024-01-09 12:59:58,99.73
+54,1,Cancelled,2024-04-23 13:54:58,268.16
+55,4,Pending,2024-03-20 13:41:10,273.53
+56,58,Processing,2024-09-08 11:41:02,278.57
+57,36,Cancelled,2024-03-13 17:04:08,283.82
+58,69,Shipped,2024-01-29 08:33:05,321.48
+59,98,Shipped,2024-06-25 08:06:10,69.51
+60,54,Processing,2024-08-24 09:29:30,487.66
+61,99,Cancelled,2024-03-23 08:42:16,429.06
+62,29,Pending,2024-01-03 06:05:36,278.66
+63,34,Delivered,2024-04-03 07:53:38,467.06
+64,38,Processing,2024-01-27 10:14:30,169.16
+65,78,Shipped,2024-02-22 02:25:06,116.8
+66,62,Shipped,2024-04-06 09:02:52,203.08
+67,37,Pending,2024-03-03 03:02:14,493.88
+68,38,Pending,2024-01-06 14:33:45,182.17
+69,38,Cancelled,2024-01-10 03:21:51,216.56
+70,36,Cancelled,2024-01-08 14:11:16,163.68
+71,65,Processing,2024-04-05 01:23:59,289.1
+72,65,Processing,2024-08-08 18:57:17,129.16
+73,29,Cancelled,2024-08-04 00:00:22,304.16
+74,97,Delivered,2024-04-14 07:22:09,340.08
+75,3,Processing,2024-04-18 02:04:03,442.94
+76,41,Processing,2024-05-22 04:47:05,350.09
+77,42,Shipped,2024-01-05 02:11:02,320.12
+78,42,Cancelled,2024-08-10 06:50:17,266.4
+79,42,Processing,2024-03-26 06:47:57,492.3
+80,15,Delivered,2024-01-25 20:10:47,206.89
+81,62,Shipped,2024-08-29 16:09:03,180.08
+82,95,Delivered,2024-08-20 22:02:08,243.33
+83,17,Cancelled,2024-05-06 20:08:00,189.9
+84,39,Pending,2024-05-06 01:57:08,177.12
+85,20,Pending,2024-01-14 18:37:28,129.95
+86,23,Cancelled,2024-01-24 08:41:13,165.36
+87,53,Shipped,2024-05-11 00:06:37,399.24
+88,10,Pending,2024-02-14 04:26:49,59.46
+89,80,Cancelled,2024-01-26 04:49:33,129.96
+90,53,Shipped,2024-03-23 11:01:50,402.65
+91,22,Processing,2024-01-30 12:46:14,335.72
+92,34,Pending,2024-05-26 14:51:16,168.52
+93,7,Pending,2024-01-28 18:26:11,180.57
+94,14,Pending,2024-06-25 13:37:03,168.27
+95,44,Pending,2024-08-29 00:18:01,149.41
+96,7,Processing,2024-04-11 22:32:51,193.63
+97,29,Processing,2024-08-08 08:15:26,287.68
+98,91,Cancelled,2024-07-11 14:19:51,368.11
+99,44,Processing,2024-01-03 00:48:14,254.2
+100,60,Pending,2024-03-13 06:09:14,222.41
+
+
+
+================================================
+FILE: csv_files/payments.csv
+================================================
+payment_id,order_id,payment_method,payment_date,payment_status
+1,1,Credit Card,2024-04-06 10:52:07,Failed
+2,2,PayPal,2024-02-17 09:52:57,Failed
+3,3,Bank Transfer,2024-04-23 18:12:38,Pending
+4,4,Credit Card,2024-08-20 16:12:33,Pending
+5,5,Credit Card,2024-03-30 06:18:22,Completed
+6,6,PayPal,2024-06-02 02:11:58,Pending
+7,7,PayPal,2024-02-08 16:03:26,Pending
+8,8,PayPal,2024-06-27 19:01:38,Pending
+9,9,Credit Card,2024-06-21 16:43:20,Pending
+10,10,PayPal,2024-01-23 01:06:11,Failed
+11,11,PayPal,2024-05-02 01:02:21,Completed
+12,12,Credit Card,2024-01-26 02:28:47,Completed
+13,13,Bank Transfer,2024-07-23 10:19:12,Completed
+14,14,Credit Card,2024-08-30 11:50:23,Failed
+15,15,Bank Transfer,2024-07-15 20:11:00,Failed
+16,16,Bank Transfer,2024-04-20 03:08:29,Completed
+17,17,Credit Card,2024-01-10 18:07:16,Completed
+18,18,Bank Transfer,2024-03-14 06:17:32,Failed
+19,19,PayPal,2024-02-24 17:51:56,Completed
+20,20,Bank Transfer,2024-03-01 02:49:34,Pending
+21,21,PayPal,2024-07-27 11:26:49,Completed
+22,22,Bank Transfer,2024-08-07 21:04:55,Pending
+23,23,Credit Card,2024-07-22 20:02:46,Pending
+24,24,Credit Card,2024-06-19 17:58:12,Completed
+25,25,Bank Transfer,2024-06-11 13:42:10,Completed
+26,26,PayPal,2024-01-11 21:41:11,Completed
+27,27,Credit Card,2024-08-11 19:22:48,Failed
+28,28,Bank Transfer,2024-08-25 13:53:28,Completed
+29,29,Bank Transfer,2024-08-15 15:41:15,Failed
+30,30,Bank Transfer,2024-04-27 10:10:06,Failed
+31,31,Credit Card,2024-04-26 16:29:20,Failed
+32,32,Credit Card,2024-04-25 20:20:46,Failed
+33,33,PayPal,2024-03-08 09:48:49,Completed
+34,34,PayPal,2024-09-07 04:23:00,Pending
+35,35,Bank Transfer,2024-09-08 13:13:20,Completed
+36,36,PayPal,2024-07-13 09:23:02,Completed
+37,37,Credit Card,2024-05-15 00:30:56,Pending
+38,38,PayPal,2024-08-26 19:37:38,Completed
+39,39,Credit Card,2024-07-15 19:01:34,Failed
+40,40,Bank Transfer,2024-07-06 16:00:29,Failed
+41,41,Bank Transfer,2024-02-14 17:59:22,Failed
+42,42,Bank Transfer,2024-04-03 00:53:09,Completed
+43,43,PayPal,2024-07-15 22:31:39,Failed
+44,44,Bank Transfer,2024-08-17 01:09:53,Pending
+45,45,Credit Card,2024-01-22 07:59:14,Failed
+46,46,PayPal,2024-03-14 19:17:21,Failed
+47,47,PayPal,2024-02-14 01:38:19,Pending
+48,48,Credit Card,2024-01-29 00:52:50,Failed
+49,49,PayPal,2024-03-07 02:29:49,Completed
+50,50,Bank Transfer,2024-06-11 12:19:20,Completed
+51,51,Credit Card,2024-04-20 02:06:50,Failed
+52,52,PayPal,2024-08-18 22:53:30,Pending
+53,53,Bank Transfer,2024-03-05 14:46:33,Pending
+54,54,PayPal,2024-04-23 11:51:23,Pending
+55,55,PayPal,2024-03-07 10:14:00,Completed
+56,56,Credit Card,2024-04-07 00:18:43,Pending
+57,57,Credit Card,2024-07-16 15:14:35,Completed
+58,58,Credit Card,2024-05-28 09:23:51,Completed
+59,59,PayPal,2024-03-08 21:34:56,Failed
+60,60,PayPal,2024-07-07 22:40:50,Completed
+61,61,Bank Transfer,2024-04-25 15:58:46,Failed
+62,62,Credit Card,2024-01-30 21:32:10,Completed
+63,63,PayPal,2024-08-25 22:12:27,Failed
+64,64,PayPal,2024-05-23 02:26:21,Completed
+65,65,PayPal,2024-07-08 11:37:36,Failed
+66,66,PayPal,2024-07-31 00:15:52,Pending
+67,67,PayPal,2024-02-03 22:31:52,Pending
+68,68,Credit Card,2024-03-03 07:28:39,Pending
+69,69,Credit Card,2024-06-16 08:22:28,Pending
+70,70,PayPal,2024-08-09 21:40:41,Failed
+71,71,Bank Transfer,2024-05-06 08:23:47,Completed
+72,72,Credit Card,2024-02-26 13:22:47,Pending
+73,73,Bank Transfer,2024-04-26 04:48:50,Failed
+74,74,PayPal,2024-06-06 07:55:32,Completed
+75,75,Bank Transfer,2024-08-09 01:47:25,Failed
+76,76,Bank Transfer,2024-03-24 02:14:01,Completed
+77,77,PayPal,2024-07-20 10:20:03,Pending
+78,78,PayPal,2024-05-02 10:20:52,Completed
+79,79,PayPal,2024-07-12 00:32:07,Completed
+80,80,Credit Card,2024-01-27 05:40:18,Pending
+81,81,PayPal,2024-08-30 09:31:55,Failed
+82,82,PayPal,2024-07-25 11:03:32,Completed
+83,83,Bank Transfer,2024-03-24 14:14:53,Failed
+84,84,Credit Card,2024-03-19 11:32:05,Failed
+85,85,Credit Card,2024-02-16 12:20:03,Pending
+86,86,Credit Card,2024-07-14 00:10:44,Failed
+87,87,PayPal,2024-03-31 12:13:33,Completed
+88,88,PayPal,2024-05-28 13:47:59,Pending
+89,89,Credit Card,2024-08-11 17:56:11,Completed
+90,90,Bank Transfer,2024-02-06 14:50:47,Pending
+91,91,PayPal,2024-03-26 13:48:40,Pending
+92,92,PayPal,2024-07-01 01:01:16,Failed
+93,93,PayPal,2024-07-06 10:40:44,Completed
+94,94,Bank Transfer,2024-05-06 17:08:04,Pending
+95,95,Credit Card,2024-08-10 01:04:54,Failed
+96,96,Credit Card,2024-09-06 07:59:29,Failed
+97,97,PayPal,2024-04-07 14:00:35,Completed
+98,98,Credit Card,2024-02-17 18:41:13,Failed
+99,99,Credit Card,2024-05-24 20:15:24,Failed
+100,100,Bank Transfer,2024-08-01 01:29:49,Pending
+
+
+
+================================================
+FILE: csv_files/products.csv
+================================================
+product_id,product_name,category,stock_quantity,price,supplier_id
+1,Product 1,Category 6,51,65.61,10
+2,Product 2,Category 6,70,88.9,3
+3,Product 3,Category 3,53,74.08,9
+4,Product 4,Category 10,16,54.49,3
+5,Product 5,Category 7,92,16.66,9
+6,Product 6,Category 7,81,18.12,6
+7,Product 7,Category 5,99,17.77,8
+8,Product 8,Category 6,68,58.54,7
+9,Product 9,Category 2,17,24.32,6
+10,Product 10,Category 8,96,85.89,3
+11,Product 11,Category 1,60,86.66,8
+12,Product 12,Category 5,70,76.33,3
+13,Product 13,Category 6,75,84.48,4
+14,Product 14,Category 2,23,59.76,6
+15,Product 15,Category 10,21,35.57,1
+16,Product 16,Category 3,91,82.42,4
+17,Product 17,Category 8,50,90.95,7
+18,Product 18,Category 10,55,74.76,6
+19,Product 19,Category 2,93,20.25,1
+20,Product 20,Category 6,49,87.83,8
+21,Product 21,Category 8,32,21.01,6
+22,Product 22,Category 4,11,32.13,7
+23,Product 23,Category 6,84,68.12,8
+24,Product 24,Category 7,78,66.18,1
+25,Product 25,Category 10,31,90.58,2
+26,Product 26,Category 10,48,69.22,8
+27,Product 27,Category 2,13,44.58,3
+28,Product 28,Category 10,91,36.81,2
+29,Product 29,Category 2,39,17.35,5
+30,Product 30,Category 8,14,39.16,1
+31,Product 31,Category 3,53,31.9,3
+32,Product 32,Category 4,20,96.54,2
+33,Product 33,Category 3,68,6.69,7
+34,Product 34,Category 8,34,86.44,7
+35,Product 35,Category 6,43,30.26,6
+36,Product 36,Category 5,63,20.32,3
+37,Product 37,Category 8,57,67.69,4
+38,Product 38,Category 7,12,43.04,2
+39,Product 39,Category 9,27,46.57,8
+40,Product 40,Category 2,58,8.96,2
+41,Product 41,Category 5,60,59.76,8
+42,Product 42,Category 1,83,75.17,9
+43,Product 43,Category 1,12,76.76,5
+44,Product 44,Category 7,38,72.26,10
+45,Product 45,Category 9,22,14.15,3
+46,Product 46,Category 5,52,66.47,6
+47,Product 47,Category 3,61,95.63,8
+48,Product 48,Category 5,20,73.57,1
+49,Product 49,Category 9,54,21.81,6
+50,Product 50,Category 5,77,94.56,5
+51,Product 51,Category 8,62,8.23,10
+52,Product 52,Category 9,73,40.67,1
+53,Product 53,Category 4,44,64.35,8
+54,Product 54,Category 9,57,78.0,8
+55,Product 55,Category 8,98,81.16,9
+56,Product 56,Category 5,52,25.53,4
+57,Product 57,Category 10,99,6.75,3
+58,Product 58,Category 6,28,96.45,7
+59,Product 59,Category 8,61,66.02,8
+60,Product 60,Category 10,57,99.13,2
+61,Product 61,Category 9,17,19.43,10
+62,Product 62,Category 3,36,31.91,1
+63,Product 63,Category 1,18,9.37,6
+64,Product 64,Category 1,32,51.71,5
+65,Product 65,Category 8,60,82.91,7
+66,Product 66,Category 7,59,18.1,7
+67,Product 67,Category 3,89,96.94,9
+68,Product 68,Category 7,54,92.41,6
+69,Product 69,Category 5,39,52.86,4
+70,Product 70,Category 2,70,31.25,7
+71,Product 71,Category 7,37,19.84,1
+72,Product 72,Category 8,43,67.38,2
+73,Product 73,Category 9,17,90.49,10
+74,Product 74,Category 6,46,86.01,4
+75,Product 75,Category 5,38,78.64,8
+76,Product 76,Category 7,93,94.39,8
+77,Product 77,Category 7,57,24.82,4
+78,Product 78,Category 5,80,71.55,8
+79,Product 79,Category 4,79,96.23,8
+80,Product 80,Category 1,30,81.34,3
+81,Product 81,Category 10,54,60.36,1
+82,Product 82,Category 4,60,71.88,6
+83,Product 83,Category 2,16,77.69,9
+84,Product 84,Category 5,63,90.46,10
+85,Product 85,Category 6,96,78.38,2
+86,Product 86,Category 4,36,61.8,10
+87,Product 87,Category 3,23,79.47,10
+88,Product 88,Category 10,27,9.46,1
+89,Product 89,Category 2,45,11.73,7
+90,Product 90,Category 6,70,71.32,9
+91,Product 91,Category 6,54,11.18,4
+92,Product 92,Category 8,43,74.79,2
+93,Product 93,Category 9,10,75.79,5
+94,Product 94,Category 10,95,76.62,2
+95,Product 95,Category 3,45,74.17,2
+96,Product 96,Category 5,23,96.33,7
+97,Product 97,Category 3,62,38.19,7
+98,Product 98,Category 6,25,6.74,10
+99,Product 99,Category 6,64,94.02,5
+100,Product 100,Category 5,47,84.64,7
+
+
+
+================================================
+FILE: csv_files/reviews.csv
+================================================
+review_id,customer_id,product_id,rating,review_text,review_date
+1,38,92,1,Suggest career few nothing.,2024-05-17 12:52:15
+2,33,64,2,Work black no weight threat course.,2024-06-16 02:26:00
+3,41,99,2,Light government make kind.,2024-01-02 12:10:38
+4,4,8,5,Administration pressure all southern travel certainly.,2024-04-10 07:55:17
+5,40,59,2,Interest politics practice prove do to wrong.,2024-03-21 08:30:23
+6,25,33,5,Me high Republican.,2024-05-20 22:37:44
+7,90,36,3,Exist consider police ever wife.,2024-07-01 11:36:39
+8,76,60,1,Suddenly act attack real expert within.,2024-07-03 01:40:06
+9,29,28,5,Authority Congress sometimes production.,2024-06-01 01:36:07
+10,8,33,2,Outside his clearly us.,2024-08-15 19:39:40
+11,88,54,4,Despite alone wife place everyone.,2024-03-07 03:51:24
+12,80,49,4,Everything long indeed ability.,2024-01-16 23:52:19
+13,89,26,5,Education work recent from.,2024-02-02 23:06:13
+14,44,44,1,Church teacher remember.,2024-05-22 12:40:06
+15,54,48,1,Future election behavior beautiful past result herself according.,2024-01-27 14:44:32
+16,26,27,1,Anything yeah present ten.,2024-08-18 05:33:31
+17,82,49,1,Exist manage note large who special.,2024-06-28 08:44:00
+18,78,41,3,Why how able.,2024-02-28 01:58:02
+19,77,13,3,Table prove officer year yet no situation.,2024-02-28 15:06:51
+20,85,31,1,Reason statement break.,2024-07-11 18:25:43
+21,19,99,2,Level building environmental affect.,2024-07-19 02:57:30
+22,46,49,5,Type defense difficult seat any.,2024-05-01 16:08:58
+23,66,99,5,Magazine stage build thing story manager cultural.,2024-05-26 11:39:19
+24,9,55,3,School consumer fill story state.,2024-07-21 10:10:59
+25,5,64,1,Election news force effect.,2024-05-31 21:16:23
+26,67,29,1,Recognize official professor this.,2024-06-03 22:05:31
+27,92,35,4,Own skin century number catch over.,2024-03-25 21:37:55
+28,98,40,5,General blue that such month become decision hair.,2024-07-15 20:04:23
+29,25,51,2,Tree task weight shoulder explain gas tell animal.,2024-06-24 02:39:56
+30,67,45,3,Tax never street discussion.,2024-04-22 18:24:58
+31,67,82,5,Town along someone.,2024-07-06 05:50:50
+32,40,73,4,Enough miss professor kind foot.,2024-06-02 19:16:48
+33,58,3,2,Movie like high stop remain in hair quality.,2024-08-27 13:34:25
+34,5,25,3,Service computer experience pass tend.,2024-07-06 23:10:58
+35,35,35,5,Let police consumer keep form.,2024-03-16 02:17:39
+36,12,4,4,Me short action special history which sit he.,2024-06-01 06:42:47
+37,57,73,1,Class by make job.,2024-03-08 10:06:43
+38,3,37,5,Network it prevent letter nation.,2024-08-05 00:57:45
+39,30,39,4,Heart item avoid score your like.,2024-06-05 04:29:58
+40,14,74,4,Able trouble government role.,2024-08-01 08:56:26
+41,62,95,4,Hope else natural guy.,2024-01-09 06:10:24
+42,68,28,1,Discover officer before the degree tax.,2024-06-23 11:11:36
+43,73,16,4,Cost although material car whole those food.,2024-07-09 19:05:25
+44,94,9,2,Consumer project role why.,2024-01-19 08:46:48
+45,90,41,5,General forget understand work production score.,2024-06-19 07:16:15
+46,17,83,5,Only sea husband fire.,2024-02-26 05:51:26
+47,84,1,4,Particularly back land but between.,2024-05-21 03:01:52
+48,19,70,4,Week behavior happy become partner.,2024-01-19 19:53:13
+49,25,97,4,Too operation alone say just matter feel.,2024-01-27 23:28:13
+50,19,61,1,Federal word too rock concern.,2024-08-05 19:30:51
+51,58,28,2,Degree suggest determine economic.,2024-04-18 14:24:00
+52,34,60,3,Bill increase book.,2024-07-04 18:52:55
+53,68,3,5,Positive resource nor phone raise create sense.,2024-02-06 16:34:05
+54,20,50,5,Off than last article deal.,2024-08-27 21:51:26
+55,19,28,2,Future successful bring half.,2024-06-06 09:47:07
+56,50,15,1,Garden yet Republican moment cultural kind want.,2024-07-07 00:42:09
+57,72,87,5,Magazine long decision.,2024-01-14 16:59:47
+58,47,85,4,Purpose image win particular me always suffer.,2024-06-06 17:05:25
+59,63,12,3,Memory road of some key nearly.,2024-03-03 20:29:07
+60,64,49,5,Front something site experience main rest exactly.,2024-02-20 05:34:22
+61,40,98,2,Begin base experience rich build heavy price.,2024-03-19 04:49:16
+62,70,16,5,Behavior tree realize chair assume choose eat.,2024-06-24 16:22:25
+63,99,79,5,Smile street style couple.,2024-06-26 05:18:33
+64,67,62,4,Character wonder sport station.,2024-02-08 09:32:19
+65,2,96,1,Apply friend type study argue stuff itself force.,2024-05-02 05:45:08
+66,91,8,5,Food unit without best organization instead standard easy.,2024-07-19 03:58:15
+67,30,42,4,Against appear southern.,2024-04-06 11:56:51
+68,93,54,5,From build suddenly tree skin.,2024-08-04 14:23:32
+69,60,47,5,Out car although trip brother control.,2024-03-25 19:48:20
+70,31,100,3,Debate wonder guy between.,2024-07-21 05:31:09
+71,3,89,5,Important eat explain film effort.,2024-02-22 02:19:04
+72,61,31,3,Economy ball system add nature.,2024-03-21 16:33:55
+73,1,46,4,Station together suffer every.,2024-01-17 16:53:22
+74,74,58,4,Wait sign community reality new light.,2024-02-21 23:37:37
+75,69,1,1,Key especially increase price once whole.,2024-02-27 16:44:31
+76,83,18,3,Vote media school and production almost.,2024-03-29 07:55:37
+77,97,32,4,Available home huge.,2024-06-24 23:27:22
+78,85,58,1,Event American week house threat order prepare result.,2024-03-26 12:38:08
+79,38,68,3,Spend report whatever change dark.,2024-07-13 01:23:20
+80,96,9,4,Participant such property myself.,2024-06-14 06:45:37
+81,80,40,4,So rich receive north figure.,2024-08-28 07:10:48
+82,4,1,1,Change do admit clear allow detail ready.,2024-07-27 15:06:47
+83,74,96,2,Support issue spring can.,2024-03-19 21:41:04
+84,12,43,5,Wish recent throw our product.,2024-02-12 07:34:25
+85,47,9,5,Same collection down analysis student paper take.,2024-05-26 07:22:17
+86,15,79,1,Knowledge environment tell mean deep move final.,2024-06-01 17:22:47
+87,74,36,2,Several family accept draw mind catch.,2024-06-09 08:34:29
+88,29,35,3,Hair chair role along well dog it.,2024-03-12 10:35:33
+89,43,51,1,Knowledge world dinner.,2024-03-03 23:49:06
+90,49,27,1,Area during single time themselves must.,2024-06-03 04:27:35
+91,58,5,3,Human catch kitchen.,2024-04-18 21:58:00
+92,3,13,4,Skill history task south religious.,2024-04-15 03:47:51
+93,21,93,4,Increase teacher recent along significant explain.,2024-02-21 04:17:57
+94,29,45,5,Including beat about company.,2024-08-30 14:07:29
+95,63,68,2,Kitchen social all tax fly wish.,2024-09-02 21:18:13
+96,10,18,3,Year finish take throw dinner on.,2024-06-06 10:50:05
+97,59,88,4,Month impact account ever early before.,2024-02-17 22:04:49
+98,84,70,3,Nice over nothing cultural sort more product none.,2024-03-11 21:39:15
+99,1,6,1,Role news mind case boy month size.,2024-07-29 11:31:43
+100,17,58,1,Property member land finish rest event significant street.,2024-04-03 12:41:44
+
+
+
+================================================
+FILE: csv_files/shopping_carts.csv
+================================================
+cart_id,customer_id,created_at,updated_at
+1,55,2024-05-23 15:22:16,2024-05-04 22:57:29
+2,90,2024-01-04 13:11:13,2024-03-22 01:11:05
+3,56,2024-09-04 00:15:49,2024-02-23 08:29:32
+4,91,2024-03-25 00:05:02,2024-08-24 00:04:23
+5,20,2024-05-19 07:47:23,2024-02-11 01:32:39
+6,90,2024-02-24 18:14:10,2024-02-09 23:08:18
+7,91,2024-02-08 14:07:57,2024-07-06 20:47:38
+8,96,2024-02-22 12:01:35,2024-06-03 11:45:03
+9,23,2024-04-23 05:14:35,2024-03-19 22:49:48
+10,78,2024-01-09 07:07:12,2024-03-26 23:21:50
+11,26,2024-08-31 21:49:37,2024-03-11 15:25:05
+12,4,2024-07-17 13:59:27,2024-08-11 09:26:08
+13,22,2024-08-02 20:40:21,2024-08-10 16:53:05
+14,62,2024-07-14 12:09:27,2024-03-21 09:43:57
+15,36,2024-05-02 17:54:47,2024-02-22 20:29:37
+16,58,2024-01-10 23:43:01,2024-01-08 08:32:46
+17,70,2024-05-26 19:39:59,2024-05-26 08:54:41
+18,6,2024-03-29 21:20:30,2024-01-24 05:20:42
+19,67,2024-08-17 11:16:46,2024-07-01 17:56:02
+20,50,2024-06-18 15:44:54,2024-01-28 22:08:42
+21,46,2024-02-09 23:44:18,2024-06-15 06:47:17
+22,55,2024-06-07 01:37:47,2024-07-20 14:30:13
+23,24,2024-05-22 05:57:33,2024-04-19 19:18:33
+24,41,2024-06-30 03:46:26,2024-07-29 12:56:21
+25,19,2024-05-07 11:27:26,2024-06-25 01:18:38
+26,25,2024-06-20 09:23:05,2024-08-25 00:54:33
+27,66,2024-05-02 20:58:12,2024-08-02 21:11:35
+28,48,2024-01-12 17:46:07,2024-06-06 15:16:06
+29,11,2024-08-31 22:29:17,2024-04-02 19:36:39
+30,97,2024-07-10 06:18:28,2024-07-05 14:18:45
+31,96,2024-02-10 15:26:30,2024-08-22 11:11:51
+32,36,2024-01-08 17:15:55,2024-08-26 14:59:32
+33,74,2024-08-07 00:05:44,2024-03-23 20:04:12
+34,91,2024-01-03 11:39:11,2024-07-03 19:29:15
+35,25,2024-08-11 12:52:00,2024-09-02 22:23:31
+36,42,2024-07-01 05:18:37,2024-06-17 20:45:35
+37,49,2024-05-07 01:56:07,2024-04-27 01:53:54
+38,26,2024-05-17 18:20:07,2024-07-26 20:03:21
+39,16,2024-01-02 21:19:53,2024-08-03 14:39:24
+40,22,2024-03-26 03:04:27,2024-05-16 10:20:46
+41,75,2024-04-23 09:12:47,2024-03-22 01:53:51
+42,71,2024-02-25 07:17:45,2024-06-07 17:06:59
+43,99,2024-04-13 18:19:20,2024-01-05 16:37:30
+44,77,2024-05-30 10:41:25,2024-05-14 19:04:42
+45,42,2024-08-28 15:02:08,2024-05-20 20:20:24
+46,24,2024-06-17 00:33:58,2024-06-11 20:17:26
+47,25,2024-05-21 21:59:28,2024-04-24 13:45:55
+48,21,2024-08-12 00:56:55,2024-02-15 16:28:05
+49,77,2024-01-06 16:19:20,2024-07-09 09:58:55
+50,70,2024-06-04 05:17:55,2024-01-12 22:20:30
+
+
+
+================================================
+FILE: csv_files/suppliers.csv
+================================================
+supplier_id,supplier_name,contact_name,contact_phone,address,country
+1,"Brown, Perry and Russell",Margaret Gomez,001-364-752-9379x0366,"251 Reyes Parks
+Port Rickychester, SC 51182",British Virgin Islands
+2,Brown PLC,Jessica Miller,631.768.3189x067,"96519 April Tunnel
+Jenniferview, WY 74399",Guinea-Bissau
+3,James and Sons,Jenna Walker,001-737-482-8708x6511,"5220 Julia Crest Suite 837
+West Rebecca, CT 07324",Sierra Leone
+4,"Dennis, Snyder and Weber",Tina Sosa,650.267.1095,"5797 Jones Mission Suite 402
+Hernandezberg, AK 37666",Samoa
+5,"Fowler, Johnson and Sanders",Vickie Stevens,(291)453-1989x809,"USCGC Cunningham
+FPO AP 57657",United States Minor Outlying Islands
+6,Crawford-Warner,April Sellers,(844)438-5859,"Unit 1776 Box 5755
+DPO AA 31631",Colombia
+7,Pruitt-Jones,Juan Thompson,001-689-874-8801x1227,"2521 Kevin Village
+Marshallland, AS 71645",Macao
+8,Warren Inc,Courtney Moran,+1-303-570-7220x6037,"6530 Evans Island Apt. 007
+East Deniseberg, SC 42116",Kuwait
+9,"Johnson, Thomas and Warner",Michelle Klein,(796)417-9935,"6874 Carrie Fall
+Paceport, MN 45706",Bhutan
+10,Mcdaniel-Garcia,Daniel Keith,527.299.7158x485,"24280 Amanda Landing Suite 523
+Chadport, AS 40646",Ethiopia
+
+
+
+================================================
+FILE: tests/__init__.py
+================================================
+# tests/__init__.py
+
+
+================================================
+FILE: tests/test_api.py
+================================================
+# tests/test_api.py
+
+import matplotlib
+matplotlib.use('Agg')  # Use a non-interactive backend
+
+import unittest
+import tempfile
+import shutil
+from unittest.mock import patch, MagicMock
+from app import create_app
+from app.config import Config
+from app.services.memory_service import MemoryService
+
+class TestConfig(Config):
+    TESTING = True
+    SQLALCHEMY_DATABASE_URI = 'sqlite:///:memory:'
+    SECRET_KEY = 'test-secret-key'
+    SESSION_TYPE = 'filesystem'
+    SESSION_FILE_DIR = tempfile.mkdtemp()
+    CHROMA_PERSIST_DIRECTORY = tempfile.mkdtemp()
+    USE_CHROMADB = True
+    USE_MILVUS = False
+    USE_OLLAMA = True
+    USE_OPENAI = False
+
+class TestAPI(unittest.TestCase):
+    @patch('app.services.memory_service.Chroma')
+    @patch('app.services.memory_service.OllamaEmbeddings')
+    @patch('app.services.memory_service.OpenAIEmbeddings')
+    @patch('app.services.session_service.SessionService')
+    def setUp(self, mock_session_service, mock_openai, mock_ollama, mock_chroma):
+        # Mock ChromaDB
+        self.mock_vector_store = MagicMock()
+        mock_chroma.return_value = self.mock_vector_store
+
+        # Mock embeddings
+        mock_ollama.return_value = MagicMock()
+        mock_openai.return_value = MagicMock()
+
+        # Mock SessionService
+        self.mock_session_service = mock_session_service
+        self.mock_session_service.get_or_create_session.return_value = 'test-session-id'
+        self.mock_session_service.create_run.return_value = 'test-run-id'
+        self.mock_session_service.get_recent_history.return_value = []
+
+        # Create app with test config
+        self.app = create_app(TestConfig)
+        self.app_context = self.app.app_context()
+        self.app_context.push()
+        self.client = self.app.test_client()
+
+        # Initialize the database
+        from app.models import db
+        db.create_all()
+
+    def tearDown(self):
+        # Clean up the database
+        from app.models import db
+        db.session.remove()
+        db.drop_all()
+        self.app_context.pop()
+
+        # Clean up the temporary directories
+        shutil.rmtree(TestConfig.SESSION_FILE_DIR, ignore_errors=True)
+        shutil.rmtree(TestConfig.CHROMA_PERSIST_DIRECTORY, ignore_errors=True)
+
+    @patch('app.routes.create_analysis_graph')
+    def test_analyze_query_endpoint(self, mock_create_analysis_graph):
+        mock_graph = MagicMock()
+        mock_graph.invoke.return_value = {
+            "user_query": "Test query",
+            "summary": "Test summary"
+        }
+        mock_create_analysis_graph.return_value = mock_graph
+
+        response = self.client.post('/analyze', json={"query": "What are the top 5 customers by total order amount?"})
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertIn('user_query', data)
+        self.assertIn('summary', data)
+
+    def test_analyze_query_no_input(self):
+        response = self.client.post('/analyze', json={})
+        self.assertEqual(response.status_code, 400)
+        data = response.get_json()
+        self.assertIn('error', data)
+
+if __name__ == '__main__':
+    unittest.main()
+
+

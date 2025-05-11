@@ -1,0 +1,1855 @@
+Directory structure:
+└── jwa91-langgraph-expense-tracker/
+    ├── README.MD
+    ├── config.yaml
+    ├── env.example
+    ├── LICENCE.txt
+    ├── requirements.txt
+    ├── data/
+    ├── documents/
+    │   └── openapi.json
+    └── src/
+        ├── api/
+        │   ├── __init__.py
+        │   ├── category_routes.py
+        │   ├── expenses_routes.py
+        │   ├── payment_methods_routes.py
+        │   └── run_api.py
+        ├── chain/
+        │   ├── __init__.py
+        │   ├── graphstate.py
+        │   ├── helpers/
+        │   │   ├── __init__.py
+        │   │   └── get_payment_methods_and_categories.py
+        │   └── nodes/
+        │       ├── __init__.py
+        │       ├── categorizer.py
+        │       ├── correct.py
+        │       ├── db_entry.py
+        │       ├── humancheck.py
+        │       ├── imageencoder.py
+        │       └── jsonparser.py
+        └── database/
+            ├── __init__.py
+            ├── create_categories_and_payment_methods.py
+            ├── create_tables.py
+            └── db_connection.py
+
+================================================
+FILE: README.MD
+================================================
+# LangGraph Expense tracker
+
+## In short
+
+Small project exploring the possibilitys of LangGraph.
+It lets you sent pictures of invoices, it structures and categorize the expenses and puts them in a database. 
+
+### Visual overview of the project
+
+![Visual overview of the project](documents/langgraph.png)
+To zoom visit the whiteboard [here](https://link.excalidraw.com/l/5NC0r7Sejhe/39ULXmBwigA). 
+
+### Some invoice extraction in action
+
+![input-output-example](documents/invoice_extraction_in_action.png)
+
+## Project structure
+
+```shell
+.
+├── LICENCE.txt
+├── README.MD
+├── config.yaml
+├── data
+│   └── walmart-bon.jpeg
+├── documents
+│   ├── api_documentation.png
+│   ├── langgraph.png
+│   ├── openapi.json
+│   └── pg_admin_screenshot.png
+├── env.example
+├── requirements.txt
+└── src
+    ├── api
+    │   ├── __init__.py
+    │   ├── category_routes.py
+    │   ├── expenses_routes.py
+    │   ├── payment_methods_routes.py
+    │   └── run_api.py
+    ├── chain
+    │   ├── __init__.py
+    │   ├── graphstate.py
+    │   ├── helpers
+    │   │   ├── __init__.py
+    │   │   └── get_payment_methods_and_categories.py
+    │   └── nodes
+    │       ├── __init__.py
+    │       ├── categorizer.py
+    │       ├── correct.py
+    │       ├── db_entry.py
+    │       ├── humancheck.py
+    │       ├── imageencoder.py
+    │       └── jsonparser.py
+    └── database
+        ├── __init__.py
+        ├── create_categories_and_payment_methods.py
+        ├── create_tables.py
+        └── db_connection.py
+
+9 directories, 30 files
+```
+
+## Step by step
+
+### 1. Create Project
+
+**1.1 Create virtual environment**\
+Using Conda, venv or any other tool of your liking. 
+
+**1.2 activate virtual environment**
+
+**1.3 clone repo**\
+!TO DO!
+
+**1.4 install requirements**\
+!TO DO!
+
+**1.5 create .env file**\
+See example [here](.env.example).
+
+---
+
+### 2. Set up the database
+
+#### 2.1 Prerequisites
+
+**2.1.1 Install postgresql:**
+```shell
+brew install postgresql
+```
+*(other ways to [install Postgresql](https://www.postgresql.org/ "Postgresql Homepage"))*
+
+**2.1.2 Install Docker:**
+```shell
+brew install docker
+```
+*(other ways to [install Docker](https://www.docker.com// "Docker Homepage"))*
+
+#### 2.2 Make a Docker container
+
+**2.2.1 Create:**
+```shell
+docker run -d \
+  --name postgres-expenses \
+  -e POSTGRES_USER=expenses \
+  -e POSTGRES_PASSWORD=money$ \
+  -e POSTGRES_DB=expenses \
+  -p 6025:5432 \
+  postgres:latest
+```
+**2.2.2 Control:**\
+Use the following command to see if the container is running correctly:
+```shell
+docker ps
+```
+it should show a list of running containers.
+
+#### 2.3 Configure database
+
+**2.3.1 Create tables**\
+Add tables for our expense tracking by running the `/src/database/create_tables.py` script *([link](src/database/create_tables.py))*
+
+**2.3.2 Inspect tables**\
+Using a tool link [PGAdmin](pgadmin.org), you can inspect if the tables in the database are all there.
+
+![screenshot of PGAdmin overview of tables](documents/pg_admin_screenshot.png)
+
+### 3. set up API
+
+-Go to the root folder of your project and activate virtual environment
+```shell
+CD path/to/your/projectfolder
+workon expense-tracker
+```
+*i have some shell aliases set up, the [workon] command should probably be something like [conda activate] or [source [env]]*
+
+-activate virtual environment
+```shell
+(expense_tracker)
+~/Developer/expense_tracker
+▶ uvicorn src.api.run_api:app --reload
+INFO:     Will watch for changes in these directories: ['/Users/jw/developer/expense_tracker']
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     Started reloader process [12588] using StatReload
+INFO:     Started server process [12590]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+```
+
+You can visit [http://localhost:8000/docs#/](http://localhost:8000/docs#/) for a page with documentation about the API: 
+
+![screenshot of documents page](documents/api_documentation.png)
+
+## Database
+
+The database consists of three main tables: `categories`, `payment_methods`, and `expenses`.
+
+### Table: categories
+This table contains a list of categories for expenses. Each category has a unique ID and a name.
+
+- **Columns**:
+  - `category_id` (SERIAL, Primary Key): The unique ID for the category.
+  - `category_name` (VARCHAR(100), Unique): The name of the category.
+
+### Table: payment_methods
+This table contains various payment methods that can be used for expenses.
+
+- **Columns**:
+  - `payment_method_id` (SERIAL, Primary Key): The unique ID for the payment method.
+  - `payment_method_name` (VARCHAR(50), Unique): The name of the payment method.
+
+### Table: expenses
+This is the main table for tracking expenses. It contains information such as the date, the category (with a reference to the `categories` table), the payment method (with a reference to the `payment_methods` table), the amount, VAT, and other details.
+
+- **Columns**:
+  - `transaction_id` (SERIAL, Primary Key): The unique ID for the transaction.
+  - `date` (DATE): The date of the expense.
+  - `category_id` (INTEGER, Foreign Key): Reference to the `categories` table.
+  - `description` (TEXT): A short description of the expense.
+  - `amount` (DECIMAL(10, 2)): The amount of the expense.
+  - `vat` (DECIMAL(10, 2)): The VAT for the expense.
+  - `payment_method_id` (INTEGER, Foreign Key): Reference to the `payment_methods` table.
+  - `business_personal` (VARCHAR(50)): Indicates whether the expense is business or personal.
+  - `declared_on` (DATE): The date when the expense was declared.
+
+## API 
+See API documentation here: [openapi.json](documents/openapi.json)
+
+## LangChain
+the way this chain works is best described by showing the LangSmith Trace: 
+[click here to have a look](https://smith.langchain.com/public/6aed5b64-0a5d-41ce-946b-5e5ad6cbf227/r)
+
+
+
+================================================
+FILE: config.yaml
+================================================
+# Here you can configure your initial list of categories and payment methods
+categories:
+  - Housing
+  - Transportation
+  - Food
+  - Healthcare
+  - Entertainment
+  - Education
+  - Personal Care
+  - Travel
+  - Insurance
+  - Utilities
+  - Technology
+  - Telecommunications
+  - Subscriptions
+  - Office Supplies
+  - Legal Services
+  - Marketing
+  - Accounting and Finance
+  - Human Resources
+  - Consulting
+  - Training and Development
+  - Professional Services
+  - Maintenance and Repairs
+  - Rentals and Leasing
+  - Taxes
+  - Charitable Contributions
+  - Investments
+  - Gifts
+  - Miscellaneous
+  - Business Operations
+  - Research and Development
+
+payment_methods:
+  - Credit Card
+  - Debit Card
+  - Bank Transfer
+  - Cash
+  - Other
+
+
+
+================================================
+FILE: env.example
+================================================
+# Database configuration: 
+PGHOST=localhost
+PGPORT=6025
+PGDATABASE=expenses
+PGVUSER=expenses
+PGPASSWORD=money$
+
+# Langchain:
+LANGCHAIN_TRACING_V2="true"
+LANGCHAIN_ENDPOINT="https://api.smith.langchain.com"
+LANGSMITH_API_KEY="<YOUR API KEY>"
+
+
+MISTRAL_API_KEY="<YOUR API KEY>"
+OPENAI_API_KEY="<YOUR API KEY>"
+ANTHROPIC_API_KEY="<YOUR API KEY>"
+
+
+
+
+================================================
+FILE: LICENCE.txt
+================================================
+MIT License
+
+Copyright (c) Jan Willem Altink
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+
+================================================
+FILE: requirements.txt
+================================================
+aiohttp==3.9.5
+aiosignal==1.3.1
+annotated-types==0.6.0
+anthropic==0.25.6
+anyio==4.3.0
+appnope==0.1.4
+asttokens==2.4.1
+attrs==23.2.0
+certifi==2024.2.2
+charset-normalizer==3.3.2
+click==8.1.7
+comm==0.2.2
+dataclasses-json==0.6.4
+debugpy==1.8.1
+decorator==5.1.1
+defusedxml==0.7.1
+distro==1.9.0
+executing==2.0.1
+fastapi==0.110.2
+filelock==3.13.4
+frozenlist==1.4.1
+fsspec==2024.3.1
+h11==0.14.0
+httpcore==1.0.5
+httpx==0.27.0
+huggingface-hub==0.22.2
+idna==3.7
+ipykernel==6.29.4
+ipython==8.23.0
+jedi==0.19.1
+jsonpatch==1.33
+jsonpointer==2.4
+jupyter_client==8.6.1
+jupyter_core==5.7.2
+langchain==0.1.16
+langchain-anthropic==0.1.11
+langchain-community==0.0.34
+langchain-core==0.1.45
+langchain-openai==0.1.3
+langchain-text-splitters==0.0.1
+langgraph==0.0.38
+langsmith==0.1.49
+marshmallow==3.21.1
+matplotlib-inline==0.1.7
+multidict==6.0.5
+mypy-extensions==1.0.0
+nest-asyncio==1.6.0
+numpy==1.26.4
+openai==1.23.2
+orjson==3.10.1
+packaging==23.2
+parso==0.8.4
+pexpect==4.9.0
+platformdirs==4.2.0
+prompt-toolkit==3.0.43
+psutil==5.9.8
+psycopg2==2.9.9
+ptyprocess==0.7.0
+pure-eval==0.2.2
+pydantic==2.7.0
+pydantic_core==2.18.1
+Pygments==2.17.2
+python-dateutil==2.9.0.post0
+python-dotenv==1.0.1
+PyYAML==6.0.1
+pyzmq==26.0.2
+regex==2024.4.16
+requests==2.31.0
+six==1.16.0
+sniffio==1.3.1
+SQLAlchemy==2.0.29
+stack-data==0.6.3
+starlette==0.37.2
+tenacity==8.2.3
+tiktoken==0.6.0
+tokenizers==0.19.1
+tornado==6.4
+tqdm==4.66.2
+traitlets==5.14.3
+typing-inspect==0.9.0
+typing_extensions==4.11.0
+urllib3==2.2.1
+uvicorn==0.29.0
+wcwidth==0.2.13
+yarl==1.9.4
+
+
+
+
+================================================
+FILE: documents/openapi.json
+================================================
+{
+    "openapi": "3.1.0",
+    "info": {
+      "title": "Expense Management API",
+      "version": "1.0.0"
+    },
+    "paths": {
+      "/categories": {
+        "get": {
+          "summary": "Get Categories",
+          "operationId": "get_categories_categories_get",
+          "responses": {
+            "200": {
+              "description": "Successful Response",
+              "content": {
+                "application/json": {
+                  "schema": {
+  
+                  }
+                }
+              }
+            }
+          }
+        },
+        "post": {
+          "summary": "Create Category",
+          "operationId": "create_category_categories_post",
+          "requestBody": {
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CategoryCreate"
+                }
+              }
+            }
+          },
+          "responses": {
+            "201": {
+              "description": "Successful Response",
+              "content": {
+                "application/json": {
+                  "schema": {
+  
+                  }
+                }
+              }
+            },
+            "422": {
+              "description": "Validation Error",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "delete": {
+          "summary": "Delete Category",
+          "operationId": "delete_category_categories_delete",
+          "parameters": [
+            {
+              "name": "category_id",
+              "in": "query",
+              "required": true,
+              "schema": {
+                "type": "integer",
+                "title": "Category Id"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "description": "Successful Response",
+              "content": {
+                "application/json": {
+                  "schema": {
+  
+                  }
+                }
+              }
+            },
+            "422": {
+              "description": "Validation Error",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/payment_methods": {
+        "get": {
+          "summary": "Get Payment Methods",
+          "operationId": "get_payment_methods_payment_methods_get",
+          "responses": {
+            "200": {
+              "description": "Successful Response",
+              "content": {
+                "application/json": {
+                  "schema": {
+  
+                  }
+                }
+              }
+            }
+          }
+        },
+        "post": {
+          "summary": "Create Payment Method",
+          "operationId": "create_payment_method_payment_methods_post",
+          "requestBody": {
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentMethodCreate"
+                }
+              }
+            }
+          },
+          "responses": {
+            "201": {
+              "description": "Successful Response",
+              "content": {
+                "application/json": {
+                  "schema": {
+  
+                  }
+                }
+              }
+            },
+            "422": {
+              "description": "Validation Error",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "delete": {
+          "summary": "Delete Payment Method",
+          "operationId": "delete_payment_method_payment_methods_delete",
+          "parameters": [
+            {
+              "name": "payment_method_id",
+              "in": "query",
+              "required": true,
+              "schema": {
+                "type": "integer",
+                "title": "Payment Method Id"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "description": "Successful Response",
+              "content": {
+                "application/json": {
+                  "schema": {
+  
+                  }
+                }
+              }
+            },
+            "422": {
+              "description": "Validation Error",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "/expenses": {
+        "get": {
+          "summary": "Get Expenses",
+          "operationId": "get_expenses_expenses_get",
+          "parameters": [
+            {
+              "name": "category_id",
+              "in": "query",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Filter by category ID",
+                "title": "Category Id"
+              },
+              "description": "Filter by category ID"
+            },
+            {
+              "name": "payment_method_id",
+              "in": "query",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Filter by payment method ID",
+                "title": "Payment Method Id"
+              },
+              "description": "Filter by payment method ID"
+            },
+            {
+              "name": "start_date",
+              "in": "query",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Filter by start date",
+                "title": "Start Date"
+              },
+              "description": "Filter by start date"
+            },
+            {
+              "name": "end_date",
+              "in": "query",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Filter by end date",
+                "title": "End Date"
+              },
+              "description": "Filter by end date"
+            }
+          ],
+          "responses": {
+            "200": {
+              "description": "Successful Response",
+              "content": {
+                "application/json": {
+                  "schema": {
+  
+                  }
+                }
+              }
+            },
+            "422": {
+              "description": "Validation Error",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "post": {
+          "summary": "Create Expense",
+          "operationId": "create_expense_expenses_post",
+          "requestBody": {
+            "required": true,
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExpenseCreate"
+                }
+              }
+            }
+          },
+          "responses": {
+            "201": {
+              "description": "Successful Response",
+              "content": {
+                "application/json": {
+                  "schema": {
+  
+                  }
+                }
+              }
+            },
+            "422": {
+              "description": "Validation Error",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "delete": {
+          "summary": "Delete Expense",
+          "operationId": "delete_expense_expenses_delete",
+          "parameters": [
+            {
+              "name": "transaction_id",
+              "in": "query",
+              "required": true,
+              "schema": {
+                "type": "integer",
+                "description": "The ID of the transaction to delete",
+                "title": "Transaction Id"
+              },
+              "description": "The ID of the transaction to delete"
+            }
+          ],
+          "responses": {
+            "200": {
+              "description": "Successful Response",
+              "content": {
+                "application/json": {
+                  "schema": {
+  
+                  }
+                }
+              }
+            },
+            "422": {
+              "description": "Validation Error",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "components": {
+      "schemas": {
+        "CategoryCreate": {
+          "properties": {
+            "category_name": {
+              "type": "string",
+              "title": "Category Name"
+            }
+          },
+          "type": "object",
+          "required": [
+            "category_name"
+          ],
+          "title": "CategoryCreate"
+        },
+        "ExpenseCreate": {
+          "properties": {
+            "date": {
+              "type": "string",
+              "format": "date",
+              "title": "Date"
+            },
+            "category_id": {
+              "type": "integer",
+              "title": "Category Id"
+            },
+            "description": {
+              "type": "string",
+              "title": "Description"
+            },
+            "amount": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "title": "Amount"
+            },
+            "vat": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "string"
+                }
+              ],
+              "title": "Vat"
+            },
+            "payment_method_id": {
+              "type": "integer",
+              "title": "Payment Method Id"
+            },
+            "business_personal": {
+              "type": "string",
+              "title": "Business Personal"
+            }
+          },
+          "type": "object",
+          "required": [
+            "date",
+            "category_id",
+            "description",
+            "amount",
+            "vat",
+            "payment_method_id",
+            "business_personal"
+          ],
+          "title": "ExpenseCreate"
+        },
+        "HTTPValidationError": {
+          "properties": {
+            "detail": {
+              "items": {
+                "$ref": "#/components/schemas/ValidationError"
+              },
+              "type": "array",
+              "title": "Detail"
+            }
+          },
+          "type": "object",
+          "title": "HTTPValidationError"
+        },
+        "PaymentMethodCreate": {
+          "properties": {
+            "payment_method_name": {
+              "type": "string",
+              "title": "Payment Method Name"
+            }
+          },
+          "type": "object",
+          "required": [
+            "payment_method_name"
+          ],
+          "title": "PaymentMethodCreate"
+        },
+        "ValidationError": {
+          "properties": {
+            "loc": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "integer"
+                  }
+                ]
+              },
+              "type": "array",
+              "title": "Location"
+            },
+            "msg": {
+              "type": "string",
+              "title": "Message"
+            },
+            "type": {
+              "type": "string",
+              "title": "Error Type"
+            }
+          },
+          "type": "object",
+          "required": [
+            "loc",
+            "msg",
+            "type"
+          ],
+          "title": "ValidationError"
+        }
+      }
+    }
+  }
+
+
+================================================
+FILE: src/api/__init__.py
+================================================
+
+
+
+================================================
+FILE: src/api/category_routes.py
+================================================
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+from src.database.db_connection import conn, cursor
+from dotenv import load_dotenv
+
+load_dotenv()
+
+router = APIRouter()
+
+class CategoryCreate(BaseModel):
+    category_name: str
+
+@router.get("/categories")
+def get_categories():
+    cursor.execute("SELECT * FROM categories")
+    categories = cursor.fetchall()
+    if not categories:
+        raise HTTPException(status_code=404, detail="Categories not found")
+    return [{"category_id": c[0], "category_name": c[1]} for c in categories]
+
+@router.post("/categories", status_code=201)
+def create_category(category: CategoryCreate):
+    cursor.execute(
+        "INSERT INTO categories (category_name) VALUES (%s) RETURNING category_id",
+        (category.category_name,)
+    )
+    conn.commit()
+    category_id = cursor.fetchone()[0]
+    return {"category_id": category_id, "category_name": category.category_name}
+
+@router.delete("/categories")
+def delete_category(category_id: int):
+    cursor.execute(
+        "DELETE FROM categories WHERE category_id = %s RETURNING category_id",
+        (category_id,)
+    )
+    result = cursor.fetchone()
+    if not result:
+        raise HTTPException(status_code=404, detail="Category not found")
+    conn.commit()
+    return {"message": "Category deleted successfully"}
+
+
+
+================================================
+FILE: src/api/expenses_routes.py
+================================================
+from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel
+from src.database.db_connection import conn, cursor
+from dotenv import load_dotenv
+from datetime import date
+from decimal import Decimal
+from typing import Optional
+
+load_dotenv()
+
+router = APIRouter()
+
+class ExpenseCreate(BaseModel):
+    date: date
+    category_id: int
+    description: str
+    amount: Decimal
+    vat: Decimal
+    payment_method_id: int
+    business_personal: str
+
+@router.get("/expenses")
+def get_expenses(
+    category_id: Optional[int] = Query(None, description="Filter by category ID"),
+    payment_method_id: Optional[int] = Query(None, description="Filter by payment method ID"),
+    start_date: Optional[date] = Query(None, description="Filter by start date"),
+    end_date: Optional[date] = Query(None, description="Filter by end date"),
+):
+    sql_query = "SELECT * FROM expenses"
+    query_params = []
+
+    if category_id is not None:
+        sql_query += " WHERE category_id = %s"
+        query_params.append(category_id)
+
+    if payment_method_id is not None:
+        if len(query_params) == 0:
+            sql_query += " WHERE payment_method_id = %s"
+        else:
+            sql_query += " AND payment_method_id = %s"
+        query_params.append(payment_method_id)
+
+    if start_date is not None:
+        if len(query_params) == 0:
+            sql_query += " WHERE date >= %s"
+        else:
+            sql_query += " AND date >= %s"
+        query_params.append(start_date)
+
+    if end_date is not None:
+        if len(query_params) == 0:
+            sql_query += " WHERE date <= %s"
+        else:
+            sql_query += " AND date <= %s"
+        query_params.append(end_date)
+
+    cursor.execute(sql_query, query_params)
+    expenses = cursor.fetchall()
+
+    if not expenses:
+        raise HTTPException(status_code=404, detail="No expenses found for the given filters")
+
+    return [
+        {
+            "transaction_id": e[0],
+            "date": e[1],
+            "category_id": e[2],
+            "description": e[3],
+            "amount": e[4],
+            "vat": e[5],
+            "payment_method_id": e[6],
+            "business_personal": e[7],
+        }
+        for e in expenses
+    ]
+
+@router.post("/expenses", status_code=201)
+def create_expense(expense: ExpenseCreate):
+    cursor.execute(
+        "INSERT INTO expenses (date, category_id, description, amount, vat, payment_method_id, business_personal) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING transaction_id",
+        (
+            expense.date,
+            expense.category_id,
+            expense.description,
+            expense.amount,
+            expense.vat,
+            expense.payment_method_id,
+            expense.business_personal,
+        ),
+    )
+    conn.commit()
+    transaction_id = cursor.fetchone()[0]
+    return {"transaction_id": transaction_id, "description": expense.description}
+
+@router.delete("/expenses")
+def delete_expense(transaction_id: int = Query(
+    ..., description="The ID of the transaction to delete"
+)):
+    cursor.execute(
+        "DELETE FROM expenses WHERE transaction_id = %s RETURNING transaction_id",
+        (transaction_id,),
+    )
+    result = cursor.fetchone()
+    if not result:
+        raise HTTPException(status_code=404, detail="Expense not found")
+    conn.commit()
+    return {"message": "Expense deleted successfully"}
+
+
+
+================================================
+FILE: src/api/payment_methods_routes.py
+================================================
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
+from src.database.db_connection import conn, cursor
+from dotenv import load_dotenv
+
+load_dotenv()
+
+router = APIRouter()
+
+class PaymentMethodCreate(BaseModel):
+    payment_method_name: str
+
+@router.get("/payment_methods")
+def get_payment_methods():
+    cursor.execute("SELECT * FROM payment_methods")
+    payment_methods = cursor.fetchall()
+    if not payment_methods:
+        raise HTTPException(status_code=404, detail="Payment methods not found")
+    return [{"payment_method_id": p[0], "payment_method_name": p[1]} for p in payment_methods]
+
+@router.post("/payment_methods", status_code=201)
+def create_payment_method(payment_method: PaymentMethodCreate):
+    cursor.execute(
+        "INSERT INTO payment_methods (payment_method_name) VALUES (%s) RETURNING payment_method_id",
+        (payment_method.payment_method_name,)
+    )
+    conn.commit()
+    payment_method_id = cursor.fetchone()[0]
+    return {"payment_method_id": payment_method_id, "payment_method_name": payment_method.payment_method_name}
+
+@router.delete("/payment_methods")
+def delete_payment_method(payment_method_id: int):
+    cursor.execute(
+        "DELETE FROM payment_methods WHERE payment_method_id = %s RETURNING payment_method_id",
+        (payment_method_id,)
+    )
+    result = cursor.fetchone()
+    if not result:
+        raise HTTPException(status_code=404, detail="Payment method not found")
+    conn.commit()
+    return {"message": "Payment method deleted successfully"}
+
+
+
+================================================
+FILE: src/api/run_api.py
+================================================
+from fastapi import FastAPI
+from src.api.category_routes import router as category_router
+from src.api.payment_methods_routes import router as payment_methods_router
+from src.api.expenses_routes import router as expenses_router
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
+
+app = FastAPI(
+    title="Expense Management API",
+    version="1.0.0"
+)
+
+app.include_router(category_router)
+app.include_router(payment_methods_router)
+app.include_router(expenses_router)
+
+
+
+================================================
+FILE: src/chain/__init__.py
+================================================
+
+
+
+================================================
+FILE: src/chain/graphstate.py
+================================================
+from nodes.imageencoder import image_encoder_node
+from nodes.jsonparser import json_parsing_node
+from nodes.categorizer import categorizer_node 
+from nodes.humancheck import humancheck_node
+from nodes.db_entry import db_entry_node
+from nodes.correct import correct_node
+
+from helpers.get_payment_methods_and_categories import get_payment_methods, get_categories
+
+from typing import TypedDict, Optional, Dict
+from datetime import date
+from decimal import Decimal
+from langgraph.graph import StateGraph
+from dotenv import load_dotenv
+from langsmith import Client
+import os
+from uuid import uuid4
+
+load_dotenv()
+
+unique_id = uuid4().hex[:8]
+os.environ["LANGCHAIN_PROJECT"] = f"expense-tracker {unique_id}"
+
+client = Client(api_key=os.environ["LANGSMITH_API_KEY"])
+
+class GraphState(TypedDict):
+    user_decision: Optional[list]
+    image_base64: Optional[str]
+    image_location: Optional[str]
+    date: Optional[date]
+    category_id: Optional[int]
+    description: Optional[str]
+    amount: Optional[Decimal]
+    vat: Optional[Decimal]
+    payment_method_id: Optional[int]
+    business_personal: Optional[str]
+    category: Optional[str]
+    payment_method: Optional[str]
+    payment_methods_dict: Optional[Dict[int, str]]
+    categories_dict: Optional[Dict[int, str]]
+    vision_model_name: Optional[str]
+    categorizer_model_name: Optional[str]
+
+def create_graph_state() -> GraphState:
+    payment_methods_dict = get_payment_methods()
+    categories_dict = get_categories()
+
+    return {
+        "user_decision": None,
+        "image_base64": None,
+        "image_location": None,
+        "date": None,
+        "category_id": None,
+        "description": None,
+        "amount": None,
+        "vat": None,
+        "payment_method_id": None,
+        "business_personal": None,
+        "category": None,
+        "payment_method": None,
+        "payment_methods_dict": payment_methods_dict,
+        "categories_dict": categories_dict,
+        "vision_model_name": "gpt-4-vision-preview",  
+        "categorizer_model_name": "gpt-4-turbo",  
+    }
+
+def setup_workflow() -> StateGraph:
+    workflow = StateGraph(GraphState)
+
+    workflow.add_node("image_encoder", image_encoder_node)
+    workflow.add_node("json_parser", json_parsing_node)
+    workflow.add_node("categorizer", categorizer_node)
+    workflow.add_node("humancheck", humancheck_node)
+    workflow.add_edge("image_encoder", "json_parser")
+    workflow.add_edge("json_parser", "categorizer")
+    workflow.add_edge("categorizer", "humancheck")
+
+    workflow.add_node("db_entry", db_entry_node)
+    workflow.add_node("correct", correct_node)
+
+    def decide_humancheck(state):
+        if state.get('user_decision') == "accept":
+            return "db_entry"
+        elif state.get('user_decision') == "change_model":
+            return "json_parser"
+        elif state.get('user_decision') == "correct":
+            return "correct"
+        return None
+
+    workflow.add_conditional_edges("humancheck", decide_humancheck, {
+        "db_entry": "db_entry",
+        "json_parser": "json_parser",
+        "correct": "correct"
+    })
+
+    workflow.add_edge("correct", "humancheck")
+
+    workflow.set_entry_point("image_encoder")
+    workflow.set_finish_point("db_entry")  
+
+    return workflow
+
+def main():
+    workflow = setup_workflow()
+    app = workflow.compile()
+
+    initial_state = create_graph_state() 
+
+    initial_state["image_location"] = "/Users/jw/developer/expense_tracker/data/walmart-bon.jpeg"
+    
+    result = app.invoke(initial_state)
+
+    print("Finished run")
+
+if __name__ == "__main__":
+    main()
+
+
+
+================================================
+FILE: src/chain/helpers/__init__.py
+================================================
+
+
+
+================================================
+FILE: src/chain/helpers/get_payment_methods_and_categories.py
+================================================
+import requests
+
+def get_payment_methods() -> dict:
+    url = 'http://localhost:8000/payment_methods'
+    response = requests.get(url, headers={"accept": "application/json"})
+
+    if response.status_code == 200:
+        payment_methods = response.json()
+        payment_methods_dict = {
+            item["payment_method_id"]: item["payment_method_name"]
+            for item in payment_methods
+        }
+        return payment_methods_dict
+    else:
+        raise Exception("Failed to fetch payment methods. Status code: {}".format(response.status_code))
+
+
+def get_categories() -> dict:
+    url = 'http://localhost:8000/categories'
+    response = requests.get(url, headers={"accept": "application/json"})
+
+    if response.status_code == 200:
+        categories = response.json()
+        categories_dict = {
+            item["category_id"]: item["category_name"]
+            for item in categories
+        }
+        return categories_dict
+    else:
+        raise Exception("Failed to fetch categories. Status code: {}".format(response.status_code))
+
+
+
+================================================
+FILE: src/chain/nodes/__init__.py
+================================================
+
+
+
+================================================
+FILE: src/chain/nodes/categorizer.py
+================================================
+from langchain_core.pydantic_v1 import BaseModel, Field
+from langchain_anthropic import ChatAnthropic
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage
+
+class CategoryData(BaseModel):
+    category: str = Field(default=None, description="The selected category for the invoice")
+
+def get_category_list(state):
+    categories_dict = state.get("categories_dict", {})
+    return list(categories_dict.values())
+
+def categorize_invoice(state):
+    receipt_date = state.get("date", None)
+    receipt_description = state.get("description", None)
+    receipt_amount = state.get("amount", None)
+    receipt_vat = state.get("vat", None)
+    receipt_business_personal = state.get("business_personal", None)
+    receipt_payment_method = state.get("payment_method", None)
+
+    category_list = get_category_list(state)
+
+    prompt = (
+        f"Here's the summary of an invoice: \n"
+        f"Date: {receipt_date}\n"
+        f"Description: {receipt_description}\n"
+        f"Amount: {receipt_amount}\n"
+        f"VAT: {receipt_vat}\n"
+        f"Business or Personal: {receipt_business_personal}\n"
+        f"Payment Method: {receipt_payment_method}\n\n"
+        f"Select an appropriate category for this invoice from the following list:\n"
+        f"{', '.join(category_list)}"
+    )
+
+    categorizer_model_name = state.get("categorizer_model_name", "gpt-3.5-turbo")
+
+    if "claude" in categorizer_model_name.lower():
+        chat = ChatAnthropic(model=categorizer_model_name, temperature=0)
+    else:
+        chat = ChatOpenAI(model=categorizer_model_name, temperature=0)
+
+    structured_llm = chat.with_structured_output(CategoryData)
+
+    messages = [HumanMessage(content=[{"type": "text", "text": prompt}])]
+
+    response = structured_llm.invoke(messages)
+
+    selected_category = response.dict().get("category", None)
+
+    new_state = state.copy()
+
+    new_state["category"] = selected_category
+
+    if 'category' in new_state and 'categories_dict' in new_state:
+        category = new_state["category"]
+        categories_dict = new_state["categories_dict"]
+        for key, value in categories_dict.items():
+            if value == category:
+                new_state["category_id"] = key
+                break
+
+    if 'payment_method' in new_state and 'payment_methods_dict' in new_state:
+        payment_method = new_state["payment_method"]
+        payment_methods_dict = new_state["payment_methods_dict"]
+        for key, value in payment_methods_dict.items():
+            if value == payment_method:
+                new_state["payment_method_id"] = key
+                break
+
+    return new_state
+
+def categorizer_node(state):
+
+    updated_state = categorize_invoice(state)
+
+    return updated_state
+
+
+
+================================================
+FILE: src/chain/nodes/correct.py
+================================================
+from langchain_core.pydantic_v1 import BaseModel, Field
+from langchain_anthropic import ChatAnthropic
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage
+
+class invoice_summary(BaseModel):    
+    date: str = Field(default=None, description="The date of the receipt")
+    category: str = Field(default=None, description="")
+    description: str = Field(default=None, description="A brief description of the payment")
+    amount: str = Field(default=None, description="The total amount paid")
+    vat: str = Field(default=None, description="The total VAT (taxes) paid")
+    business_personal: str = Field(default=None, description="Indicate whether the payment is business or personal")
+    payment_method: str = Field(default=None, description="Indicate the payment method")
+
+
+def get_category_list(state):
+    categories_dict = state.get("categories_dict", {})
+    return list(categories_dict.values())
+
+def get_payment_method_list(state):
+    payment_method_dict = state.get("payment_method_dict", {})
+    return list(payment_method_dict.values())
+
+def correct_node(state):
+    date = state.get("date", "").strip()
+    category = state.get("category", "").strip()
+    description = state.get("description", "").strip()
+    amount = state.get("amount", "").strip()
+    vat = state.get("vat", "").strip()
+    business_personal = state.get("business_personal", "").strip()
+    payment_method = state.get("payment_method", "").strip()
+
+    print(f"Date: {date}")
+    print(f"Category: {category}")
+    print(f"Description: {description}")
+    print(f"Amount: {amount}")
+    print(f"Vat: {vat}")
+    print(f"Business or Personal: {business_personal}")
+    print(f"Payment method: {payment_method}")
+
+    instructions = input("Let the LLM know what it has to change in the above summary of the invoice")
+
+    category_list = get_category_list(state)
+    payment_method_list = get_payment_method_list(state)
+
+    prompt = (
+        f"Here's the summary of an invoice: \n"
+        f"Date: {date}\n"
+        f"Category: {category}\n"
+        f"Description: {description}\n"
+        f"Amount: {amount}\n"
+        f"VAT: {vat}\n"
+        f"Business or Personal: {business_personal}\n"
+        f"Payment Method: {payment_method}\n\n"
+        f"improve this summary based on the following user feedback:\n"
+        f"Userfeedback: {instructions} \n"
+        f"if the user asks to modify the category, make sure to choose one of the following categories:\n"
+        f"{', '.join(category_list)}"
+        f"if the user asks to modify the payment method, make sure to choose one of the following payment methods:\n"
+        f"{', '.join(payment_method_list)}"
+    )
+
+    categorizer_model_name = state.get("categorizer_model_name", "gpt-3.5-turbo")
+
+    if "claude" in categorizer_model_name.lower():
+        chat = ChatAnthropic(model=categorizer_model_name, temperature=0)
+    else:
+        chat = ChatOpenAI(model=categorizer_model_name, temperature=0)
+
+    structured_llm = chat.with_structured_output(invoice_summary)
+
+    messages = [HumanMessage(content=[{"type": "text", "text": prompt}])]
+
+    response = structured_llm.invoke(messages)
+
+    updated_date = response.dict().get("date", None)
+    updated_category = response.dict().get("category", None)
+    updated_description = response.dict().get("description", None)
+    updated_amount = response.dict().get("amount", None)
+    updated_vat = response.dict().get("vat", None)
+    updated_business_personal = response.dict().get("business_personal", None)
+    updated_payment_method = response.dict().get("payment_method", None)
+
+    new_state = state.copy()
+
+    new_state["date"] = updated_date
+    new_state["category"] = updated_category
+    new_state["description"] = updated_description
+    new_state["amount"] = updated_amount
+    new_state["vat"] = updated_vat
+    new_state["business_personal"] = updated_business_personal
+    new_state["payment_method"] = updated_payment_method
+
+    if 'category' in new_state and 'categories_dict' in new_state:
+        category = new_state["category"]
+        categories_dict = new_state["categories_dict"]
+        for key, value in categories_dict.items():
+            if value == category:
+                new_state["category_id"] = key
+                break
+
+    if 'payment_method' in new_state and 'payment_methods_dict' in new_state:
+        payment_method = new_state["payment_method"]
+        payment_methods_dict = new_state["payment_methods_dict"]
+        for key, value in payment_methods_dict.items():
+            if value == payment_method:
+                new_state["payment_method_id"] = key
+                break
+
+    return new_state
+
+
+================================================
+FILE: src/chain/nodes/db_entry.py
+================================================
+import requests
+
+def db_entry_node(state):
+    def get_str_safe(key):
+        value = state.get(key, "")
+        if isinstance(value, str):
+            return value.strip()
+        else:
+            return str(value)  # Needs a better fix but for now its ok.
+
+    date = get_str_safe("date")
+    category_id = get_str_safe("category_id")
+    description = get_str_safe("description")
+    amount = get_str_safe("amount")
+    vat = get_str_safe("vat")
+    business_personal = get_str_safe("business_personal")
+    payment_method_id = get_str_safe("payment_method_id")
+
+    url = "http://localhost:8000/expenses"
+    
+    data = {
+        "date": date,
+        "category_id": category_id,
+        "description": description,
+        "amount": amount,
+        "vat": vat,
+        "payment_method_id": payment_method_id,
+        "business_personal": business_personal
+    }
+    
+    # Make the POST request to the endpoint
+    try:
+        response = requests.post(url, json=data)
+        
+        # Check if the request was successful
+        if response.status_code == 201:
+            print("Expense created successfully.")
+        else:
+            print("Failed to create expense.")
+            print("Status Code:", response.status_code)
+            print("Response:", response.json())
+    except requests.exceptions.RequestException as e:
+        print("Error while making the API request:", e)
+
+
+
+================================================
+FILE: src/chain/nodes/humancheck.py
+================================================
+def humancheck_node(state):
+    image_location = state.get("image_location", "").strip()
+    date = state.get("date", "").strip()
+    category = state.get("category", "").strip()
+    description = state.get("description", "").strip()
+    amount = state.get("amount", "").strip()
+    vat = state.get("vat", "").strip()
+    business_personal = state.get("business_personal", "").strip()
+    payment_method = state.get("payment_method", "").strip()
+
+    print(f"Image location: {image_location}")
+    print(f"Date: {date}")
+    print(f"Category: {category}")
+    print(f"Description: {description}")
+    print(f"Amount: {amount}")
+    print(f"Vat: {vat}")
+    print(f"Business or Personal: {business_personal}")
+    print(f"Payment method: {payment_method}")
+
+    choice = input("Accept(a), Change Model (m) or Correct (c)? ")
+
+    new_state = state.copy()
+
+    if choice.lower() == 'a':
+        new_state["user_decision"] = "accept"
+    elif choice.lower() == 'm':
+        new_state["user_decision"] = "change_model"
+
+        if new_state["vision_model_name"] == "gpt-4-vision-preview":
+            new_state["vision_model_name"] = "claude-3-opus-20240229"
+        else:
+            new_state["vision_model_name"] = "gpt-4-vision-preview"
+
+        if new_state["categorizer_model_name"] == "gpt-4-turbo":
+            new_state["categorizer_model_name"] = "claude-3-sonnet-20240229"
+        else:
+            new_state["categorizer_model_name"] = "gpt-4-turbo"
+
+    elif choice.lower() == 'c':
+        new_state["user_decision"] = "correct"
+
+    return new_state
+
+
+
+================================================
+FILE: src/chain/nodes/imageencoder.py
+================================================
+import base64
+
+def encode_image(image_path: str) -> str:
+    with open(image_path, "rb") as image_file:
+        image_data = image_file.read()
+        encoded_image = base64.b64encode(image_data).decode("utf-8")
+
+    return encoded_image
+
+def image_encoder_node(state):
+
+    new_state = state.copy()  
+
+    image_location = state.get("image_location", "").strip()
+    image_base64 = encode_image(image_location)
+
+    new_state["image_base64"] = image_base64
+
+    return new_state
+
+
+
+================================================
+FILE: src/chain/nodes/jsonparser.py
+================================================
+from langchain_core.pydantic_v1 import BaseModel, Field
+from langchain_anthropic import ChatAnthropic
+from langchain_core.messages import HumanMessage
+from langchain_openai import ChatOpenAI
+
+class ReceiptData(BaseModel):
+    date: str = Field(default=None, description="The date of the receipt format should be like 2024-04-25")
+    description: str = Field(default=None, description="A brief description of the payment")
+    amount: str = Field(default=None, description="The total amount paid")
+    vat: str = Field(default=None, description="The total VAT (taxes) paid")
+    business_personal: str = Field(default=None, description="Indicate whether the payment is business or personal")
+    payment_method: str = Field(default=None, description="Indicate the payment method")
+
+def get_payment_methods(state):
+    payment_methods_dict = state.get("payment_methods_dict", {})
+    return list(payment_methods_dict.values())
+
+def get_receipt_json(image_base64: str, state: dict):
+    vision_model_name = state.get("vision_model_name", "gpt-4-vision-preview") 
+
+    payment_methods_list = get_payment_methods(state)
+    
+    prompt = (
+        "Tell me the details of the receipt. Make sure to ALWAYS reply by calling the ReceiptData function.NEVER ask the user to provide additional information.\n"
+        f"NEVER reply in any other way than caling the function. if you are not sure about some info make a well educated guess, but ALWAYS call the function.\n"
+        f"Choose one of the following payment methods for the 'payment_method' field:\n{', '.join(payment_methods_list)}"
+    )
+
+    if "claude" in vision_model_name.lower():
+        chat = ChatAnthropic(model=vision_model_name, temperature=0)
+    else:
+        chat = ChatOpenAI(model=vision_model_name, temperature=0)
+
+    structured_llm = chat.with_structured_output(ReceiptData)
+
+    messages = [
+        HumanMessage(
+            content=[
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/jpeg;base64,{image_base64}",
+                    },
+                },
+                {"type": "text", "text": prompt},
+            ]
+        )
+    ]
+
+    response = structured_llm.invoke(messages)
+
+    return response.dict()
+
+def json_parsing_node(state):
+
+    new_state = state.copy()
+
+    image_base64 = state.get("image_base64", "").strip()
+
+    receipt_data = get_receipt_json(image_base64, state)
+
+    new_state["date"] = receipt_data.get("date", None)
+    new_state["description"] = receipt_data.get("description", None)
+    new_state["amount"] = receipt_data.get("amount", None)
+    new_state["vat"] = receipt_data.get("vat", None)
+    new_state["business_personal"] = receipt_data.get("business_personal", None)
+    new_state["payment_method"] = receipt_data.get("payment_method", None)
+
+    print("json_parsing_node returning:", new_state)
+
+    return new_state
+
+
+
+================================================
+FILE: src/database/__init__.py
+================================================
+
+
+
+================================================
+FILE: src/database/create_categories_and_payment_methods.py
+================================================
+import yaml
+import requests
+
+BASE_URL = "http://localhost:8000"
+CATEGORIES_ENDPOINT = f"{BASE_URL}/categories"
+PAYMENT_METHODS_ENDPOINT = f"{BASE_URL}/payment_methods"
+
+config_path = "config.yaml"
+with open(config_path, "r") as file:
+    config = yaml.safe_load(file)
+
+categories = config.get("categories", [])
+payment_methods = config.get("payment_methods", [])
+
+def send_post_request(endpoint, data):
+    response = requests.post(endpoint, json=data)
+    if response.status_code in (200, 201):
+        print(f"Successfully created: {data}")
+    else:
+        print(f"Error creating {data}: {response.status_code}")
+    return response
+
+for category in categories:
+    category_data = {"category_name": category}
+    send_post_request(CATEGORIES_ENDPOINT, category_data)
+
+for payment_method in payment_methods:
+    payment_method_data = {"payment_method_name": payment_method}
+    send_post_request(PAYMENT_METHODS_ENDPOINT, payment_method_data)
+
+
+
+================================================
+FILE: src/database/create_tables.py
+================================================
+from dotenv import load_dotenv
+from db_connection import conn, cursor
+
+load_dotenv()
+
+create_categories_table = """
+CREATE TABLE IF NOT EXISTS categories (
+    category_id SERIAL PRIMARY KEY,
+    category_name VARCHAR(100) UNIQUE
+);
+"""
+
+create_payment_methods_table = """
+CREATE TABLE IF NOT EXISTS payment_methods (
+    payment_method_id SERIAL PRIMARY KEY,
+    payment_method_name VARCHAR(50) UNIQUE
+);
+"""
+
+create_expenses_table = """
+CREATE TABLE IF NOT EXISTS expenses (
+    transaction_id SERIAL PRIMARY KEY,
+    date DATE,
+    category_id INTEGER,
+    description TEXT,
+    amount DECIMAL(10, 2),
+    vat DECIMAL(10, 2),
+    payment_method_id INTEGER,
+    business_personal VARCHAR(50),
+    declared_on DATE,
+    FOREIGN KEY (category_id) REFERENCES categories(category_id),
+    FOREIGN KEY (payment_method_id) REFERENCES payment_methods(payment_method_id)
+);
+"""
+
+cursor.execute(create_categories_table)
+cursor.execute(create_payment_methods_table)
+cursor.execute(create_expenses_table)
+
+conn.commit()
+
+cursor.close()
+conn.close()
+
+
+
+================================================
+FILE: src/database/db_connection.py
+================================================
+import psycopg2
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+PGHOST = os.getenv('PGHOST')
+PGPORT = os.getenv('PGPORT')
+PGDATABASE = os.getenv('PGDATABASE')
+PGUSER = os.getenv('PGUSER')
+PGPASSWORD = os.getenv('PGPASSWORD')
+
+conn = psycopg2.connect(
+    host=PGHOST,
+    port=PGPORT,
+    database=PGDATABASE,
+    user=PGUSER,
+    password=PGPASSWORD
+)
+
+cursor = conn.cursor()
+
+

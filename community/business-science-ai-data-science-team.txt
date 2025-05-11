@@ -1,0 +1,4354 @@
+Directory structure:
+└── agents/
+    ├── __init__.py
+    ├── data_cleaning_agent.py
+    ├── data_loader_tools_agent.py
+    ├── data_visualization_agent.py
+    ├── data_wrangling_agent.py
+    ├── feature_engineering_agent.py
+    └── sql_database_agent.py
+
+================================================
+FILE: ai_data_science_team/agents/__init__.py
+================================================
+from ai_data_science_team.agents.data_cleaning_agent import make_data_cleaning_agent, DataCleaningAgent
+from ai_data_science_team.agents.feature_engineering_agent import make_feature_engineering_agent, FeatureEngineeringAgent
+from ai_data_science_team.agents.data_wrangling_agent import make_data_wrangling_agent, DataWranglingAgent
+from ai_data_science_team.agents.sql_database_agent import make_sql_database_agent, SQLDatabaseAgent
+from ai_data_science_team.agents.data_visualization_agent import make_data_visualization_agent, DataVisualizationAgent
+from ai_data_science_team.agents.data_loader_tools_agent import make_data_loader_tools_agent, DataLoaderToolsAgent
+
+
+
+================================================
+FILE: ai_data_science_team/agents/data_cleaning_agent.py
+================================================
+# BUSINESS SCIENCE UNIVERSITY
+# AI DATA SCIENCE TEAM
+# ***
+# * Agents: Data Cleaning Agent
+
+# Libraries
+from typing import TypedDict, Annotated, Sequence, Literal
+import operator
+
+from langchain.prompts import PromptTemplate
+from langchain_core.messages import BaseMessage
+
+from langgraph.types import Command
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.types import Checkpointer
+
+import os
+import json
+import pandas as pd
+
+from IPython.display import Markdown
+
+from ai_data_science_team.templates import(
+    node_func_execute_agent_code_on_data, 
+    node_func_human_review,
+    node_func_fix_agent_code, 
+    node_func_report_agent_outputs,
+    create_coding_agent_graph,
+    BaseAgent,
+)
+from ai_data_science_team.parsers.parsers import PythonOutputParser
+from ai_data_science_team.utils.regex import (
+    relocate_imports_inside_function, 
+    add_comments_to_top, 
+    format_agent_name, 
+    format_recommended_steps, 
+    get_generic_summary,
+)
+from ai_data_science_team.tools.dataframe import get_dataframe_summary
+from ai_data_science_team.utils.logging import log_ai_function
+
+# Setup
+AGENT_NAME = "data_cleaning_agent"
+LOG_PATH = os.path.join(os.getcwd(), "logs/")
+
+
+# Class
+class DataCleaningAgent(BaseAgent):
+    """
+    Creates a data cleaning agent that can process datasets based on user-defined instructions or default cleaning steps. 
+    The agent generates a Python function to clean the dataset, performs the cleaning, and logs the process, including code 
+    and errors. It is designed to facilitate reproducible and customizable data cleaning workflows.
+
+    The agent performs the following default cleaning steps unless instructed otherwise:
+
+    - Removing columns with more than 40% missing values.
+    - Imputing missing values with the mean for numeric columns.
+    - Imputing missing values with the mode for categorical columns.
+    - Converting columns to appropriate data types.
+    - Removing duplicate rows.
+    - Removing rows with missing values.
+    - Removing rows with extreme outliers (values 3x the interquartile range).
+
+    User instructions can modify, add, or remove any of these steps to tailor the cleaning process.
+
+    Parameters
+    ----------
+    model : langchain.llms.base.LLM
+        The language model used to generate the data cleaning function.
+    n_samples : int, optional
+        Number of samples used when summarizing the dataset. Defaults to 30. Reducing this number can help 
+        avoid exceeding the model's token limits.
+    log : bool, optional
+        Whether to log the generated code and errors. Defaults to False.
+    log_path : str, optional
+        Directory path for storing log files. Defaults to None.
+    file_name : str, optional
+        Name of the file for saving the generated response. Defaults to "data_cleaner.py".
+    function_name : str, optional
+        Name of the generated data cleaning function. Defaults to "data_cleaner".
+    overwrite : bool, optional
+        Whether to overwrite the log file if it exists. If False, a unique file name is created. Defaults to True.
+    human_in_the_loop : bool, optional
+        Enables user review of data cleaning instructions. Defaults to False.
+    bypass_recommended_steps : bool, optional
+        If True, skips the default recommended cleaning steps. Defaults to False.
+    bypass_explain_code : bool, optional
+        If True, skips the step that provides code explanations. Defaults to False.
+    checkpointer : langgraph.types.Checkpointer, optional
+        Checkpointer to save and load the agent's state. Defaults to None.
+
+    Methods
+    -------
+    update_params(**kwargs)
+        Updates the agent's parameters and rebuilds the compiled state graph.
+    ainvoke_agent(user_instructions: str, data_raw: pd.DataFrame, max_retries=3, retry_count=0)
+        Cleans the provided dataset asynchronously based on user instructions.
+    invoke_agent(user_instructions: str, data_raw: pd.DataFrame, max_retries=3, retry_count=0)
+        Cleans the provided dataset synchronously based on user instructions.
+    get_workflow_summary()
+        Retrieves a summary of the agent's workflow.
+    get_log_summary()
+        Retrieves a summary of logged operations if logging is enabled.
+    get_state_keys()
+        Returns a list of keys from the state graph response.
+    get_state_properties()
+        Returns detailed properties of the state graph response.
+    get_data_cleaned()
+        Retrieves the cleaned dataset as a pandas DataFrame.
+    get_data_raw()
+        Retrieves the raw dataset as a pandas DataFrame.
+    get_data_cleaner_function()
+        Retrieves the generated Python function used for cleaning the data.
+    get_recommended_cleaning_steps()
+        Retrieves the agent's recommended cleaning steps.
+    get_response()
+        Returns the response from the agent as a dictionary.
+    show()
+        Displays the agent's mermaid diagram.
+
+    Examples
+    --------
+    ```python
+    import pandas as pd
+    from langchain_openai import ChatOpenAI
+    from ai_data_science_team.agents import DataCleaningAgent
+
+    llm = ChatOpenAI(model="gpt-4o-mini")
+
+    data_cleaning_agent = DataCleaningAgent(
+        model=llm, n_samples=50, log=True, log_path="logs", human_in_the_loop=True
+    )
+
+    df = pd.read_csv("https://raw.githubusercontent.com/business-science/ai-data-science-team/refs/heads/master/data/churn_data.csv")
+
+    data_cleaning_agent.invoke_agent(
+        user_instructions="Don't remove outliers when cleaning the data.",
+        data_raw=df,
+        max_retries=3,
+        retry_count=0
+    )
+
+    cleaned_data = data_cleaning_agent.get_data_cleaned()
+    
+    response = data_cleaning_agent.response
+    ```
+    
+    Returns
+    --------
+    DataCleaningAgent : langchain.graphs.CompiledStateGraph 
+        A data cleaning agent implemented as a compiled state graph. 
+    """
+    
+    def __init__(
+        self, 
+        model, 
+        n_samples=30, 
+        log=False, 
+        log_path=None, 
+        file_name="data_cleaner.py", 
+        function_name="data_cleaner",
+        overwrite=True, 
+        human_in_the_loop=False, 
+        bypass_recommended_steps=False, 
+        bypass_explain_code=False,
+        checkpointer: Checkpointer = None
+    ):
+        self._params = {
+            "model": model,
+            "n_samples": n_samples,
+            "log": log,
+            "log_path": log_path,
+            "file_name": file_name,
+            "function_name": function_name,
+            "overwrite": overwrite,
+            "human_in_the_loop": human_in_the_loop,
+            "bypass_recommended_steps": bypass_recommended_steps,
+            "bypass_explain_code": bypass_explain_code,
+            "checkpointer": checkpointer
+        }
+        self._compiled_graph = self._make_compiled_graph()
+        self.response = None
+
+    def _make_compiled_graph(self):
+        """
+        Create the compiled graph for the data cleaning agent. Running this method will reset the response to None.
+        """
+        self.response=None
+        return make_data_cleaning_agent(**self._params)
+
+    async def ainvoke_agent(self, data_raw: pd.DataFrame, user_instructions: str=None, max_retries:int=3, retry_count:int=0, **kwargs):
+        """
+        Asynchronously invokes the agent. The response is stored in the response attribute.
+
+        Parameters:
+        ----------
+            data_raw (pd.DataFrame): 
+                The raw dataset to be cleaned.
+            user_instructions (str): 
+                Instructions for data cleaning agent.
+            max_retries (int): 
+                Maximum retry attempts for cleaning.
+            retry_count (int): 
+                Current retry attempt.
+            **kwargs
+                Additional keyword arguments to pass to ainvoke().
+
+        Returns:
+        --------
+            None. The response is stored in the response attribute.
+        """
+        response = await self._compiled_graph.ainvoke({
+            "user_instructions": user_instructions,
+            "data_raw": data_raw.to_dict(),
+            "max_retries": max_retries,
+            "retry_count": retry_count,
+        }, **kwargs)
+        self.response = response
+        return None
+    
+    def invoke_agent(self, data_raw: pd.DataFrame, user_instructions: str=None, max_retries:int=3, retry_count:int=0, **kwargs):
+        """
+        Invokes the agent. The response is stored in the response attribute.
+
+        Parameters:
+        ----------
+            data_raw (pd.DataFrame): 
+                The raw dataset to be cleaned.
+            user_instructions (str): 
+                Instructions for data cleaning agent.
+            max_retries (int): 
+                Maximum retry attempts for cleaning.
+            retry_count (int): 
+                Current retry attempt.
+            **kwargs
+                Additional keyword arguments to pass to invoke().
+
+        Returns:
+        --------
+            None. The response is stored in the response attribute.
+        """
+        response = self._compiled_graph.invoke({
+            "user_instructions": user_instructions,
+            "data_raw": data_raw.to_dict(),
+            "max_retries": max_retries,
+            "retry_count": retry_count,
+        },**kwargs)
+        self.response = response
+        return None
+
+    def get_workflow_summary(self, markdown=False):
+        """
+        Retrieves the agent's workflow summary, if logging is enabled.
+        """
+        if self.response and self.response.get("messages"):
+            summary = get_generic_summary(json.loads(self.response.get("messages")[-1].content))
+            if markdown:
+                return Markdown(summary)
+            else:
+                return summary
+
+    def get_log_summary(self, markdown=False):
+        """
+        Logs a summary of the agent's operations, if logging is enabled.
+        """
+        if self.response:
+            if self.response.get('data_cleaner_function_path'):
+                log_details = f"""
+## Data Cleaning Agent Log Summary:
+
+Function Path: {self.response.get('data_cleaner_function_path')}
+
+Function Name: {self.response.get('data_cleaner_function_name')}
+                """
+                if markdown:
+                    return Markdown(log_details) 
+                else:
+                    return log_details
+    
+    def get_data_cleaned(self):
+        """
+        Retrieves the cleaned data stored after running invoke_agent or clean_data methods.
+        """
+        if self.response:
+            return pd.DataFrame(self.response.get("data_cleaned"))
+        
+    def get_data_raw(self):
+        """
+        Retrieves the raw data.
+        """
+        if self.response:
+            return pd.DataFrame(self.response.get("data_raw"))
+    
+    def get_data_cleaner_function(self, markdown=False):
+        """
+        Retrieves the agent's pipeline function.
+        """
+        if self.response:
+            if markdown:
+                return Markdown(f"```python\n{self.response.get('data_cleaner_function')}\n```")
+            else:
+                return self.response.get("data_cleaner_function")
+            
+    def get_recommended_cleaning_steps(self, markdown=False):
+        """
+        Retrieves the agent's recommended cleaning steps
+        """
+        if self.response:
+            if markdown:
+                return Markdown(self.response.get('recommended_steps'))
+            else:
+                return self.response.get('recommended_steps')
+
+
+
+# Agent
+
+def make_data_cleaning_agent(
+    model, 
+    n_samples = 30, 
+    log=False, 
+    log_path=None, 
+    file_name="data_cleaner.py",
+    function_name="data_cleaner",
+    overwrite = True, 
+    human_in_the_loop=False, 
+    bypass_recommended_steps=False, 
+    bypass_explain_code=False,
+    checkpointer: Checkpointer = None
+):
+    """
+    Creates a data cleaning agent that can be run on a dataset. The agent can be used to clean a dataset in a variety of
+    ways, such as removing columns with more than 40% missing values, imputing missing
+    values with the mean of the column if the column is numeric, or imputing missing
+    values with the mode of the column if the column is categorical.
+    The agent takes in a dataset and some user instructions, and outputs a python
+    function that can be used to clean the dataset. The agent also logs the code
+    generated and any errors that occur.
+
+    The agent is instructed to to perform the following data cleaning steps:
+
+    - Removing columns if more than 40 percent of the data is missing
+    - Imputing missing values with the mean of the column if the column is numeric
+    - Imputing missing values with the mode of the column if the column is categorical
+    - Converting columns to the correct data type
+    - Removing duplicate rows
+    - Removing rows with missing values
+    - Removing rows with extreme outliers (3X the interquartile range)
+    - User instructions can modify, add, or remove any of the above steps
+
+    Parameters
+    ----------
+    model : langchain.llms.base.LLM
+        The language model to use to generate code.
+    n_samples : int, optional
+        The number of samples to use when summarizing the dataset. Defaults to 30.
+        If you get an error due to maximum tokens, try reducing this number.
+        > "This model's maximum context length is 128000 tokens. However, your messages resulted in 333858 tokens. Please reduce the length of the messages."
+    log : bool, optional
+        Whether or not to log the code generated and any errors that occur.
+        Defaults to False.
+    log_path : str, optional
+        The path to the directory where the log files should be stored. Defaults to
+        "logs/".
+    file_name : str, optional
+        The name of the file to save the response to. Defaults to "data_cleaner.py".
+    function_name : str, optional
+        The name of the function that will be generated to clean the data. Defaults to "data_cleaner".
+    overwrite : bool, optional
+        Whether or not to overwrite the log file if it already exists. If False, a unique file name will be created. 
+        Defaults to True.
+    human_in_the_loop : bool, optional
+        Whether or not to use human in the loop. If True, adds an interput and human in the loop step that asks the user to review the data cleaning instructions. Defaults to False.
+    bypass_recommended_steps : bool, optional
+        Bypass the recommendation step, by default False
+    bypass_explain_code : bool, optional
+        Bypass the code explanation step, by default False.
+    checkpointer : langgraph.types.Checkpointer, optional
+        Checkpointer to save and load the agent's state. Defaults to None.
+        
+    Examples
+    -------
+    ``` python
+    import pandas as pd
+    from langchain_openai import ChatOpenAI
+    from ai_data_science_team.agents import data_cleaning_agent
+
+    llm = ChatOpenAI(model = "gpt-4o-mini")
+
+    data_cleaning_agent = make_data_cleaning_agent(llm)
+
+    df = pd.read_csv("https://raw.githubusercontent.com/business-science/ai-data-science-team/refs/heads/master/data/churn_data.csv")
+
+    response = data_cleaning_agent.invoke({
+        "user_instructions": "Don't remove outliers when cleaning the data.",
+        "data_raw": df.to_dict(),
+        "max_retries":3, 
+        "retry_count":0
+    })
+
+    pd.DataFrame(response['data_cleaned'])
+    ```
+
+    Returns
+    -------
+    app : langchain.graphs.CompiledStateGraph
+        The data cleaning agent as a state graph.
+    """
+    llm = model
+    
+    if human_in_the_loop:
+        if checkpointer is None:
+            print("Human in the loop is enabled. A checkpointer is required. Setting to MemorySaver().")
+            checkpointer = MemorySaver()
+    
+    # Human in th loop requires recommended steps
+    if bypass_recommended_steps and human_in_the_loop:
+        bypass_recommended_steps = False
+        print("Bypass recommended steps set to False to enable human in the loop.")
+    
+    # Setup Log Directory
+    if log:
+        if log_path is None:
+            log_path = LOG_PATH
+        if not os.path.exists(log_path):
+            os.makedirs(log_path)    
+
+    # Define GraphState for the router
+    class GraphState(TypedDict):
+        messages: Annotated[Sequence[BaseMessage], operator.add]
+        user_instructions: str
+        recommended_steps: str
+        data_raw: dict
+        data_cleaned: dict
+        all_datasets_summary: str
+        data_cleaner_function: str
+        data_cleaner_function_path: str
+        data_cleaner_file_name: str
+        data_cleaner_function_name: str
+        data_cleaner_error: str
+        max_retries: int
+        retry_count: int
+
+    
+    def recommend_cleaning_steps(state: GraphState):
+        """
+        Recommend a series of data cleaning steps based on the input data. 
+        These recommended steps will be appended to the user_instructions.
+        """
+        print(format_agent_name(AGENT_NAME))
+        print("    * RECOMMEND CLEANING STEPS")
+
+        # Prompt to get recommended steps from the LLM
+        recommend_steps_prompt = PromptTemplate(
+            template="""
+            You are a Data Cleaning Expert. Given the following information about the data, 
+            recommend a series of numbered steps to take to clean and preprocess it. 
+            The steps should be tailored to the data characteristics and should be helpful 
+            for a data cleaning agent that will be implemented.
+            
+            General Steps:
+            Things that should be considered in the data cleaning steps:
+            
+            * Removing columns if more than 40 percent of the data is missing
+            * Imputing missing values with the mean of the column if the column is numeric
+            * Imputing missing values with the mode of the column if the column is categorical
+            * Converting columns to the correct data type
+            * Removing duplicate rows
+            * Removing rows with missing values
+            * Removing rows with extreme outliers (3X the interquartile range)
+            
+            Custom Steps:
+            * Analyze the data to determine if any additional data cleaning steps are needed.
+            * Recommend steps that are specific to the data provided. Include why these steps are necessary or beneficial.
+            * If no additional steps are needed, simply state that no additional steps are required.
+            
+            IMPORTANT:
+            Make sure to take into account any additional user instructions that may add, remove or modify some of these steps. Include comments in your code to explain your reasoning for each step. Include comments if something is not done because a user requested. Include comments if something is done because a user requested.
+            
+            User instructions:
+            {user_instructions}
+
+            Previously Recommended Steps (if any):
+            {recommended_steps}
+
+            Below are summaries of all datasets provided:
+            {all_datasets_summary}
+
+            Return steps as a numbered list. You can return short code snippets to demonstrate actions. But do not return a fully coded solution. The code will be generated separately by a Coding Agent.
+            
+            Avoid these:
+            1. Do not include steps to save files.
+            2. Do not include unrelated user instructions that are not related to the data cleaning.
+            """,
+            input_variables=["user_instructions", "recommended_steps", "all_datasets_summary"]
+        )
+
+        data_raw = state.get("data_raw")
+        df = pd.DataFrame.from_dict(data_raw)
+
+        all_datasets_summary = get_dataframe_summary([df], n_sample=n_samples)
+        
+        all_datasets_summary_str = "\n\n".join(all_datasets_summary)
+
+        steps_agent = recommend_steps_prompt | llm
+        recommended_steps = steps_agent.invoke({
+            "user_instructions": state.get("user_instructions"),
+            "recommended_steps": state.get("recommended_steps"),
+            "all_datasets_summary": all_datasets_summary_str
+        }) 
+        
+        return {
+            "recommended_steps": format_recommended_steps(recommended_steps.content.strip(), heading="# Recommended Data Cleaning Steps:"),
+            "all_datasets_summary": all_datasets_summary_str
+        }
+    
+    def create_data_cleaner_code(state: GraphState):
+        
+        print("    * CREATE DATA CLEANER CODE")
+        
+        if bypass_recommended_steps:
+            print(format_agent_name(AGENT_NAME))
+            
+            data_raw = state.get("data_raw")
+            df = pd.DataFrame.from_dict(data_raw)
+
+            all_datasets_summary = get_dataframe_summary([df], n_sample=n_samples)
+            
+            all_datasets_summary_str = "\n\n".join(all_datasets_summary)
+        else:
+            all_datasets_summary_str = state.get("all_datasets_summary")
+        
+        
+        data_cleaning_prompt = PromptTemplate(
+            template="""
+            You are a Data Cleaning Agent. Your job is to create a {function_name}() function that can be run on the data provided using the following recommended steps.
+
+            Recommended Steps:
+            {recommended_steps}
+
+            You can use Pandas, Numpy, and Scikit Learn libraries to clean the data.
+
+            Below are summaries of all datasets provided. Use this information about the data to help determine how to clean the data:
+
+            {all_datasets_summary}
+
+            Return Python code in ```python``` format with a single function definition, {function_name}(data_raw), that includes all imports inside the function.
+
+            Return code to provide the data cleaning function:
+
+            def {function_name}(data_raw):
+                import pandas as pd
+                import numpy as np
+                ...
+                return data_cleaned
+
+            Best Practices and Error Preventions:
+
+            Always ensure that when assigning the output of fit_transform() from SimpleImputer to a Pandas DataFrame column, you call .ravel() or flatten the array, because fit_transform() returns a 2D array while a DataFrame column is 1D.
+            
+            """,
+            input_variables=["recommended_steps", "all_datasets_summary", "function_name"]
+        )
+
+        data_cleaning_agent = data_cleaning_prompt | llm | PythonOutputParser()
+        
+        response = data_cleaning_agent.invoke({
+            "recommended_steps": state.get("recommended_steps"),
+            "all_datasets_summary": all_datasets_summary_str,
+            "function_name": function_name
+        })
+        
+        response = relocate_imports_inside_function(response)
+        response = add_comments_to_top(response, agent_name=AGENT_NAME)
+        
+        # For logging: store the code generated:
+        file_path, file_name_2 = log_ai_function(
+            response=response,
+            file_name=file_name,
+            log=log,
+            log_path=log_path,
+            overwrite=overwrite
+        )
+   
+        return {
+            "data_cleaner_function" : response,
+            "data_cleaner_function_path": file_path,
+            "data_cleaner_file_name": file_name_2,
+            "data_cleaner_function_name": function_name,
+            "all_datasets_summary": all_datasets_summary_str
+        }
+        
+    # Human Review
+        
+    prompt_text_human_review = "Are the following data cleaning instructions correct? (Answer 'yes' or provide modifications)\n{steps}"
+    
+    if not bypass_explain_code:
+        def human_review(state: GraphState) -> Command[Literal["recommend_cleaning_steps", "explain_data_cleaner_code"]]:
+            return node_func_human_review(
+                state=state,
+                prompt_text=prompt_text_human_review,
+                yes_goto= 'explain_data_cleaner_code',
+                no_goto="recommend_cleaning_steps",
+                user_instructions_key="user_instructions",
+                recommended_steps_key="recommended_steps",
+                code_snippet_key="data_cleaner_function",
+            )
+    else:
+        def human_review(state: GraphState) -> Command[Literal["recommend_cleaning_steps", "__end__"]]:
+            return node_func_human_review(
+                state=state,
+                prompt_text=prompt_text_human_review,
+                yes_goto= '__end__',
+                no_goto="recommend_cleaning_steps",
+                user_instructions_key="user_instructions",
+                recommended_steps_key="recommended_steps",
+                code_snippet_key="data_cleaner_function", 
+            )
+    
+    def execute_data_cleaner_code(state):
+        return node_func_execute_agent_code_on_data(
+            state=state,
+            data_key="data_raw",
+            result_key="data_cleaned",
+            error_key="data_cleaner_error",
+            code_snippet_key="data_cleaner_function",
+            agent_function_name=state.get("data_cleaner_function_name"),
+            pre_processing=lambda data: pd.DataFrame.from_dict(data),
+            post_processing=lambda df: df.to_dict() if isinstance(df, pd.DataFrame) else df,
+            error_message_prefix="An error occurred during data cleaning: "
+        )
+        
+    def fix_data_cleaner_code(state: GraphState):
+        data_cleaner_prompt = """
+        You are a Data Cleaning Agent. Your job is to create a {function_name}() function that can be run on the data provided. The function is currently broken and needs to be fixed.
+        
+        Make sure to only return the function definition for {function_name}().
+        
+        Return Python code in ```python``` format with a single function definition, {function_name}(data_raw), that includes all imports inside the function.
+        
+        This is the broken code (please fix): 
+        {code_snippet}
+
+        Last Known Error:
+        {error}
+        """
+
+        return node_func_fix_agent_code(
+            state=state,
+            code_snippet_key="data_cleaner_function",
+            error_key="data_cleaner_error",
+            llm=llm,  
+            prompt_template=data_cleaner_prompt,
+            agent_name=AGENT_NAME,
+            log=log,
+            file_path=state.get("data_cleaner_function_path"),
+            function_name=state.get("data_cleaner_function_name"),
+        )
+    
+    # Final reporting node
+    def report_agent_outputs(state: GraphState):
+        return node_func_report_agent_outputs(
+            state=state,
+            keys_to_include=[
+                "recommended_steps",
+                "data_cleaner_function",
+                "data_cleaner_function_path",
+                "data_cleaner_function_name",
+                "data_cleaner_error",
+            ],
+            result_key="messages",
+            role=AGENT_NAME,
+            custom_title="Data Cleaning Agent Outputs"
+        )
+
+    node_functions = {
+        "recommend_cleaning_steps": recommend_cleaning_steps,
+        "human_review": human_review,
+        "create_data_cleaner_code": create_data_cleaner_code,
+        "execute_data_cleaner_code": execute_data_cleaner_code,
+        "fix_data_cleaner_code": fix_data_cleaner_code,
+        "report_agent_outputs": report_agent_outputs, 
+    }
+
+    app = create_coding_agent_graph(
+        GraphState=GraphState,
+        node_functions=node_functions,
+        recommended_steps_node_name="recommend_cleaning_steps",
+        create_code_node_name="create_data_cleaner_code",
+        execute_code_node_name="execute_data_cleaner_code",
+        fix_code_node_name="fix_data_cleaner_code",
+        explain_code_node_name="report_agent_outputs", 
+        error_key="data_cleaner_error",
+        human_in_the_loop=human_in_the_loop,
+        human_review_node_name="human_review",
+        checkpointer=checkpointer,
+        bypass_recommended_steps=bypass_recommended_steps,
+        bypass_explain_code=bypass_explain_code,
+        agent_name=AGENT_NAME,
+    )
+
+    return app
+     
+
+
+
+
+
+
+================================================
+FILE: ai_data_science_team/agents/data_loader_tools_agent.py
+================================================
+
+
+
+from typing import Any, Optional, Annotated, Sequence, List, Dict
+import operator
+
+import pandas as pd
+import os
+
+from IPython.display import Markdown
+
+from langchain_core.messages import BaseMessage, AIMessage
+
+from langgraph.prebuilt import create_react_agent, ToolNode
+from langgraph.prebuilt.chat_agent_executor import AgentState
+from langgraph.types import Checkpointer
+from langgraph.graph import START, END, StateGraph
+
+from ai_data_science_team.templates import BaseAgent
+from ai_data_science_team.utils.regex import format_agent_name
+from ai_data_science_team.tools.data_loader import (
+    load_directory,
+    load_file,
+    list_directory_contents,
+    list_directory_recursive,
+    get_file_info,
+    search_files_by_pattern,
+)
+from ai_data_science_team.utils.messages import get_tool_call_names
+
+AGENT_NAME = "data_loader_tools_agent"
+
+tools = [
+    load_directory,
+    load_file,
+    list_directory_contents,
+    list_directory_recursive,
+    get_file_info,
+    search_files_by_pattern,
+]
+
+class DataLoaderToolsAgent(BaseAgent):
+    """
+    A Data Loader Agent that can interact with data loading tools and search for files in your file system.
+    
+    Parameters:
+    ----------
+    model : langchain.llms.base.LLM
+        The language model used to generate the tool calling agent.
+    react_agent_kwargs : dict
+        Additional keyword arguments to pass to the create_react_agent function.
+    invoke_react_agent_kwargs : dict
+        Additional keyword arguments to pass to the invoke method of the react agent.
+    checkpointer : langgraph.types.Checkpointer
+        A checkpointer to use for saving and loading the agent's state.
+        
+    Methods:
+    --------
+    update_params(**kwargs)
+        Updates the agent's parameters and rebuilds the compiled graph.
+    ainvoke_agent(user_instructions: str=None, **kwargs)
+        Runs the agent with the given user instructions asynchronously.
+    invoke_agent(user_instructions: str=None, **kwargs)
+        Runs the agent with the given user instructions.
+    get_internal_messages(markdown: bool=False)
+        Returns the internal messages from the agent's response.
+    get_artifacts(as_dataframe: bool=False)
+        Returns the MLflow artifacts from the agent's response.
+    get_ai_message(markdown: bool=False)
+        Returns the AI message from the agent's response.
+    
+    """
+    
+    def __init__(
+        self, 
+        model: Any,
+        create_react_agent_kwargs: Optional[Dict]={},
+        invoke_react_agent_kwargs: Optional[Dict]={},
+        checkpointer: Optional[Checkpointer]=None,
+    ):
+        self._params = {
+            "model": model,
+            "create_react_agent_kwargs": create_react_agent_kwargs,
+            "invoke_react_agent_kwargs": invoke_react_agent_kwargs,
+            "checkpointer": checkpointer,
+        }
+        self._compiled_graph = self._make_compiled_graph()
+        self.response = None
+        
+    def _make_compiled_graph(self):
+        """
+        Creates the compiled graph for the agent.
+        """
+        self.response = None
+        return make_data_loader_tools_agent(**self._params)
+    
+    
+    def update_params(self, **kwargs):
+        """
+        Updates the agent's parameters and rebuilds the compiled graph.
+        """
+        for k, v in kwargs.items():
+            self._params[k] = v
+        self._compiled_graph = self._make_compiled_graph()
+        
+    async def ainvoke_agent(
+        self, 
+        user_instructions: str=None, 
+        **kwargs
+    ):
+        """
+        Runs the agent with the given user instructions.
+        
+        Parameters:
+        ----------
+        user_instructions : str, optional
+            The user instructions to pass to the agent.
+        kwargs : dict, optional
+            Additional keyword arguments to pass to the agents ainvoke method.
+        
+        """
+        response = await self._compiled_graph.ainvoke(
+            {
+                "user_instructions": user_instructions,
+            }, 
+            **kwargs
+        )
+        self.response = response
+        return None
+    
+    def invoke_agent(
+        self, 
+        user_instructions: str=None, 
+        **kwargs
+    ):
+        """
+        Runs the agent with the given user instructions.
+        
+        Parameters:
+        ----------
+        user_instructions : str, optional
+            The user instructions to pass to the agent.
+        kwargs : dict, optional
+            Additional keyword arguments to pass to the agents invoke method.
+        
+        """
+        response = self._compiled_graph.invoke(
+            {
+                "user_instructions": user_instructions,
+            },
+            **kwargs
+        )
+        self.response = response
+        return None
+    
+    def get_internal_messages(self, markdown: bool=False):
+        """
+        Returns the internal messages from the agent's response.
+        """
+        pretty_print = "\n\n".join([f"### {msg.type.upper()}\n\nID: {msg.id}\n\nContent:\n\n{msg.content}" for msg in self.response["internal_messages"]])       
+        if markdown:
+            return Markdown(pretty_print)
+        else:
+            return self.response["internal_messages"]
+    
+    def get_artifacts(self, as_dataframe: bool=False):
+        """
+        Returns the MLflow artifacts from the agent's response.
+        """
+        if as_dataframe:
+            return pd.DataFrame(self.response["data_loader_artifacts"])
+        else:
+            return self.response["data_loader_artifacts"]
+    
+    def get_ai_message(self, markdown: bool=False):
+        """
+        Returns the AI message from the agent's response.
+        """
+        if markdown:
+            return Markdown(self.response["messages"][0].content)
+        else:
+            return self.response["messages"][0].content
+    
+    def get_tool_calls(self):
+        """
+        Returns the tool calls made by the agent.
+        """
+        return self.response["tool_calls"]
+
+    
+
+def make_data_loader_tools_agent(
+    model: Any,
+    create_react_agent_kwargs: Optional[Dict]={},
+    invoke_react_agent_kwargs: Optional[Dict]={},
+    checkpointer: Optional[Checkpointer]=None,
+):
+    """
+    Creates a Data Loader Agent that can interact with data loading tools.
+    
+    Parameters:
+    ----------
+    model : langchain.llms.base.LLM
+        The language model used to generate the tool calling agent.
+    react_agent_kwargs : dict
+        Additional keyword arguments to pass to the create_react_agent function.
+    invoke_react_agent_kwargs : dict
+        Additional keyword arguments to pass to the invoke method of the react agent.
+    checkpointer : langgraph.types.Checkpointer
+        A checkpointer to use for saving and loading the agent's state.
+    
+    Returns:
+    --------
+    app : langchain.graphs.CompiledStateGraph
+        An agent that can interact with data loading tools.
+    """
+    
+    class GraphState(AgentState):
+        internal_messages: Annotated[Sequence[BaseMessage], operator.add]
+        user_instructions: str
+        data_loader_artifacts: dict
+        tool_calls: List[str]
+        
+    def data_loader_agent(state):
+        
+        print(format_agent_name(AGENT_NAME))
+        print("    ")
+        
+        print("    * RUN REACT TOOL-CALLING AGENT")
+        
+        tool_node = ToolNode(
+            tools=tools
+        )
+        
+        data_loader_agent = create_react_agent(
+            model, 
+            tools=tool_node, 
+            state_schema=GraphState,
+            checkpointer=checkpointer,
+            **create_react_agent_kwargs,
+        )
+        
+        response = data_loader_agent.invoke(
+            {
+                "messages": [("user", state["user_instructions"])],
+            },
+            invoke_react_agent_kwargs,
+        )
+        
+        print("    * POST-PROCESS RESULTS")
+        
+        internal_messages = response['messages']
+
+        # Ensure there is at least one AI message
+        if not internal_messages:
+            return {
+                "internal_messages": [],
+                "mlflow_artifacts": None,
+            }
+
+        # Get the last AI message
+        last_ai_message = AIMessage(internal_messages[-1].content, role = AGENT_NAME)
+
+        # Get the last tool artifact safely
+        last_tool_artifact = None
+        if len(internal_messages) > 1:
+            last_message = internal_messages[-2]  # Get second-to-last message
+            if hasattr(last_message, "artifact"):  # Check if it has an "artifact"
+                last_tool_artifact = last_message.artifact
+            elif isinstance(last_message, dict) and "artifact" in last_message:
+                last_tool_artifact = last_message["artifact"]
+
+        tool_calls = get_tool_call_names(internal_messages)
+        
+        return {
+            "messages": [last_ai_message], 
+            "internal_messages": internal_messages,
+            "data_loader_artifacts": last_tool_artifact,
+            "tool_calls": tool_calls,
+        }
+        
+    workflow = StateGraph(GraphState)
+    
+    workflow.add_node("data_loader_agent", data_loader_agent)
+    
+    workflow.add_edge(START, "data_loader_agent")
+    workflow.add_edge("data_loader_agent", END)
+    
+    app = workflow.compile(
+        checkpointer=checkpointer,
+        name=AGENT_NAME,
+    )
+
+    return app
+
+
+
+
+================================================
+FILE: ai_data_science_team/agents/data_visualization_agent.py
+================================================
+# BUSINESS SCIENCE UNIVERSITY
+# AI DATA SCIENCE TEAM
+# ***
+# * Agents: Data Visualization Agent
+
+
+# Libraries
+from typing import TypedDict, Annotated, Sequence, Literal
+import operator
+
+from langchain.prompts import PromptTemplate
+from langchain_core.messages import BaseMessage
+
+from langgraph.types import Command
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.types import Checkpointer
+
+import os
+import json
+import pandas as pd
+
+from IPython.display import Markdown
+
+from ai_data_science_team.templates import (
+    node_func_execute_agent_code_on_data,
+    node_func_human_review,
+    node_func_fix_agent_code,
+    node_func_report_agent_outputs,
+    create_coding_agent_graph,
+    BaseAgent,
+)
+from ai_data_science_team.parsers.parsers import PythonOutputParser
+from ai_data_science_team.utils.regex import (
+    relocate_imports_inside_function,
+    add_comments_to_top,
+    format_agent_name,
+    format_recommended_steps,
+    get_generic_summary,
+)
+from ai_data_science_team.tools.dataframe import get_dataframe_summary
+from ai_data_science_team.utils.logging import log_ai_function
+from ai_data_science_team.utils.plotly import plotly_from_dict
+
+# Setup
+AGENT_NAME = "data_visualization_agent"
+LOG_PATH = os.path.join(os.getcwd(), "logs/")
+
+# Class
+
+
+class DataVisualizationAgent(BaseAgent):
+    """
+    Creates a data visualization agent that can generate Plotly charts based on user-defined instructions or
+    default visualization steps (if any). The agent generates a Python function to produce the visualization,
+    executes it, and logs the process, including code and errors. It is designed to facilitate reproducible
+    and customizable data visualization workflows.
+
+    The agent may use default instructions for creating charts unless instructed otherwise, such as:
+    - Generating a recommended chart type (bar, scatter, line, etc.)
+    - Creating user-friendly titles and axis labels
+    - Applying consistent styling (template, font sizes, color themes)
+    - Handling theme details (white background, base font size, line size, etc.)
+
+    User instructions can modify, add, or remove any of these steps to tailor the visualization process.
+
+    Parameters
+    ----------
+    model : langchain.llms.base.LLM
+        The language model used to generate the data visualization function.
+    n_samples : int, optional
+        Number of samples used when summarizing the dataset for chart instructions. Defaults to 30.
+        Reducing this number can help avoid exceeding the model's token limits.
+    log : bool, optional
+        Whether to log the generated code and errors. Defaults to False.
+    log_path : str, optional
+        Directory path for storing log files. Defaults to None.
+    file_name : str, optional
+        Name of the file for saving the generated response. Defaults to "data_visualization.py".
+    function_name : str, optional
+        Name of the function for data visualization. Defaults to "data_visualization".
+    overwrite : bool, optional
+        Whether to overwrite the log file if it exists. If False, a unique file name is created. Defaults to True.
+    human_in_the_loop : bool, optional
+        Enables user review of data visualization instructions. Defaults to False.
+    bypass_recommended_steps : bool, optional
+        If True, skips the default recommended visualization steps. Defaults to False.
+    bypass_explain_code : bool, optional
+        If True, skips the step that provides code explanations. Defaults to False.
+    checkpointer : langgraph.types.Checkpointer
+        A checkpointer to use for saving and loading the agent
+
+    Methods
+    -------
+    update_params(**kwargs)
+        Updates the agent's parameters and rebuilds the compiled state graph.
+    ainvoke_agent(user_instructions: str, data_raw: pd.DataFrame, max_retries=3, retry_count=0)
+        Asynchronously generates a visualization based on user instructions.
+    invoke_agent(user_instructions: str, data_raw: pd.DataFrame, max_retries=3, retry_count=0)
+        Synchronously generates a visualization based on user instructions.
+    get_workflow_summary()
+        Retrieves a summary of the agent's workflow.
+    get_log_summary()
+        Retrieves a summary of logged operations if logging is enabled.
+    get_plotly_graph()
+        Retrieves the Plotly graph (as a dictionary) produced by the agent.
+    get_data_raw()
+        Retrieves the raw dataset as a pandas DataFrame (based on the last response).
+    get_data_visualization_function()
+        Retrieves the generated Python function used for data visualization.
+    get_recommended_visualization_steps()
+        Retrieves the agent's recommended visualization steps.
+    get_response()
+        Returns the response from the agent as a dictionary.
+    show()
+        Displays the agent's mermaid diagram.
+
+    Examples
+    --------
+    ```python
+    import pandas as pd
+    from langchain_openai import ChatOpenAI
+    from ai_data_science_team.agents import DataVisualizationAgent
+
+    llm = ChatOpenAI(model="gpt-4o-mini")
+
+    data_visualization_agent = DataVisualizationAgent(
+        model=llm,
+        n_samples=30,
+        log=True,
+        log_path="logs",
+        human_in_the_loop=True
+    )
+
+    df = pd.read_csv("https://raw.githubusercontent.com/business-science/ai-data-science-team/refs/heads/master/data/churn_data.csv")
+
+    data_visualization_agent.invoke_agent(
+        user_instructions="Generate a scatter plot of age vs. total charges with a trend line.",
+        data_raw=df,
+        max_retries=3,
+        retry_count=0
+    )
+
+    plotly_graph_dict = data_visualization_agent.get_plotly_graph()
+    # You can render plotly_graph_dict with plotly.io.from_json or
+    # something similar in a Jupyter Notebook.
+
+    response = data_visualization_agent.get_response()
+    ```
+
+    Returns
+    --------
+    DataVisualizationAgent : langchain.graphs.CompiledStateGraph
+        A data visualization agent implemented as a compiled state graph.
+    """
+
+    def __init__(
+        self,
+        model,
+        n_samples=30,
+        log=False,
+        log_path=None,
+        file_name="data_visualization.py",
+        function_name="data_visualization",
+        overwrite=True,
+        human_in_the_loop=False,
+        bypass_recommended_steps=False,
+        bypass_explain_code=False,
+        checkpointer=None,
+    ):
+        self._params = {
+            "model": model,
+            "n_samples": n_samples,
+            "log": log,
+            "log_path": log_path,
+            "file_name": file_name,
+            "function_name": function_name,
+            "overwrite": overwrite,
+            "human_in_the_loop": human_in_the_loop,
+            "bypass_recommended_steps": bypass_recommended_steps,
+            "bypass_explain_code": bypass_explain_code,
+            "checkpointer": checkpointer,
+        }
+        self._compiled_graph = self._make_compiled_graph()
+        self.response = None
+
+    def _make_compiled_graph(self):
+        """
+        Create the compiled graph for the data visualization agent.
+        Running this method will reset the response to None.
+        """
+        self.response = None
+        return make_data_visualization_agent(**self._params)
+
+    def update_params(self, **kwargs):
+        """
+        Updates the agent's parameters and rebuilds the compiled graph.
+        """
+        # Update parameters
+        for k, v in kwargs.items():
+            self._params[k] = v
+        # Rebuild the compiled graph
+        self._compiled_graph = self._make_compiled_graph()
+
+    async def ainvoke_agent(
+        self,
+        data_raw: pd.DataFrame,
+        user_instructions: str = None,
+        max_retries: int = 3,
+        retry_count: int = 0,
+        **kwargs,
+    ):
+        """
+        Asynchronously invokes the agent to generate a visualization.
+        The response is stored in the 'response' attribute.
+
+        Parameters
+        ----------
+        data_raw : pd.DataFrame
+            The raw dataset to be visualized.
+        user_instructions : str
+            Instructions for data visualization.
+        max_retries : int
+            Maximum retry attempts.
+        retry_count : int
+            Current retry attempt count.
+        **kwargs : dict
+            Additional keyword arguments passed to ainvoke().
+
+        Returns
+        -------
+        None
+        """
+        response = await self._compiled_graph.ainvoke(
+            {
+                "user_instructions": user_instructions,
+                "data_raw": data_raw.to_dict(),
+                "max_retries": max_retries,
+                "retry_count": retry_count,
+            },
+            **kwargs,
+        )
+        self.response = response
+        return None
+
+    def invoke_agent(
+        self,
+        data_raw: pd.DataFrame,
+        user_instructions: str = None,
+        max_retries: int = 3,
+        retry_count: int = 0,
+        **kwargs,
+    ):
+        """
+        Synchronously invokes the agent to generate a visualization.
+        The response is stored in the 'response' attribute.
+
+        Parameters
+        ----------
+        data_raw : pd.DataFrame
+            The raw dataset to be visualized.
+        user_instructions : str
+            Instructions for data visualization agent.
+        max_retries : int
+            Maximum retry attempts.
+        retry_count : int
+            Current retry attempt count.
+        **kwargs : dict
+            Additional keyword arguments passed to invoke().
+
+        Returns
+        -------
+        None
+        """
+        response = self._compiled_graph.invoke(
+            {
+                "user_instructions": user_instructions,
+                "data_raw": data_raw.to_dict(),
+                "max_retries": max_retries,
+                "retry_count": retry_count,
+            },
+            **kwargs,
+        )
+        self.response = response
+        return None
+
+    def get_workflow_summary(self, markdown=False):
+        """
+        Retrieves the agent's workflow summary, if logging is enabled.
+        """
+        if self.response and self.response.get("messages"):
+            summary = get_generic_summary(
+                json.loads(self.response.get("messages")[-1].content)
+            )
+            if markdown:
+                return Markdown(summary)
+            else:
+                return summary
+
+    def get_log_summary(self, markdown=False):
+        """
+        Logs a summary of the agent's operations, if logging is enabled.
+        """
+        if self.response:
+            if self.response.get("data_visualization_function_path"):
+                log_details = f"""
+## Data Visualization Agent Log Summary:
+
+Function Path: {self.response.get('data_visualization_function_path')}
+
+Function Name: {self.response.get('data_visualization_function_name')}
+                """
+                if markdown:
+                    return Markdown(log_details)
+                else:
+                    return log_details
+
+    def get_plotly_graph(self):
+        """
+        Retrieves the Plotly graph (in dictionary form) produced by the agent.
+
+        Returns
+        -------
+        dict or None
+            The Plotly graph dictionary if available, otherwise None.
+        """
+        if self.response:
+            return plotly_from_dict(self.response.get("plotly_graph", None))
+        return None
+
+    def get_data_raw(self):
+        """
+        Retrieves the raw dataset used in the last invocation.
+
+        Returns
+        -------
+        pd.DataFrame or None
+            The raw dataset as a DataFrame if available, otherwise None.
+        """
+        if self.response and self.response.get("data_raw"):
+            return pd.DataFrame(self.response.get("data_raw"))
+        return None
+
+    def get_data_visualization_function(self, markdown=False):
+        """
+        Retrieves the generated Python function used for data visualization.
+
+        Parameters
+        ----------
+        markdown : bool, optional
+            If True, returns the function in Markdown code block format.
+
+        Returns
+        -------
+        str or None
+            The Python function code as a string if available, otherwise None.
+        """
+        if self.response:
+            func_code = self.response.get("data_visualization_function", "")
+            if markdown:
+                return Markdown(f"```python\n{func_code}\n```")
+            return func_code
+        return None
+
+    def get_recommended_visualization_steps(self, markdown=False):
+        """
+        Retrieves the agent's recommended visualization steps.
+
+        Parameters
+        ----------
+        markdown : bool, optional
+            If True, returns the steps in Markdown format.
+
+        Returns
+        -------
+        str or None
+            The recommended steps if available, otherwise None.
+        """
+        if self.response:
+            steps = self.response.get("recommended_steps", "")
+            if markdown:
+                return Markdown(steps)
+            return steps
+        return None
+
+    def get_response(self):
+        """
+        Returns the agent's full response dictionary.
+
+        Returns
+        -------
+        dict or None
+            The response dictionary if available, otherwise None.
+        """
+        return self.response
+
+    def show(self):
+        """
+        Displays the agent's mermaid diagram for visual inspection of the compiled graph.
+        """
+        return self._compiled_graph.show()
+
+
+# Agent
+
+
+def make_data_visualization_agent(
+    model,
+    n_samples=30,
+    log=False,
+    log_path=None,
+    file_name="data_visualization.py",
+    function_name="data_visualization",
+    overwrite=True,
+    human_in_the_loop=False,
+    bypass_recommended_steps=False,
+    bypass_explain_code=False,
+    checkpointer=None,
+):
+    """
+    Creates a data visualization agent that can generate Plotly charts based on user-defined instructions or
+    default visualization steps. The agent generates a Python function to produce the visualization, executes it,
+    and logs the process, including code and errors. It is designed to facilitate reproducible and customizable
+    data visualization workflows.
+
+    The agent can perform the following default visualization steps unless instructed otherwise:
+    - Generating a recommended chart type (bar, scatter, line, etc.)
+    - Creating user-friendly titles and axis labels
+    - Applying consistent styling (template, font sizes, color themes)
+    - Handling theme details (white background, base font size, line size, etc.)
+
+    User instructions can modify, add, or remove any of these steps to tailor the visualization process.
+
+    Parameters
+    ----------
+    model : langchain.llms.base.LLM
+        The language model used to generate the data visualization function.
+    n_samples : int, optional
+        Number of samples used when summarizing the dataset for chart instructions. Defaults to 30.
+    log : bool, optional
+        Whether to log the generated code and errors. Defaults to False.
+    log_path : str, optional
+        Directory path for storing log files. Defaults to None.
+    file_name : str, optional
+        Name of the file for saving the generated response. Defaults to "data_visualization.py".
+    function_name : str, optional
+        Name of the function for data visualization. Defaults to "data_visualization".
+    overwrite : bool, optional
+        Whether to overwrite the log file if it exists. If False, a unique file name is created. Defaults to True.
+    human_in_the_loop : bool, optional
+        Enables user review of data visualization instructions. Defaults to False.
+    bypass_recommended_steps : bool, optional
+        If True, skips the default recommended visualization steps. Defaults to False.
+    bypass_explain_code : bool, optional
+        If True, skips the step that provides code explanations. Defaults to False.
+    checkpointer : langgraph.types.Checkpointer
+        A checkpointer to use for saving and loading the agent
+
+    Examples
+    --------
+    ``` python
+    import pandas as pd
+    from langchain_openai import ChatOpenAI
+    from ai_data_science_team.agents import data_visualization_agent
+
+    llm = ChatOpenAI(model="gpt-4o-mini")
+
+    data_visualization_agent = make_data_visualization_agent(llm)
+
+    df = pd.read_csv("https://raw.githubusercontent.com/business-science/ai-data-science-team/refs/heads/master/data/churn_data.csv")
+
+    response = data_visualization_agent.invoke({
+        "user_instructions": "Generate a scatter plot of tenure vs. total charges with a trend line.",
+        "data_raw": df.to_dict(),
+        "max_retries": 3,
+        "retry_count": 0
+    })
+
+    pd.DataFrame(response['plotly_graph'])
+    ```
+
+    Returns
+    -------
+    app : langchain.graphs.CompiledStateGraph
+        The data visualization agent as a state graph.
+    """
+
+    llm = model
+
+    if human_in_the_loop:
+        if checkpointer is None:
+            print(
+                "Human in the loop is enabled. A checkpointer is required. Setting to MemorySaver()."
+            )
+            checkpointer = MemorySaver()
+
+    # Human in th loop requires recommended steps
+    if bypass_recommended_steps and human_in_the_loop:
+        bypass_recommended_steps = False
+        print("Bypass recommended steps set to False to enable human in the loop.")
+
+    # Setup Log Directory
+    if log:
+        if log_path is None:
+            log_path = LOG_PATH
+        if not os.path.exists(log_path):
+            os.makedirs(log_path)
+
+    # Define GraphState for the router
+    class GraphState(TypedDict):
+        messages: Annotated[Sequence[BaseMessage], operator.add]
+        user_instructions: str
+        user_instructions_processed: str
+        recommended_steps: str
+        data_raw: dict
+        plotly_graph: dict
+        all_datasets_summary: str
+        data_visualization_function: str
+        data_visualization_function_path: str
+        data_visualization_function_file_name: str
+        data_visualization_function_name: str
+        data_visualization_error: str
+        max_retries: int
+        retry_count: int
+
+    def chart_instructor(state: GraphState):
+        print(format_agent_name(AGENT_NAME))
+        print("    * CREATE CHART GENERATOR INSTRUCTIONS")
+
+        recommend_steps_prompt = PromptTemplate(
+            template="""
+            You are a supervisor that is an expert in providing instructions to a chart generator agent for plotting. 
+    
+            You will take a question that a user has and the data that was generated to answer the question, and create instructions to create a chart from the data that will be passed to a chart generator agent.
+            
+            USER QUESTION / INSTRUCTIONS: 
+            {user_instructions}
+            
+            Previously Recommended Instructions (if any):
+            {recommended_steps}
+            
+            DATA SUMMARY: 
+            {all_datasets_summary}
+            
+            IMPORTANT:
+            
+            - Formulate chart generator instructions by informing the chart generator of what type of plotly plot to use (e.g. bar, line, scatter, etc) to best represent the data. 
+            - Think about how best to convey the information in the data to the user.
+            - If the user does not specify a type of plot, select the appropriate chart type based on the data summary provided and the user's question and how best to show the results.
+            - Come up with an informative title from the user's question and data provided. Also provide X and Y axis titles.
+            
+            CHART TYPE SELECTION TIPS:
+            
+            - If a numeric column has less than 10 unique values, consider this column to be treated as a categorical column. Pick a chart that is appropriate for categorical data.
+            - If a numeric column has more than 10 unique values, consider this column to be treated as a continuous column. Pick a chart that is appropriate for continuous data.       
+            
+            
+            RETURN FORMAT:
+            
+            Return your instructions in the following format:
+            CHART GENERATOR INSTRUCTIONS: 
+            FILL IN THE INSTRUCTIONS HERE
+            
+            Avoid these:
+            1. Do not include steps to save files.
+            2. Do not include unrelated user instructions that are not related to the chart generation.
+            """,
+            input_variables=[
+                "user_instructions",
+                "recommended_steps",
+                "all_datasets_summary",
+            ],
+        )
+
+        data_raw = state.get("data_raw")
+        df = pd.DataFrame.from_dict(data_raw)
+
+        all_datasets_summary = get_dataframe_summary(
+            [df], n_sample=n_samples, skip_stats=False
+        )
+
+        all_datasets_summary_str = "\n\n".join(all_datasets_summary)
+
+        chart_instructor = recommend_steps_prompt | llm
+
+        recommended_steps = chart_instructor.invoke(
+            {
+                "user_instructions": state.get("user_instructions"),
+                "recommended_steps": state.get("recommended_steps"),
+                "all_datasets_summary": all_datasets_summary_str,
+            }
+        )
+
+        return {
+            "recommended_steps": format_recommended_steps(
+                recommended_steps.content.strip(),
+                heading="# Recommended Data Cleaning Steps:",
+            ),
+            "all_datasets_summary": all_datasets_summary_str,
+        }
+
+    def chart_generator(state: GraphState):
+        print("    * CREATE DATA VISUALIZATION CODE")
+
+        if bypass_recommended_steps:
+            print(format_agent_name(AGENT_NAME))
+
+            data_raw = state.get("data_raw")
+            df = pd.DataFrame.from_dict(data_raw)
+
+            all_datasets_summary = get_dataframe_summary(
+                [df], n_sample=n_samples, skip_stats=False
+            )
+
+            all_datasets_summary_str = "\n\n".join(all_datasets_summary)
+
+            chart_generator_instructions = state.get("user_instructions")
+
+        else:
+            all_datasets_summary_str = state.get("all_datasets_summary")
+            chart_generator_instructions = state.get("recommended_steps")
+
+        prompt_template = PromptTemplate(
+            template="""
+            You are a chart generator agent that is an expert in generating plotly charts. You must use plotly or plotly.express to produce plots.
+    
+            Your job is to produce python code to generate visualizations with a function named {function_name}.
+            
+            You will take instructions from a Chart Instructor and generate a plotly chart from the data provided.
+            
+            CHART INSTRUCTIONS: 
+            {chart_generator_instructions}
+            
+            DATA: 
+            {all_datasets_summary}
+            
+            RETURN:
+            
+            Return Python code in ```python ``` format with a single function definition, {function_name}(data_raw), that includes all imports inside the function.
+            
+            Return the plotly chart as a dictionary.
+            
+            Return code to provide the data visualization function:
+            
+            def {function_name}(data_raw):
+                import pandas as pd
+                import numpy as np
+                import json
+                import plotly.graph_objects as go
+                import plotly.io as pio
+                
+                ...
+                
+                fig_json = pio.to_json(fig)
+                fig_dict = json.loads(fig_json)
+                
+                return fig_dict
+            
+            Avoid these:
+            1. Do not include steps to save files.
+            2. Do not include unrelated user instructions that are not related to the chart generation.
+            
+            """,
+            input_variables=[
+                "chart_generator_instructions",
+                "all_datasets_summary",
+                "function_name",
+            ],
+        )
+
+        data_visualization_agent = prompt_template | llm | PythonOutputParser()
+
+        response = data_visualization_agent.invoke(
+            {
+                "chart_generator_instructions": chart_generator_instructions,
+                "all_datasets_summary": all_datasets_summary_str,
+                "function_name": function_name,
+            }
+        )
+
+        response = relocate_imports_inside_function(response)
+        response = add_comments_to_top(response, agent_name=AGENT_NAME)
+
+        # For logging: store the code generated:
+        file_path, file_name_2 = log_ai_function(
+            response=response,
+            file_name=file_name,
+            log=log,
+            log_path=log_path,
+            overwrite=overwrite,
+        )
+
+        return {
+            "data_visualization_function": response,
+            "data_visualization_function_path": file_path,
+            "data_visualization_function_file_name": file_name_2,
+            "data_visualization_function_name": function_name,
+            "all_datasets_summary": all_datasets_summary_str,
+        }
+
+    # Human Review
+
+    prompt_text_human_review = "Are the following data visualization instructions correct? (Answer 'yes' or provide modifications)\n{steps}"
+
+    if not bypass_explain_code:
+
+        def human_review(
+            state: GraphState,
+        ) -> Command[Literal["chart_instructor", "explain_data_visualization_code"]]:
+            return node_func_human_review(
+                state=state,
+                prompt_text=prompt_text_human_review,
+                yes_goto="explain_data_visualization_code",
+                no_goto="chart_instructor",
+                user_instructions_key="user_instructions",
+                recommended_steps_key="recommended_steps",
+                code_snippet_key="data_visualization_function",
+            )
+    else:
+
+        def human_review(
+            state: GraphState,
+        ) -> Command[Literal["chart_instructor", "__end__"]]:
+            return node_func_human_review(
+                state=state,
+                prompt_text=prompt_text_human_review,
+                yes_goto="__end__",
+                no_goto="chart_instructor",
+                user_instructions_key="user_instructions",
+                recommended_steps_key="recommended_steps",
+                code_snippet_key="data_visualization_function",
+            )
+
+    def execute_data_visualization_code(state):
+        return node_func_execute_agent_code_on_data(
+            state=state,
+            data_key="data_raw",
+            result_key="plotly_graph",
+            error_key="data_visualization_error",
+            code_snippet_key="data_visualization_function",
+            agent_function_name=state.get("data_visualization_function_name"),
+            pre_processing=lambda data: pd.DataFrame.from_dict(data),
+            # post_processing=lambda df: df.to_dict() if isinstance(df, pd.DataFrame) else df,
+            error_message_prefix="An error occurred during data visualization: ",
+        )
+
+    def fix_data_visualization_code(state: GraphState):
+        prompt = """
+        You are a Data Visualization Agent. Your job is to create a {function_name}() function that can be run on the data provided. The function is currently broken and needs to be fixed.
+        
+        Make sure to only return the function definition for {function_name}().
+        
+        Return Python code in ```python``` format with a single function definition, {function_name}(data_raw), that includes all imports inside the function.
+        
+        This is the broken code (please fix): 
+        {code_snippet}
+
+        Last Known Error:
+        {error}
+        """
+
+        return node_func_fix_agent_code(
+            state=state,
+            code_snippet_key="data_visualization_function",
+            error_key="data_visualization_error",
+            llm=llm,
+            prompt_template=prompt,
+            agent_name=AGENT_NAME,
+            log=log,
+            file_path=state.get("data_visualization_function_path"),
+            function_name=state.get("data_visualization_function_name"),
+        )
+
+    # Final reporting node
+    def report_agent_outputs(state: GraphState):
+        return node_func_report_agent_outputs(
+            state=state,
+            keys_to_include=[
+                "recommended_steps",
+                "data_visualization_function",
+                "data_visualization_function_path",
+                "data_visualization_function_name",
+                "data_visualization_error",
+            ],
+            result_key="messages",
+            role=AGENT_NAME,
+            custom_title="Data Visualization Agent Outputs",
+        )
+
+    # Define the graph
+    node_functions = {
+        "chart_instructor": chart_instructor,
+        "human_review": human_review,
+        "chart_generator": chart_generator,
+        "execute_data_visualization_code": execute_data_visualization_code,
+        "fix_data_visualization_code": fix_data_visualization_code,
+        "report_agent_outputs": report_agent_outputs,
+    }
+
+    app = create_coding_agent_graph(
+        GraphState=GraphState,
+        node_functions=node_functions,
+        recommended_steps_node_name="chart_instructor",
+        create_code_node_name="chart_generator",
+        execute_code_node_name="execute_data_visualization_code",
+        fix_code_node_name="fix_data_visualization_code",
+        explain_code_node_name="report_agent_outputs",
+        error_key="data_visualization_error",
+        human_in_the_loop=human_in_the_loop,  # or False
+        human_review_node_name="human_review",
+        checkpointer=checkpointer,
+        bypass_recommended_steps=bypass_recommended_steps,
+        bypass_explain_code=bypass_explain_code,
+        agent_name=AGENT_NAME,
+    )
+
+    return app
+
+
+
+================================================
+FILE: ai_data_science_team/agents/data_wrangling_agent.py
+================================================
+# BUSINESS SCIENCE UNIVERSITY
+# AI DATA SCIENCE TEAM
+# ***
+# * Agents: Data Wrangling Agent
+
+# Libraries
+from typing import TypedDict, Annotated, Sequence, Literal, Union, Optional
+import operator
+import os
+import json
+import pandas as pd
+from IPython.display import Markdown
+
+from langchain.prompts import PromptTemplate
+from langchain_core.messages import BaseMessage
+from langgraph.types import Command, Checkpointer
+from langgraph.checkpoint.memory import MemorySaver
+
+from ai_data_science_team.templates import(
+    node_func_execute_agent_code_on_data, 
+    node_func_human_review,
+    node_func_fix_agent_code, 
+    node_func_report_agent_outputs,
+    create_coding_agent_graph,
+    BaseAgent,
+)
+from ai_data_science_team.parsers.parsers import PythonOutputParser
+from ai_data_science_team.utils.regex import (
+    relocate_imports_inside_function, 
+    add_comments_to_top, 
+    format_agent_name, 
+    format_recommended_steps, 
+    get_generic_summary,
+)
+from ai_data_science_team.tools.dataframe import get_dataframe_summary
+from ai_data_science_team.utils.logging import log_ai_function
+
+# Setup Logging Path
+AGENT_NAME = "data_wrangling_agent"
+LOG_PATH = os.path.join(os.getcwd(), "logs/")
+
+# Class
+
+class DataWranglingAgent(BaseAgent):
+    """
+    Creates a data wrangling agent that can work with one or more datasets, performing operations such as 
+    joining/merging multiple datasets, reshaping, aggregating, encoding, creating computed features, 
+    and ensuring consistent data types. The agent generates a Python function to wrangle the data, 
+    executes the function, and logs the process (if enabled).
+
+    The agent can handle:
+    - A single dataset (provided as a dictionary of {column: list_of_values})
+    - Multiple datasets (provided as a list of such dictionaries)
+    
+    Key wrangling steps can include:
+    - Merging or joining datasets
+    - Pivoting/melting data for reshaping
+    - GroupBy aggregations (sums, means, counts, etc.)
+    - Encoding categorical variables
+    - Computing new columns from existing ones
+    - Dropping or rearranging columns
+    - Any additional user instructions
+
+    Parameters
+    ----------
+    model : langchain.llms.base.LLM
+        The language model used to generate the data wrangling function.
+    n_samples : int, optional
+        Number of samples to show in the data summary for wrangling. Defaults to 30.
+    log : bool, optional
+        Whether to log the generated code and errors. Defaults to False.
+    log_path : str, optional
+        Directory path for storing log files. Defaults to None.
+    file_name : str, optional
+        Name of the file for saving the generated response. Defaults to "data_wrangler.py".
+    function_name : str, optional
+        Name of the function to be generated. Defaults to "data_wrangler".
+    overwrite : bool, optional
+        Whether to overwrite the log file if it exists. If False, a unique file name is created. Defaults to True.
+    human_in_the_loop : bool, optional
+        Enables user review of data wrangling instructions. Defaults to False.
+    bypass_recommended_steps : bool, optional
+        If True, skips the step that generates recommended data wrangling steps. Defaults to False.
+    bypass_explain_code : bool, optional
+        If True, skips the step that provides code explanations. Defaults to False.
+    checkpointer : Checkpointer, optional
+        A checkpointer object to save and load the agent's state. Defaults to None.
+
+    Methods
+    -------
+    update_params(**kwargs)
+        Updates the agent's parameters and rebuilds the compiled state graph.
+
+    ainvoke_agent(user_instructions: str, data_raw: Union[dict, list], max_retries=3, retry_count=0)
+        Asynchronously wrangles the provided dataset(s) based on user instructions.
+
+    invoke_agent(user_instructions: str, data_raw: Union[dict, list], max_retries=3, retry_count=0)
+        Synchronously wrangles the provided dataset(s) based on user instructions.
+
+    get_workflow_summary()
+        Retrieves a summary of the agent's workflow.
+
+    get_log_summary()
+        Retrieves a summary of logged operations if logging is enabled.
+
+    get_data_wrangled()
+        Retrieves the final wrangled dataset (as a dictionary of {column: list_of_values}).
+
+    get_data_raw()
+        Retrieves the raw dataset(s).
+
+    get_data_wrangler_function()
+        Retrieves the generated Python function used for data wrangling.
+
+    get_recommended_wrangling_steps()
+        Retrieves the agent's recommended wrangling steps.
+
+    get_response()
+        Returns the full response dictionary from the agent.
+
+    show()
+        Displays the agent's mermaid diagram for visual inspection of the compiled graph.
+
+    Examples
+    --------
+    ```python
+    import pandas as pd
+    from langchain_openai import ChatOpenAI
+    from ai_data_science_team.agents import DataWranglingAgent
+
+    # Single dataset example
+    llm = ChatOpenAI(model="gpt-4o-mini")
+
+    data_wrangling_agent = DataWranglingAgent(
+        model=llm, 
+        n_samples=30,
+        log=True, 
+        log_path="logs", 
+        human_in_the_loop=True
+    )
+
+    df = pd.read_csv("https://raw.githubusercontent.com/business-science/ai-data-science-team/refs/heads/master/data/churn_data.csv")
+
+    data_wrangling_agent.invoke_agent(
+        user_instructions="Group by 'gender' and compute mean of 'tenure'.",
+        data_raw=df,  # data_raw can be df.to_dict() or just a DataFrame
+        max_retries=3,
+        retry_count=0
+    )
+
+    data_wrangled = data_wrangling_agent.get_data_wrangled()
+    response = data_wrangling_agent.get_response()
+
+    # Multiple dataset example (list of dicts)
+    df1 = pd.DataFrame({'id': [1,2,3], 'val1': [10,20,30]})
+    df2 = pd.DataFrame({'id': [1,2,3], 'val2': [40,50,60]})
+
+    data_wrangling_agent.invoke_agent(
+        user_instructions="Merge these two datasets on 'id' and compute a new column 'val_sum' = val1+val2",
+        data_raw=[df1, df2],   # multiple datasets
+        max_retries=3,
+        retry_count=0
+    )
+
+    data_wrangled = data_wrangling_agent.get_data_wrangled()
+    ```
+    
+    Returns
+    -------
+    DataWranglingAgent : langchain.graphs.CompiledStateGraph
+        A data wrangling agent implemented as a compiled state graph.
+    """
+
+    def __init__(
+        self,
+        model,
+        n_samples=30,
+        log=False,
+        log_path=None,
+        file_name="data_wrangler.py",
+        function_name="data_wrangler",
+        overwrite=True,
+        human_in_the_loop=False,
+        bypass_recommended_steps=False,
+        bypass_explain_code=False,
+        checkpointer=None,
+    ):
+        self._params = {
+            "model": model,
+            "n_samples": n_samples,
+            "log": log,
+            "log_path": log_path,
+            "file_name": file_name,
+            "function_name": function_name,
+            "overwrite": overwrite,
+            "human_in_the_loop": human_in_the_loop,
+            "bypass_recommended_steps": bypass_recommended_steps,
+            "bypass_explain_code": bypass_explain_code,
+            "checkpointer": checkpointer,
+        }
+        self._compiled_graph = self._make_compiled_graph()
+        self.response = None
+
+    def _make_compiled_graph(self):
+        """
+        Create the compiled graph for the data wrangling agent. 
+        Running this method will reset the response to None.
+        """
+        self.response = None
+        return make_data_wrangling_agent(**self._params)
+
+    def update_params(self, **kwargs):
+        """
+        Updates the agent's parameters and rebuilds the compiled graph.
+        """
+        for k, v in kwargs.items():
+            self._params[k] = v
+        self._compiled_graph = self._make_compiled_graph()
+
+    async def ainvoke_agent(
+        self,
+        data_raw: Union[pd.DataFrame, dict, list],
+        user_instructions: str=None,
+        max_retries:int=3,
+        retry_count:int=0,
+        **kwargs
+    ):
+        """
+        Asynchronously wrangles the provided dataset(s) based on user instructions.
+        The response is stored in the 'response' attribute.
+
+        Parameters
+        ----------
+        data_raw : Union[pd.DataFrame, dict, list]
+            The raw dataset(s) to be wrangled. 
+            Can be a single DataFrame, a single dict ({col: list_of_values}), 
+              or a list of dicts if multiple datasets are provided.
+        user_instructions : str
+            Instructions for data wrangling.
+        max_retries : int
+            Maximum retry attempts.
+        retry_count : int
+            Current retry attempt count.
+        **kwargs
+            Additional keyword arguments to pass to ainvoke().
+
+        Returns
+        -------
+        None
+        """
+        data_input = self._convert_data_input(data_raw)
+        response = await self._compiled_graph.ainvoke({
+            "user_instructions": user_instructions,
+            "data_raw": data_input,
+            "max_retries": max_retries,
+            "retry_count": retry_count
+        }, **kwargs)
+        self.response = response
+        return None
+
+    def invoke_agent(
+        self,
+        data_raw: Union[pd.DataFrame, dict, list],
+        user_instructions: str=None,
+        max_retries:int=3,
+        retry_count:int=0,
+        **kwargs
+    ):
+        """
+        Synchronously wrangles the provided dataset(s) based on user instructions.
+        The response is stored in the 'response' attribute.
+
+        Parameters
+        ----------
+        data_raw : Union[pd.DataFrame, dict, list]
+            The raw dataset(s) to be wrangled.
+            Can be a single DataFrame, a single dict, or a list of dicts.
+        user_instructions : str
+            Instructions for data wrangling agent.
+        max_retries : int
+            Maximum retry attempts.
+        retry_count : int
+            Current retry attempt count.
+        **kwargs
+            Additional keyword arguments to pass to invoke().
+
+        Returns
+        -------
+        None
+        """
+        data_input = self._convert_data_input(data_raw)
+        response = self._compiled_graph.invoke({
+            "user_instructions": user_instructions,
+            "data_raw": data_input,
+            "max_retries": max_retries,
+            "retry_count": retry_count
+        }, **kwargs)
+        self.response = response
+        return None
+
+    def get_workflow_summary(self, markdown=False):
+        """
+        Retrieves the agent's workflow summary, if logging is enabled.
+        """
+        if self.response and self.response.get("messages"):
+            summary = get_generic_summary(json.loads(self.response.get("messages")[-1].content))
+            if markdown:
+                return Markdown(summary)
+            else:
+                return summary
+
+    def get_log_summary(self, markdown=False):
+        """
+        Logs a summary of the agent's operations, if logging is enabled.
+        """
+        if self.response:
+            if self.response.get('data_wrangler_function_path'):
+                log_details = f"""
+## Data Wrangling Agent Log Summary:
+
+Function Path: {self.response.get('data_wrangler_function_path')}
+
+Function Name: {self.response.get('data_wrangler_function_name')}
+                """
+                if markdown:
+                    return Markdown(log_details) 
+                else:
+                    return log_details
+
+    def get_data_wrangled(self) -> Optional[pd.DataFrame]:
+        """
+        Retrieves the wrangled data after running invoke_agent() or ainvoke_agent().
+
+        Returns
+        -------
+        pd.DataFrame or None
+            The wrangled dataset as a pandas DataFrame (if available).
+        """
+        if self.response and "data_wrangled" in self.response:
+            return pd.DataFrame(self.response["data_wrangled"])
+        return None
+
+    def get_data_raw(self) -> Union[dict, list, None]:
+        """
+        Retrieves the original raw data from the last invocation.
+
+        Returns
+        -------
+        Union[dict, list, None]
+            The original dataset(s) as a single dict or a list of dicts, or None if not available.
+        """
+        if self.response and "data_raw" in self.response:
+            return self.response["data_raw"]
+        return None
+
+    def get_data_wrangler_function(self, markdown=False) -> Optional[str]:
+        """
+        Retrieves the generated data wrangling function code.
+
+        Parameters
+        ----------
+        markdown : bool, optional
+            If True, returns the function in Markdown code block format.
+
+        Returns
+        -------
+        str or None
+            The Python function code, or None if not available.
+        """
+        if self.response and "data_wrangler_function" in self.response:
+            code = self.response["data_wrangler_function"]
+            if markdown:
+                return Markdown(f"```python\n{code}\n```")
+            return code
+        return None
+
+    def get_recommended_wrangling_steps(self, markdown=False) -> Optional[str]:
+        """
+        Retrieves the agent's recommended data wrangling steps.
+
+        Parameters
+        ----------
+        markdown : bool, optional
+            If True, returns the steps in Markdown format.
+
+        Returns
+        -------
+        str or None
+            The recommended steps, or None if not available.
+        """
+        if self.response and "recommended_steps" in self.response:
+            steps = self.response["recommended_steps"]
+            if markdown:
+                return Markdown(steps)
+            return steps
+        return None
+
+    @staticmethod
+    def _convert_data_input(data_raw: Union[pd.DataFrame, dict, list]) -> Union[dict, list]:
+        """
+        Internal utility to convert data_raw (which could be a DataFrame, dict, or list of dicts)
+        into the format expected by the underlying agent (dict or list of dicts).
+
+        Parameters
+        ----------
+        data_raw : Union[pd.DataFrame, dict, list]
+            The raw input data to be converted.
+
+        Returns
+        -------
+        Union[dict, list]
+            The data in a dictionary or list-of-dictionaries format.
+        """
+        # If a single DataFrame, convert to dict
+        if isinstance(data_raw, pd.DataFrame):
+            return data_raw.to_dict()
+
+        # If it's already a dict (single dataset)
+        if isinstance(data_raw, dict):
+            return data_raw
+
+        # If it's already a list, check if it's a list of DataFrames or dicts
+        if isinstance(data_raw, list):
+            # Convert any DataFrame item to dict
+            converted_list = []
+            for item in data_raw:
+                if isinstance(item, pd.DataFrame):
+                    converted_list.append(item.to_dict())
+                elif isinstance(item, dict):
+                    converted_list.append(item)
+                else:
+                    raise ValueError("List must contain only DataFrames or dictionaries.")
+            return converted_list
+
+        raise ValueError("data_raw must be a DataFrame, a dict, or a list of dicts/DataFrames.")
+
+
+# Function
+
+def make_data_wrangling_agent(
+    model, 
+    n_samples=30,
+    log=False, 
+    log_path=None, 
+    file_name="data_wrangler.py",
+    function_name="data_wrangler",
+    overwrite=True, 
+    human_in_the_loop=False, 
+    bypass_recommended_steps=False, 
+    bypass_explain_code=False,
+    checkpointer=None,
+):
+    """
+    Creates a data wrangling agent that can be run on one or more datasets. The agent can be
+    instructed to perform common data wrangling steps such as:
+    
+    - Joining or merging multiple datasets
+    - Reshaping data (pivoting, melting)
+    - Aggregating data via groupby operations
+    - Encoding categorical variables (one-hot, label encoding)
+    - Creating computed features (e.g., ratio of two columns)
+    - Ensuring consistent data types
+    - Dropping or rearranging columns
+
+    The agent takes in one or more datasets (passed as a dictionary or list of dictionaries if working on multiple dictionaries), user instructions,
+    and outputs a python function that can be used to wrangle the data. If multiple datasets
+    are provided, the agent should combine or transform them according to user instructions.
+
+    Parameters
+    ----------
+    model : langchain.llms.base.LLM
+        The language model to use to generate code.
+    n_samples : int, optional
+        The number of samples to show in the data summary. Defaults to 30.
+        If you get an error due to maximum tokens, try reducing this number.
+        > "This model's maximum context length is 128000 tokens. However, your messages resulted in 333858 tokens. Please reduce the length of the messages."
+    log : bool, optional
+        Whether or not to log the code generated and any errors that occur.
+        Defaults to False.
+    log_path : str, optional
+        The path to the directory where the log files should be stored. Defaults to "logs/".
+    file_name : str, optional
+        The name of the file to save the response to. Defaults to "data_wrangler.py".
+    function_name : str, optional
+        The name of the function to be generated. Defaults to "data_wrangler".
+    overwrite : bool, optional
+        Whether or not to overwrite the log file if it already exists. If False, a unique file name will be created. 
+        Defaults to True.
+    human_in_the_loop : bool, optional
+        Whether or not to use human in the loop. If True, adds an interrupt and human-in-the-loop 
+        step that asks the user to review the data wrangling instructions. Defaults to False.
+    bypass_recommended_steps : bool, optional
+        Bypass the recommendation step, by default False
+    bypass_explain_code : bool, optional
+        Bypass the code explanation step, by default False.
+    checkpointer : Checkpointer, optional
+        A checkpointer object to save and load the agent's state. Defaults to None.
+
+    Example
+    -------
+    ``` python
+    from langchain_openai import ChatOpenAI
+    import pandas as pd
+    
+    df = pd.DataFrame({
+        'category': ['A', 'B', 'A', 'C'],
+        'value': [10, 20, 15, 5]
+    })
+    
+    llm = ChatOpenAI(model="gpt-4o-mini")
+    
+    data_wrangling_agent = make_data_wrangling_agent(llm)
+
+    response = data_wrangling_agent.invoke({
+        "user_instructions": "Calculate the sum and mean of 'value' by 'category'.",
+        "data_raw": df.to_dict(),
+        "max_retries":3, 
+        "retry_count":0
+    })
+    pd.DataFrame(response['data_wrangled'])
+    ```
+    
+    Returns
+    -------
+    app : langchain.graphs.CompiledStateGraph
+        The data wrangling agent as a state graph.
+    """
+    llm = model
+    
+    if human_in_the_loop:
+        if checkpointer is None:
+            print("Human in the loop is enabled. A checkpointer is required. Setting to MemorySaver().")
+            checkpointer = MemorySaver()
+    
+    # Human in th loop requires recommended steps
+    if bypass_recommended_steps and human_in_the_loop:
+        bypass_recommended_steps = False
+        print("Bypass recommended steps set to False to enable human in the loop.")
+    
+    # Setup Log Directory
+    if log:
+        if log_path is None:
+            log_path = LOG_PATH
+        if not os.path.exists(log_path):
+            os.makedirs(log_path)    
+    
+    class GraphState(TypedDict):
+        messages: Annotated[Sequence[BaseMessage], operator.add]
+        user_instructions: str
+        recommended_steps: str
+        # data_raw should be a dict for a single dataset or a list of dicts for multiple datasets
+        data_raw: Union[dict, list]
+        data_wrangled: dict
+        all_datasets_summary: str
+        data_wrangler_function: str
+        data_wrangler_function_path: str
+        data_wrangler_function_name: str
+        data_wrangler_error: str
+        max_retries: int
+        retry_count: int
+
+    def recommend_wrangling_steps(state: GraphState):
+        print(format_agent_name(AGENT_NAME))
+        print("    * RECOMMEND WRANGLING STEPS")
+
+        data_raw = state.get("data_raw")
+
+        if isinstance(data_raw, dict):
+            # Single dataset scenario
+            primary_dataset_name = "main"
+            datasets = {primary_dataset_name: data_raw}
+        elif isinstance(data_raw, list) and all(isinstance(item, dict) for item in data_raw):
+            # Multiple datasets scenario
+            datasets = {f"dataset_{i}": d for i, d in enumerate(data_raw, start=1)}
+            primary_dataset_name = "dataset_1"
+        else:
+            raise ValueError("data_raw must be a dict or a list of dicts.")
+
+        # Convert all datasets to DataFrames for inspection
+        dataframes = {name: pd.DataFrame.from_dict(d) for name, d in datasets.items()}
+
+        # Create a summary for all datasets
+        # We'll include a short sample and info for each dataset
+        all_datasets_summary = get_dataframe_summary(dataframes, n_sample=n_samples, skip_stats=True)
+
+        # Join all datasets summaries into one big text block
+        all_datasets_summary_str = "\n\n".join(all_datasets_summary)
+
+        # Prepare the prompt:
+        # We now include summaries for all datasets, not just the primary dataset.
+        # The LLM can then use all this info to recommend steps that consider merging/joining.
+        recommend_steps_prompt = PromptTemplate(
+            template="""
+            You are a Data Wrangling Expert. Given the following data (one or multiple datasets) and user instructions, 
+            recommend a series of numbered steps to wrangle the data based on a user's needs. 
+            
+            You can use any common data wrangling techniques such as joining, reshaping, aggregating, encoding, etc. 
+            
+            If multiple datasets are provided, you may need to recommend how to merge or join them. 
+            
+            Also consider any special transformations requested by the user. If the user instructions 
+            say to do something else or not to do certain steps, follow those instructions.
+            
+            User instructions:
+            {user_instructions}
+
+            Previously Recommended Steps (if any):
+            {recommended_steps}
+
+            Below are summaries of all datasets provided:
+            {all_datasets_summary}
+
+            Return steps as a numbered list. You can return short code snippets to demonstrate actions. But do not return a fully coded solution. The code will be generated separately by a Coding Agent.
+            
+            Avoid these:
+            1. Do not include steps to save files.
+            2. Do not include unrelated user instructions that are not related to the data wrangling.
+            """,
+            input_variables=["user_instructions", "recommended_steps", "all_datasets_summary"]
+        )
+
+        steps_agent = recommend_steps_prompt | llm
+        recommended_steps = steps_agent.invoke({
+            "user_instructions": state.get("user_instructions"),
+            "recommended_steps": state.get("recommended_steps"),
+            "all_datasets_summary": all_datasets_summary_str,
+        }) 
+
+        return {
+            "recommended_steps": format_recommended_steps(recommended_steps.content.strip(), heading="# Recommended Data Wrangling Steps:"),
+            "all_datasets_summary": all_datasets_summary_str,
+        }
+
+    
+    def create_data_wrangler_code(state: GraphState):
+        if bypass_recommended_steps:
+            print(format_agent_name(AGENT_NAME))
+            
+            data_raw = state.get("data_raw")
+
+            if isinstance(data_raw, dict):
+                # Single dataset scenario
+                primary_dataset_name = "main"
+                datasets = {primary_dataset_name: data_raw}
+            elif isinstance(data_raw, list) and all(isinstance(item, dict) for item in data_raw):
+                # Multiple datasets scenario
+                datasets = {f"dataset_{i}": d for i, d in enumerate(data_raw, start=1)}
+                primary_dataset_name = "dataset_1"
+            else:
+                raise ValueError("data_raw must be a dict or a list of dicts.")
+
+            # Convert all datasets to DataFrames for inspection
+            dataframes = {name: pd.DataFrame.from_dict(d) for name, d in datasets.items()}
+
+            # Create a summary for all datasets
+            # We'll include a short sample and info for each dataset
+            all_datasets_summary = get_dataframe_summary(dataframes, n_sample=n_samples, skip_stats=True)
+
+            # Join all datasets summaries into one big text block
+            all_datasets_summary_str = "\n\n".join(all_datasets_summary)
+        
+        else:
+            all_datasets_summary_str = state.get("all_datasets_summary")
+            
+        print("    * CREATE DATA WRANGLER CODE")
+        
+        data_wrangling_prompt = PromptTemplate(
+            template="""
+            You are a Pandas Data Wrangling Coding Agent. Your job is to create a {function_name}() function that can be run on the provided data. You should use Pandas and NumPy for data wrangling operations.
+            
+            User instructions:
+            {user_instructions}
+            
+            Follow these recommended steps (if present):
+            {recommended_steps}
+            
+            If multiple datasets are provided, you may need to merge or join them. Make sure to handle that scenario based on the recommended steps and user instructions.
+            
+            Below are summaries of all datasets provided. If more than one dataset is provided, you may need to merge or join them.:
+            {all_datasets_summary}
+            
+            Return Python code in ```python``` format with a single function definition, {function_name}(), that includes all imports inside the function. And returns a single pandas data frame.
+
+            ```python
+            def {function_name}(data_list):
+                '''
+                Wrangle the data provided in data.
+                
+                data_list: A list of one or more pandas data frames containing the raw data to be wrangled.
+                '''
+                import pandas as pd
+                import numpy as np
+                # Implement the wrangling steps here
+                
+                # Return a single DataFrame 
+                return data_wrangled
+            ```
+            
+            Avoid Errors:
+            1. If the incoming data is not a list. Convert it to a list first. 
+            2. Do not specify data types inside the function arguments.
+            
+            Important Notes:
+            1. Do Not use Print statements to display the data. Return the data frame instead with the data wrangling operation performed.
+            2. Do not plot graphs. Only return the data frame.
+            
+            Make sure to explain any non-trivial steps with inline comments. Follow user instructions. Comment code thoroughly.
+            
+            
+            """,
+            input_variables=["recommended_steps", "user_instructions", "all_datasets_summary", "function_name"]
+        )
+
+        data_wrangling_agent = data_wrangling_prompt | llm | PythonOutputParser()
+
+        response = data_wrangling_agent.invoke({
+            "recommended_steps": state.get("recommended_steps"),
+            "user_instructions": state.get("user_instructions"),
+            "all_datasets_summary": all_datasets_summary_str,
+            "function_name": function_name
+        })
+        
+        response = relocate_imports_inside_function(response)
+        response = add_comments_to_top(response, agent_name=AGENT_NAME)
+        
+        # For logging: store the code generated
+        file_path, file_name_2 = log_ai_function(
+            response=response,
+            file_name=file_name,
+            log=log,
+            log_path=log_path,
+            overwrite=overwrite
+        )
+
+        return {
+            "data_wrangler_function" : response,
+            "data_wrangler_function_path": file_path,
+            "data_wrangler_file_name": file_name_2,
+            "data_wrangler_function_name": function_name,
+            "all_datasets_summary": all_datasets_summary_str
+        }
+
+    
+    def human_review(state: GraphState) -> Command[Literal["recommend_wrangling_steps", "create_data_wrangler_code"]]:
+        return node_func_human_review(
+            state=state,
+            prompt_text="Are the following data wrangling steps correct? (Answer 'yes' or provide modifications)\n{steps}",
+            yes_goto="create_data_wrangler_code",
+            no_goto="recommend_wrangling_steps",
+            user_instructions_key="user_instructions",
+            recommended_steps_key="recommended_steps"            
+        )
+        
+    # Human Review   
+    
+    prompt_text_human_review = "Are the following data wrangling instructions correct? (Answer 'yes' or provide modifications)\n{steps}"
+    
+    if not bypass_explain_code:
+        def human_review(state: GraphState) -> Command[Literal["recommend_wrangling_steps", "explain_data_wrangler_code"]]:
+            return node_func_human_review(
+                state=state,
+                prompt_text=prompt_text_human_review,
+                yes_goto= 'explain_data_wrangler_code',
+                no_goto="recommend_wrangling_steps",
+                user_instructions_key="user_instructions",
+                recommended_steps_key="recommended_steps",
+                code_snippet_key="data_wrangler_function",
+            )
+    else:
+        def human_review(state: GraphState) -> Command[Literal["recommend_wrangling_steps", "__end__"]]:
+            return node_func_human_review(
+                state=state,
+                prompt_text=prompt_text_human_review,
+                yes_goto= '__end__',
+                no_goto="recommend_wrangling_steps",
+                user_instructions_key="user_instructions",
+                recommended_steps_key="recommended_steps",
+                code_snippet_key="data_wrangler_function", 
+            )
+    
+    def execute_data_wrangler_code(state: GraphState):
+        return node_func_execute_agent_code_on_data(
+            state=state,
+            data_key="data_raw",
+            result_key="data_wrangled",
+            error_key="data_wrangler_error",
+            code_snippet_key="data_wrangler_function",
+            agent_function_name=state.get("data_wrangler_function_name"),
+            # pre_processing=pre_processing,
+            post_processing=lambda df: df.to_dict() if isinstance(df, pd.DataFrame) else df,
+            error_message_prefix="An error occurred during data wrangling: "
+        )
+        
+    def fix_data_wrangler_code(state: GraphState):
+        data_wrangler_prompt = """
+        You are a Data Wrangling Agent. Your job is to create a {function_name}() function that can be run on the data provided. The function is currently broken and needs to be fixed.
+        
+        Make sure to only return the function definition for {function_name}().
+        
+        Return Python code in ```python``` format with a single function definition, {function_name}(data_raw), that includes all imports inside the function.
+        
+        This is the broken code (please fix): 
+        {code_snippet}
+
+        Last Known Error:
+        {error}
+        """
+
+        return node_func_fix_agent_code(
+            state=state,
+            code_snippet_key="data_wrangler_function",
+            error_key="data_wrangler_error",
+            llm=llm,  
+            prompt_template=data_wrangler_prompt,
+            agent_name=AGENT_NAME,
+            log=log,
+            file_path=state.get("data_wrangler_function_path"),
+            function_name=state.get("data_wrangler_function_name"),
+        )
+    
+    # Final reporting node
+    def report_agent_outputs(state: GraphState):
+        return node_func_report_agent_outputs(
+            state=state,
+            keys_to_include=[
+                "recommended_steps",
+                "data_wrangler_function",
+                "data_wrangler_function_path",
+                "data_wrangler_function_name",
+                "data_wrangler_error",
+            ],
+            result_key="messages",
+            role=AGENT_NAME,
+            custom_title="Data Wrangling Agent Outputs"
+        )
+        
+    # Define the graph
+    node_functions = {
+        "recommend_wrangling_steps": recommend_wrangling_steps,
+        "human_review": human_review,
+        "create_data_wrangler_code": create_data_wrangler_code,
+        "execute_data_wrangler_code": execute_data_wrangler_code,
+        "fix_data_wrangler_code": fix_data_wrangler_code,
+        "report_agent_outputs": report_agent_outputs,
+    }
+    
+    app = create_coding_agent_graph(
+        GraphState=GraphState,
+        node_functions=node_functions,
+        recommended_steps_node_name="recommend_wrangling_steps",
+        create_code_node_name="create_data_wrangler_code",
+        execute_code_node_name="execute_data_wrangler_code",
+        fix_code_node_name="fix_data_wrangler_code",
+        explain_code_node_name="report_agent_outputs",
+        error_key="data_wrangler_error",
+        human_in_the_loop=human_in_the_loop,
+        human_review_node_name="human_review",
+        checkpointer=checkpointer,
+        bypass_recommended_steps=bypass_recommended_steps,
+        bypass_explain_code=bypass_explain_code,
+        agent_name=AGENT_NAME,
+    )
+        
+    return app
+
+
+
+
+
+
+
+================================================
+FILE: ai_data_science_team/agents/feature_engineering_agent.py
+================================================
+# BUSINESS SCIENCE UNIVERSITY
+# AI DATA SCIENCE TEAM
+# ***
+# * Agents: Feature Engineering Agent
+
+# Libraries
+from typing import TypedDict, Annotated, Sequence, Literal
+import operator
+
+from langchain.prompts import PromptTemplate
+from langchain_core.messages import BaseMessage
+
+from langgraph.types import Command, Checkpointer
+from langgraph.checkpoint.memory import MemorySaver
+
+import os
+import json
+import pandas as pd
+
+from IPython.display import Markdown
+
+from ai_data_science_team.templates import(
+    node_func_execute_agent_code_on_data, 
+    node_func_human_review,
+    node_func_fix_agent_code, 
+    node_func_report_agent_outputs, 
+    create_coding_agent_graph,
+    BaseAgent,
+)
+from ai_data_science_team.parsers.parsers import PythonOutputParser
+from ai_data_science_team.utils.regex import (
+    relocate_imports_inside_function, 
+    add_comments_to_top, 
+    format_agent_name, 
+    format_recommended_steps, 
+    get_generic_summary,
+)
+from ai_data_science_team.tools.dataframe import get_dataframe_summary
+from ai_data_science_team.utils.logging import log_ai_function
+
+# Setup
+AGENT_NAME = "feature_engineering_agent"
+LOG_PATH = os.path.join(os.getcwd(), "logs/")
+
+# Class
+
+class FeatureEngineeringAgent(BaseAgent):
+    """
+    Creates a feature engineering agent that can process datasets based on user-defined instructions or 
+    default feature engineering steps. The agent generates a Python function to engineer features, executes it, 
+    and logs the process, including code and errors. It is designed to facilitate reproducible and 
+    customizable feature engineering workflows.
+
+    The agent can perform the following default feature engineering steps unless instructed otherwise:
+    - Convert features to appropriate data types
+    - Remove features that have unique values for each row
+    - Remove constant features
+    - Encode high-cardinality categoricals (threshold <= 5% of dataset) as 'other'
+    - One-hot-encode categorical variables
+    - Convert booleans to integer (1/0)
+    - Create datetime-based features (if applicable)
+    - Handle target variable encoding if specified
+    - Any user-provided instructions to add, remove, or modify steps
+
+    Parameters
+    ----------
+    model : langchain.llms.base.LLM
+        The language model used to generate the feature engineering function.
+    n_samples : int, optional
+        Number of samples used when summarizing the dataset. Defaults to 30.
+    log : bool, optional
+        Whether to log the generated code and errors. Defaults to False.
+    log_path : str, optional
+        Directory path for storing log files. Defaults to None.
+    file_name : str, optional
+        Name of the file for saving the generated response. Defaults to "feature_engineer.py".
+    function_name : str, optional
+        Name of the function for data visualization. Defaults to "feature_engineer".
+    overwrite : bool, optional
+        Whether to overwrite the log file if it exists. If False, a unique file name is created. Defaults to True.
+    human_in_the_loop : bool, optional
+        Enables user review of feature engineering instructions. Defaults to False.
+    bypass_recommended_steps : bool, optional
+        If True, skips the default recommended steps. Defaults to False.
+    bypass_explain_code : bool, optional
+        If True, skips the step that provides code explanations. Defaults to False.
+    checkpointer : Checkpointer, optional
+        Checkpointer to save and load the agent's state. Defaults to None.
+
+    Methods
+    -------
+    update_params(**kwargs)
+        Updates the agent's parameters and rebuilds the compiled state graph.
+    ainvoke_agent(
+        user_instructions: str, 
+        data_raw: pd.DataFrame, 
+        target_variable: str = None, 
+        max_retries=3, 
+        retry_count=0
+    )
+        Engineers features from the provided dataset asynchronously based on user instructions.
+    invoke_agent(
+        user_instructions: str, 
+        data_raw: pd.DataFrame, 
+        target_variable: str = None, 
+        max_retries=3, 
+        retry_count=0
+    )
+        Engineers features from the provided dataset synchronously based on user instructions.
+    get_workflow_summary()
+        Retrieves a summary of the agent's workflow.
+    get_log_summary()
+        Retrieves a summary of logged operations if logging is enabled.
+    get_data_engineered()
+        Retrieves the feature-engineered dataset as a pandas DataFrame.
+    get_data_raw()
+        Retrieves the raw dataset as a pandas DataFrame.
+    get_feature_engineer_function()
+        Retrieves the generated Python function used for feature engineering.
+    get_recommended_feature_engineering_steps()
+        Retrieves the agent's recommended feature engineering steps.
+    get_response()
+        Returns the response from the agent as a dictionary.
+    show()
+        Displays the agent's mermaid diagram.
+
+    Examples
+    --------
+    ```python
+    import pandas as pd
+    from langchain_openai import ChatOpenAI
+    from ai_data_science_team.agents import FeatureEngineeringAgent
+
+    llm = ChatOpenAI(model="gpt-4o-mini")
+
+    feature_agent = FeatureEngineeringAgent(
+        model=llm, 
+        n_samples=30, 
+        log=True, 
+        log_path="logs", 
+        human_in_the_loop=True
+    )
+
+    df = pd.read_csv("https://raw.githubusercontent.com/business-science/ai-data-science-team/refs/heads/master/data/churn_data.csv")
+
+    feature_agent.invoke_agent(
+        user_instructions="Also encode the 'PaymentMethod' column with one-hot encoding.", 
+        data_raw=df, 
+        target_variable="Churn",
+        max_retries=3,
+        retry_count=0
+    )
+
+    engineered_data = feature_agent.get_data_engineered()
+    response = feature_agent.get_response()
+    ```
+    
+    Returns
+    -------
+    FeatureEngineeringAgent : langchain.graphs.CompiledStateGraph 
+        A feature engineering agent implemented as a compiled state graph.
+    """
+
+    def __init__(
+        self,
+        model,
+        n_samples=30,
+        log=False,
+        log_path=None,
+        file_name="feature_engineer.py",
+        function_name="feature_engineer",
+        overwrite=True,
+        human_in_the_loop=False,
+        bypass_recommended_steps=False,
+        bypass_explain_code=False,
+        checkpointer=None,
+    ):
+        self._params = {
+            "model": model,
+            "n_samples": n_samples,
+            "log": log,
+            "log_path": log_path,
+            "file_name": file_name,
+            "function_name": function_name,
+            "overwrite": overwrite,
+            "human_in_the_loop": human_in_the_loop,
+            "bypass_recommended_steps": bypass_recommended_steps,
+            "bypass_explain_code": bypass_explain_code,
+            "checkpointer": checkpointer,
+        }
+        self._compiled_graph = self._make_compiled_graph()
+        self.response = None
+
+    def _make_compiled_graph(self):
+        """
+        Create the compiled graph for the feature engineering agent. 
+        Running this method will reset the response to None.
+        """
+        self.response = None
+        return make_feature_engineering_agent(**self._params)
+
+    def update_params(self, **kwargs):
+        """
+        Updates the agent's parameters and rebuilds the compiled graph.
+        """
+        for k, v in kwargs.items():
+            self._params[k] = v
+        self._compiled_graph = self._make_compiled_graph()
+
+    async def ainvoke_agent(
+        self, 
+        data_raw: pd.DataFrame, 
+        user_instructions: str=None, 
+        target_variable: str = None, 
+        max_retries=3, 
+        retry_count=0,
+        **kwargs
+    ):
+        """
+        Asynchronously engineers features for the provided dataset.
+        The response is stored in the 'response' attribute.
+
+        Parameters
+        ----------
+        data_raw : pd.DataFrame
+            The raw dataset to be processed.
+        user_instructions : str, optional
+            Instructions for feature engineering.
+        target_variable : str, optional
+            The name of the target variable (if any).
+        max_retries : int
+            Maximum retry attempts.
+        retry_count : int
+            Current retry attempt count.
+        **kwargs
+            Additional keyword arguments to pass to ainvoke().
+
+        Returns
+        -------
+        None
+        """
+        response = await self._compiled_graph.ainvoke({
+            "user_instructions": user_instructions,
+            "data_raw": data_raw.to_dict(),
+            "target_variable": target_variable,
+            "max_retries": max_retries,
+            "retry_count": retry_count
+        }, **kwargs)
+        self.response = response
+        return None
+
+    def invoke_agent(
+        self,
+        data_raw: pd.DataFrame,
+        user_instructions: str=None,
+        target_variable: str = None,
+        max_retries=3,
+        retry_count=0,
+        **kwargs
+    ):
+        """
+        Synchronously engineers features for the provided dataset.
+        The response is stored in the 'response' attribute.
+
+        Parameters
+        ----------
+        data_raw : pd.DataFrame
+            The raw dataset to be processed.
+        user_instructions : str
+            Instructions for feature engineering agent.
+        target_variable : str, optional
+            The name of the target variable (if any).
+        max_retries : int
+            Maximum retry attempts.
+        retry_count : int
+            Current retry attempt count.
+        **kwargs
+            Additional keyword arguments to pass to invoke().
+
+        Returns
+        -------
+        None
+        """
+        response = self._compiled_graph.invoke({
+            "user_instructions": user_instructions,
+            "data_raw": data_raw.to_dict(),
+            "target_variable": target_variable,
+            "max_retries": max_retries,
+            "retry_count": retry_count
+        }, **kwargs)
+        self.response = response
+        return None
+
+    def get_workflow_summary(self, markdown=False):
+        """
+        Retrieves the agent's workflow summary, if logging is enabled.
+        """
+        if self.response and self.response.get("messages"):
+            summary = get_generic_summary(json.loads(self.response.get("messages")[-1].content))
+            if markdown:
+                return Markdown(summary)
+            else:
+                return summary
+
+    def get_log_summary(self, markdown=False):
+        """
+        Logs a summary of the agent's operations, if logging is enabled.
+        """
+        if self.response:
+            if self.response.get('feature_engineer_function_path'):
+                log_details = f"""
+## Featuring Engineering Agent Log Summary:
+
+Function Path: {self.response.get('feature_engineer_function_path')}
+
+Function Name: {self.response.get('feature_engineer_function_name')}
+                """
+                if markdown:
+                    return Markdown(log_details) 
+                else:
+                    return log_details
+
+    def get_data_engineered(self):
+        """
+        Retrieves the engineered data stored after running invoke/ainvoke.
+
+        Returns
+        -------
+        pd.DataFrame or None
+            The engineered dataset as a pandas DataFrame.
+        """
+        if self.response and "data_engineered" in self.response:
+            return pd.DataFrame(self.response["data_engineered"])
+        return None
+
+    def get_data_raw(self):
+        """
+        Retrieves the raw data.
+
+        Returns
+        -------
+        pd.DataFrame or None
+            The raw dataset as a pandas DataFrame if available.
+        """
+        if self.response and "data_raw" in self.response:
+            return pd.DataFrame(self.response["data_raw"])
+        return None
+
+    def get_feature_engineer_function(self, markdown=False):
+        """
+        Retrieves the feature engineering function generated by the agent.
+
+        Parameters
+        ----------
+        markdown : bool, optional
+            If True, returns the function in Markdown code block format.
+
+        Returns
+        -------
+        str or None
+            The Python function code, or None if unavailable.
+        """
+        if self.response and "feature_engineer_function" in self.response:
+            code = self.response["feature_engineer_function"]
+            if markdown:
+                return Markdown(f"```python\n{code}\n```")
+            return code
+        return None
+
+    def get_recommended_feature_engineering_steps(self, markdown=False):
+        """
+        Retrieves the agent's recommended feature engineering steps.
+
+        Parameters
+        ----------
+        markdown : bool, optional
+            If True, returns the steps in Markdown format.
+
+        Returns
+        -------
+        str or None
+            The recommended steps, or None if not available.
+        """
+        if self.response and "recommended_steps" in self.response:
+            steps = self.response["recommended_steps"]
+            if markdown:
+                return Markdown(steps)
+            return steps
+        return None
+
+    
+
+
+# * Feature Engineering Agent
+
+def make_feature_engineering_agent(
+    model, 
+    n_samples=30,
+    log=False, 
+    log_path=None, 
+    file_name="feature_engineer.py",
+    function_name="feature_engineer",
+    overwrite = True, 
+    human_in_the_loop=False, 
+    bypass_recommended_steps=False, 
+    bypass_explain_code=False,
+    checkpointer=None,
+):
+    """
+    Creates a feature engineering agent that can be run on a dataset. The agent applies various feature engineering
+    techniques, such as encoding categorical variables, scaling numeric variables, creating interaction terms,
+    and generating polynomial features. The agent takes in a dataset and user instructions and outputs a Python
+    function for feature engineering. It also logs the code generated and any errors that occur.
+    
+    The agent is instructed to apply the following feature engineering techniques:
+    
+    - Remove string or categorical features with unique values equal to the size of the dataset
+    - Remove constant features with the same value in all rows
+    - High cardinality categorical features should be encoded by a threshold <= 5 percent of the dataset, by converting infrequent values to "other"
+    - Encoding categorical variables using OneHotEncoding
+    - Numeric features should be left untransformed
+    - Create datetime-based features if datetime columns are present
+    - If a target variable is provided:
+        - If a categorical target variable is provided, encode it using LabelEncoding
+        - All other target variables should be converted to numeric and unscaled
+    - Convert any boolean True/False values to 1/0
+    - Return a single data frame containing the transformed features and target variable, if one is provided.
+    - Any specific instructions provided by the user
+
+    Parameters
+    ----------
+    model : langchain.llms.base.LLM
+        The language model to use to generate code.
+    n_samples : int, optional
+        The number of data samples to use for generating the feature engineering code. Defaults to 30.
+        If you get an error due to maximum tokens, try reducing this number.
+        > "This model's maximum context length is 128000 tokens. However, your messages resulted in 333858 tokens. Please reduce the length of the messages."
+    log : bool, optional
+        Whether or not to log the code generated and any errors that occur.
+        Defaults to False.
+    log_path : str, optional
+        The path to the directory where the log files should be stored. Defaults to "logs/".
+    file_name : str, optional
+        The name of the file to save the log to. Defaults to "feature_engineer.py".
+    function_name : str, optional
+        The name of the function that will be generated. Defaults to "feature_engineer".
+    overwrite : bool, optional
+        Whether or not to overwrite the log file if it already exists. If False, a unique file name will be created. 
+        Defaults to True.
+    human_in_the_loop : bool, optional
+        Whether or not to use human in the loop. If True, adds an interput and human in the loop step that asks the user to review the feature engineering instructions. Defaults to False.
+    bypass_recommended_steps : bool, optional
+        Bypass the recommendation step, by default False
+    bypass_explain_code : bool, optional
+        Bypass the code explanation step, by default False.
+    checkpointer : Checkpointer, optional
+        Checkpointer to save and load the agent's state. Defaults to None.
+
+    Examples
+    -------
+    ``` python
+    import pandas as pd
+    from langchain_openai import ChatOpenAI
+    from ai_data_science_team.agents import feature_engineering_agent
+
+    llm = ChatOpenAI(model="gpt-4o-mini")
+
+    feature_engineering_agent = make_feature_engineering_agent(llm)
+
+    df = pd.read_csv("https://raw.githubusercontent.com/business-science/ai-data-science-team/refs/heads/master/data/churn_data.csv")
+
+    response = feature_engineering_agent.invoke({
+        "user_instructions": None,
+        "target_variable": "Churn",
+        "data_raw": df.to_dict(),
+        "max_retries": 3,
+        "retry_count": 0
+    })
+
+    pd.DataFrame(response['data_engineered'])
+    ```
+
+    Returns
+    -------
+    app : langchain.graphs.CompiledStateGraph
+        The feature engineering agent as a state graph.
+    """
+    llm = model
+    
+    if human_in_the_loop:
+        if checkpointer is None:
+            print("Human in the loop is enabled. A checkpointer is required. Setting to MemorySaver().")
+            checkpointer = MemorySaver()
+    
+    # Human in th loop requires recommended steps
+    if bypass_recommended_steps and human_in_the_loop:
+        bypass_recommended_steps = False
+        print("Bypass recommended steps set to False to enable human in the loop.")
+
+    # Setup Log Directory
+    if log:
+        if log_path is None:
+            log_path = "logs/"
+        if not os.path.exists(log_path):
+            os.makedirs(log_path)
+
+    # Define GraphState for the router
+    class GraphState(TypedDict):
+        messages: Annotated[Sequence[BaseMessage], operator.add]
+        user_instructions: str
+        recommended_steps: str
+        data_raw: dict
+        data_engineered: dict
+        target_variable: str
+        all_datasets_summary: str
+        feature_engineer_function: str
+        feature_engineer_function_path: str
+        feature_engineer_file_name: str
+        feature_engineer_function_name: str
+        feature_engineer_error: str
+        max_retries: int
+        retry_count: int
+
+    def recommend_feature_engineering_steps(state: GraphState):
+        """
+        Recommend a series of feature engineering steps based on the input data.
+        These recommended steps will be appended to the user_instructions.
+        """
+        print(format_agent_name(AGENT_NAME))
+        print("    * RECOMMEND FEATURE ENGINEERING STEPS")
+
+        # Prompt to get recommended steps from the LLM
+        recommend_steps_prompt = PromptTemplate(
+            template="""
+            You are a Feature Engineering Expert. Given the following information about the data, 
+            recommend a series of numbered steps to take to engineer features. 
+            The steps should be tailored to the data characteristics and should be helpful 
+            for a feature engineering agent that will be implemented.
+            
+            General Steps:
+            Things that should be considered in the feature engineering steps:
+            
+            * Convert features to the appropriate data types based on their sample data values
+            * Remove string or categorical features with unique values equal to the size of the dataset
+            * Remove constant features with the same value in all rows
+            * High cardinality categorical features should be encoded by a threshold <= 5 percent of the dataset, by converting infrequent values to "other"
+            * Encoding categorical variables using OneHotEncoding
+            * Numeric features should be left untransformed
+            * Create datetime-based features if datetime columns are present
+            * If a target variable is provided:
+                * If a categorical target variable is provided, encode it using LabelEncoding
+                * All other target variables should be converted to numeric and unscaled
+            * Convert any Boolean (True/False) values to integer (1/0) values. This should be performed after one-hot encoding.
+            
+            Custom Steps:
+            * Analyze the data to determine if any additional feature engineering steps are needed.
+            * Recommend steps that are specific to the data provided. Include why these steps are necessary or beneficial.
+            * If no additional steps are needed, simply state that no additional steps are required.
+            
+            IMPORTANT:
+            Make sure to take into account any additional user instructions that may add, remove or modify some of these steps. Include comments in your code to explain your reasoning for each step. Include comments if something is not done because a user requested. Include comments if something is done because a user requested.
+            
+            User instructions:
+            {user_instructions}
+            
+            Previously Recommended Steps (if any):
+            {recommended_steps}
+            
+            Below are summaries of all datasets provided:
+            {all_datasets_summary}
+
+            Return steps as a numbered list. You can return short code snippets to demonstrate actions. But do not return a fully coded solution. The code will be generated separately by a Coding Agent.
+            
+            Avoid these:
+            1. Do not include steps to save files.
+            2. Do not include unrelated user instructions that are not related to the feature engineering.
+            """,
+            input_variables=["user_instructions", "recommended_steps", "all_datasets_summary"]
+        )
+
+        data_raw = state.get("data_raw")
+        df = pd.DataFrame.from_dict(data_raw)
+        
+        all_datasets_summary = get_dataframe_summary([df], n_sample=n_samples)
+        
+        all_datasets_summary_str = "\n\n".join(all_datasets_summary)
+
+        steps_agent = recommend_steps_prompt | llm
+        recommended_steps = steps_agent.invoke({
+            "user_instructions": state.get("user_instructions"),
+            "recommended_steps": state.get("recommended_steps"),
+            "all_datasets_summary": all_datasets_summary_str
+        }) 
+        
+        return {
+            "recommended_steps": format_recommended_steps(recommended_steps.content.strip(), heading="# Recommended Feature Engineering Steps:"),
+            "all_datasets_summary": all_datasets_summary_str
+        }
+    
+    # Human Review   
+    
+    prompt_text_human_review = "Are the following feature engineering instructions correct? (Answer 'yes' or provide modifications)\n{steps}"
+    
+    if not bypass_explain_code:
+        def human_review(state: GraphState) -> Command[Literal["recommend_feature_engineering_steps", "explain_feature_engineering_code"]]:
+            return node_func_human_review(
+                state=state,
+                prompt_text=prompt_text_human_review,
+                yes_goto= 'explain_feature_engineering_code',
+                no_goto="recommend_feature_engineering_steps",
+                user_instructions_key="user_instructions",
+                recommended_steps_key="recommended_steps",
+                code_snippet_key="feature_engineer_function",
+            )
+    else:
+        def human_review(state: GraphState) -> Command[Literal["recommend_feature_engineering_steps", "__end__"]]:
+            return node_func_human_review(
+                state=state,
+                prompt_text=prompt_text_human_review,
+                yes_goto= '__end__',
+                no_goto="recommend_feature_engineering_steps",
+                user_instructions_key="user_instructions",
+                recommended_steps_key="recommended_steps",
+                code_snippet_key="feature_engineer_function", 
+            )
+    
+    def create_feature_engineering_code(state: GraphState):
+        if bypass_recommended_steps:
+            print(format_agent_name(AGENT_NAME))
+            
+            data_raw = state.get("data_raw")
+            df = pd.DataFrame.from_dict(data_raw)
+            
+            all_datasets_summary = get_dataframe_summary([df], n_sample=n_samples)
+            
+            all_datasets_summary_str = "\n\n".join(all_datasets_summary)
+            
+        else:
+            all_datasets_summary_str = state.get("all_datasets_summary")
+            
+        print("    * CREATE FEATURE ENGINEERING CODE")
+
+        feature_engineering_prompt = PromptTemplate(
+            template="""
+            You are a Feature Engineering Agent. Your job is to create a {function_name}() function that can be run on the data provided using the following recommended steps.
+            
+            Recommended Steps:
+            {recommended_steps}
+            
+            Use this information about the data to help determine how to feature engineer the data:
+            
+            Target Variable (if provided): {target_variable}
+            
+            Below are summaries of all datasets provided. Use this information about the data to help determine how to feature engineer the data:
+            {all_datasets_summary}
+            
+            You can use Pandas, Numpy, and Scikit Learn libraries to feature engineer the data.
+            
+            Return Python code in ```python``` format with a single function definition, {function_name}(data_raw), including all imports inside the function.
+
+            Return code to provide the feature engineering function:
+            
+            def {function_name}(data_raw):
+                import pandas as pd
+                import numpy as np
+                ...
+                return data_engineered
+            
+            Best Practices and Error Preventions:
+            - Handle missing values in numeric and categorical features before transformations.
+            - Avoid creating highly correlated features unless explicitly instructed.
+            - Convert Boolean to integer values (0/1) after one-hot encoding unless otherwise instructed.
+            
+            Avoid the following errors:
+            
+            - name 'OneHotEncoder' is not defined
+            
+            - Shape of passed values is (7043, 48), indices imply (7043, 47)
+            
+            - name 'numeric_features' is not defined
+            
+            - name 'categorical_features' is not defined
+
+
+            """,
+            input_variables=["recommeded_steps", "target_variable", "all_datasets_summary", "function_name"]
+        )
+
+        feature_engineering_agent = feature_engineering_prompt | llm | PythonOutputParser()
+
+        response = feature_engineering_agent.invoke({
+            "recommended_steps": state.get("recommended_steps"),
+            "target_variable": state.get("target_variable"),
+            "all_datasets_summary": all_datasets_summary_str,
+            "function_name": function_name
+        })
+        
+        response = relocate_imports_inside_function(response)
+        response = add_comments_to_top(response, agent_name=AGENT_NAME)
+
+        # For logging: store the code generated
+        file_path, file_name_2 = log_ai_function(
+            response=response,
+            file_name=file_name,
+            log=log,
+            log_path=log_path,
+            overwrite=overwrite
+        )
+
+        return {
+            "feature_engineer_function": response,
+            "feature_engineer_function_path": file_path,
+            "feature_engineer_file_name": file_name_2,
+            "feature_engineer_function_name": function_name,
+            "all_datasets_summary": all_datasets_summary_str
+        }
+
+    def execute_feature_engineering_code(state):
+        return node_func_execute_agent_code_on_data(
+            state=state,
+            data_key="data_raw",
+            result_key="data_engineered",
+            error_key="feature_engineer_error",
+            code_snippet_key="feature_engineer_function",
+            agent_function_name=state.get("feature_engineer_function_name"),
+            pre_processing=lambda data: pd.DataFrame.from_dict(data),
+            post_processing=lambda df: df.to_dict() if isinstance(df, pd.DataFrame) else df,
+            error_message_prefix="An error occurred during feature engineering: "
+        )
+
+    def fix_feature_engineering_code(state: GraphState):
+        feature_engineer_prompt = """
+        You are a Feature Engineering Agent. Your job is to fix the {function_name}() function that currently contains errors.
+        
+        Provide only the corrected function definition for {function_name}().
+        
+        Return Python code in ```python``` format with a single function definition, {function_name}(data_raw), that includes all imports inside the function.
+        
+        This is the broken code (please fix): 
+        {code_snippet}
+
+        Last Known Error:
+        {error}
+        """
+
+        return node_func_fix_agent_code(
+            state=state,
+            code_snippet_key="feature_engineer_function",
+            error_key="feature_engineer_error",
+            llm=llm,
+            prompt_template=feature_engineer_prompt,
+            agent_name=AGENT_NAME,
+            log=log,
+            file_path=state.get("feature_engineer_function_path"),
+            function_name=state.get("feature_engineer_function_name"),
+        )
+
+    # Final reporting node
+    def report_agent_outputs(state: GraphState):
+        return node_func_report_agent_outputs(
+            state=state,
+            keys_to_include=[
+                "recommended_steps",
+                "feature_engineer_function",
+                "feature_engineer_function_path",
+                "feature_engineer_function_name",
+                "feature_engineer_error",
+            ],
+            result_key="messages",
+            role=AGENT_NAME,
+            custom_title="Feature Engineering Agent Outputs"
+        )
+    
+    # Create the graph
+    node_functions = {
+        "recommend_feature_engineering_steps": recommend_feature_engineering_steps,
+        "human_review": human_review,
+        "create_feature_engineering_code": create_feature_engineering_code,
+        "execute_feature_engineering_code": execute_feature_engineering_code,
+        "fix_feature_engineering_code": fix_feature_engineering_code,
+        "report_agent_outputs": report_agent_outputs,
+    }
+    
+    app = create_coding_agent_graph(
+        GraphState=GraphState,
+        node_functions=node_functions,
+        recommended_steps_node_name="recommend_feature_engineering_steps",
+        create_code_node_name="create_feature_engineering_code",
+        execute_code_node_name="execute_feature_engineering_code",
+        fix_code_node_name="fix_feature_engineering_code",
+        explain_code_node_name="report_agent_outputs",
+        error_key="feature_engineer_error",
+        max_retries_key = "max_retries",
+        retry_count_key = "retry_count",
+        human_in_the_loop=human_in_the_loop,
+        human_review_node_name="human_review",
+        checkpointer=checkpointer,
+        bypass_recommended_steps=bypass_recommended_steps,
+        bypass_explain_code=bypass_explain_code,
+        agent_name=AGENT_NAME,
+    )
+
+    return app
+
+
+
+================================================
+FILE: ai_data_science_team/agents/sql_database_agent.py
+================================================
+
+
+from typing import TypedDict, Annotated, Sequence, Literal
+import operator
+
+from langchain.prompts import PromptTemplate
+from langchain_core.messages import BaseMessage
+from langchain_core.output_parsers import JsonOutputParser
+
+from langgraph.types import Command, Checkpointer
+from langgraph.checkpoint.memory import MemorySaver
+
+import os
+import json
+import pandas as pd
+import sqlalchemy as sql
+
+from IPython.display import Markdown
+
+from ai_data_science_team.templates import(
+    node_func_execute_agent_from_sql_connection,
+    node_func_human_review,
+    node_func_fix_agent_code, 
+    node_func_report_agent_outputs,
+    create_coding_agent_graph,
+    BaseAgent,
+)
+from ai_data_science_team.parsers.parsers import SQLOutputParser  
+from ai_data_science_team.utils.regex import (
+    add_comments_to_top, 
+    format_agent_name, 
+    format_recommended_steps, 
+    get_generic_summary,
+)
+from ai_data_science_team.tools.sql import get_database_metadata
+from ai_data_science_team.utils.logging import log_ai_function
+
+# Setup
+AGENT_NAME = "sql_database_agent"
+LOG_PATH = os.path.join(os.getcwd(), "logs/")
+
+# Class
+
+class SQLDatabaseAgent(BaseAgent):
+    """
+    Creates a SQL Database Agent that can recommend SQL steps and generate SQL code to query a database. 
+    The agent can:
+    - Propose recommended steps to answer a user's query or instructions.
+    - Generate a SQL query based on the recommended steps and user instructions.
+    - Execute that SQL query against the provided database connection.
+    - Return the resulting data as a dictionary, suitable for conversion to a DataFrame or other structures.
+    - Log generated code and errors if enabled.
+
+    Parameters
+    ----------
+    model : ChatOpenAI or langchain.llms.base.LLM
+        The language model used to generate the SQL code.
+    connection : sqlalchemy.engine.base.Engine or sqlalchemy.engine.base.Connection
+        The SQLAlchemy connection (or engine) to the database.
+    n_samples : int, optional
+        Number of sample rows (per column) to retrieve when summarizing database metadata. Defaults to 1.
+    log : bool, optional
+        Whether to log the generated code and errors. Defaults to False.
+    log_path : str, optional
+        Directory path for storing log files. Defaults to None.
+    file_name : str, optional
+        Name of the file for saving the generated response. Defaults to "sql_database.py".
+    function_name : str, optional
+        Name of the Python function that executes the SQL query. Defaults to "sql_database_pipeline".
+    overwrite : bool, optional
+        Whether to overwrite the log file if it exists. If False, a unique file name is created. Defaults to True.
+    human_in_the_loop : bool, optional
+        Enables user review of the recommended steps before generating code. Defaults to False.
+    bypass_recommended_steps : bool, optional
+        If True, skips the step that generates recommended SQL steps. Defaults to False.
+    bypass_explain_code : bool, optional
+        If True, skips the step that provides code explanations. Defaults to False.
+    checkpointer : Checkpointer, optional
+        A checkpointer to save and load the agent's state. Defaults to None.
+    smart_schema_pruning : bool, optional
+        If True, filters the tables and columns based on the user instructions and recommended steps. Defaults to False.
+
+    Methods
+    -------
+    update_params(**kwargs)
+        Updates the agent's parameters and rebuilds the compiled state graph.
+    ainvoke_agent(user_instructions: str, max_retries=3, retry_count=0)
+        Asynchronously runs the agent to generate and execute a SQL query based on user instructions.
+    invoke_agent(user_instructions: str, max_retries=3, retry_count=0)
+        Synchronously runs the agent to generate and execute a SQL query based on user instructions.
+    get_workflow_summary()
+        Retrieves a summary of the agent's workflow.
+    get_log_summary()
+        Retrieves a summary of logged operations if logging is enabled.
+    get_data_sql()
+        Retrieves the resulting data from the SQL query as a dictionary. 
+        (You can convert this to a DataFrame if desired.)
+    get_sql_query_code()
+        Retrieves the exact SQL query generated by the agent.
+    get_sql_database_function()
+        Retrieves the Python function that executes the SQL query.
+    get_recommended_sql_steps()
+        Retrieves the recommended steps for querying the SQL database.
+    get_response()
+        Returns the full response dictionary from the agent.
+    show()
+        Displays the agent's mermaid diagram for visual inspection of the compiled graph.
+
+    Examples
+    --------
+    ```python
+    import sqlalchemy as sql
+    from langchain_openai import ChatOpenAI
+    from ai_data_science_team.agents import SQLDatabaseAgent
+
+    # Create the engine/connection
+    sql_engine = sql.create_engine("sqlite:///data/my_database.db")
+    conn = sql_engine.connect()
+
+    llm = ChatOpenAI(model="gpt-4o-mini")
+
+    sql_database_agent = SQLDatabaseAgent(
+        model=llm,
+        connection=conn,
+        n_samples=10,
+        log=True,
+        log_path="logs",
+        human_in_the_loop=True
+    )
+
+    # Example usage
+    sql_database_agent.invoke_agent(
+        user_instructions="List all the tables in the database.",
+        max_retries=3,
+        retry_count=0
+    )
+
+    data_result = sql_database_agent.get_data_sql()  # dictionary of rows returned
+    sql_code = sql_database_agent.get_sql_query_code()
+    response = sql_database_agent.get_response()
+    ```
+    
+    Returns
+    -------
+    SQLDatabaseAgent : langchain.graphs.CompiledStateGraph
+        A SQL database agent implemented as a compiled state graph.
+    """
+
+    def __init__(
+        self,
+        model,
+        connection,
+        n_samples=1,
+        log=False,
+        log_path=None,
+        file_name="sql_database.py",
+        function_name="sql_database_pipeline",
+        overwrite=True,
+        human_in_the_loop=False,
+        bypass_recommended_steps=False,
+        bypass_explain_code=False,
+        checkpointer=None,
+        smart_schema_pruning=False,
+    ):
+        self._params = {
+            "model": model,
+            "connection": connection,
+            "n_samples": n_samples,
+            "log": log,
+            "log_path": log_path,
+            "file_name": file_name,
+            "function_name": function_name,
+            "overwrite": overwrite,
+            "human_in_the_loop": human_in_the_loop,
+            "bypass_recommended_steps": bypass_recommended_steps,
+            "bypass_explain_code": bypass_explain_code,
+            "checkpointer": checkpointer,
+            "smart_schema_pruning": smart_schema_pruning,
+        }
+        self._compiled_graph = self._make_compiled_graph()
+        self.response = None
+
+    def _make_compiled_graph(self):
+        """
+        Create or rebuild the compiled graph for the SQL Database Agent.
+        Running this method resets the response to None.
+        """
+        self.response = None
+        return make_sql_database_agent(**self._params)
+
+    def update_params(self, **kwargs):
+        """
+        Updates the agent's parameters (e.g. connection, n_samples, log, etc.) 
+        and rebuilds the compiled graph.
+        """
+        for k, v in kwargs.items():
+            self._params[k] = v
+        self._compiled_graph = self._make_compiled_graph()
+
+    async def ainvoke_agent(self, user_instructions: str=None, max_retries=3, retry_count=0, **kwargs):
+        """
+        Asynchronously runs the SQL Database Agent based on user instructions.
+
+        Parameters
+        ----------
+        user_instructions : str
+            Instructions for the SQL query or metadata request.
+        max_retries : int, optional
+            Maximum retry attempts. Defaults to 3.
+        retry_count : int, optional
+            Current retry count. Defaults to 0.
+        kwargs : dict
+            Additional keyword arguments to pass to ainvoke().
+
+        Returns
+        -------
+        None
+        """
+        response = await self._compiled_graph.ainvoke({
+            "user_instructions": user_instructions,
+            "max_retries": max_retries,
+            "retry_count": retry_count
+        }, **kwargs)
+        self.response = response
+
+    def invoke_agent(self, user_instructions: str=None, max_retries=3, retry_count=0, **kwargs):
+        """
+        Synchronously runs the SQL Database Agent based on user instructions.
+
+        Parameters
+        ----------
+        user_instructions : str
+            Instructions for the SQL query or metadata request.
+        max_retries : int, optional
+            Maximum retry attempts. Defaults to 3.
+        retry_count : int, optional
+            Current retry count. Defaults to 0.
+        kwargs : dict
+            Additional keyword arguments to pass to invoke().
+
+        Returns
+        -------
+        None
+        """
+        response = self._compiled_graph.invoke({
+            "user_instructions": user_instructions,
+            "max_retries": max_retries,
+            "retry_count": retry_count
+        }, **kwargs)
+        self.response = response
+
+    def get_workflow_summary(self, markdown=False):
+        """
+        Retrieves the agent's workflow summary, if logging is enabled.
+        """
+        if self.response and self.response.get("messages"):
+            summary = get_generic_summary(json.loads(self.response.get("messages")[-1].content))
+            if markdown:
+                return Markdown(summary)
+            else:
+                return summary
+
+    def get_log_summary(self, markdown=False):
+        """
+        Logs a summary of the agent's operations, if logging is enabled.
+        """
+        if self.response:
+            if self.response.get('sql_database_function_path'):
+                log_details = f"""
+## SQL Database Agent Log Summary:
+
+Function Path: {self.response.get('sql_database_function_path')}
+
+Function Name: {self.response.get('sql_database_function_name')}
+                """
+                if markdown:
+                    return Markdown(log_details) 
+                else:
+                    return log_details
+
+    def get_data_sql(self):
+        """
+        Retrieves the SQL query result from the agent's response.
+
+        Returns
+        -------
+        dict or None
+            The returned data as a dictionary of column -> list_of_values, 
+            or None if no data is found.
+        """
+        if self.response and "data_sql" in self.response:
+            return pd.DataFrame(self.response["data_sql"])
+        return None
+
+    def get_sql_query_code(self, markdown=False):
+        """
+        Retrieves the raw SQL query code generated by the agent (if available).
+        
+        Parameters
+        ----------
+        markdown : bool, optional
+            If True, returns the code in a Markdown code block.
+
+        Returns
+        -------
+        str or None
+            The SQL query as a string, or None if not available.
+        """
+        if self.response and "sql_query_code" in self.response:
+            if markdown:
+                return Markdown(f"```sql\n{self.response['sql_query_code']}\n```")
+            return self.response["sql_query_code"]
+        return None
+
+    def get_sql_database_function(self, markdown=False):
+        """
+        Retrieves the Python function code used to execute the SQL query.
+
+        Parameters
+        ----------
+        markdown : bool, optional
+            If True, returns the code in a Markdown code block.
+
+        Returns
+        -------
+        str or None
+            The function code if available, otherwise None.
+        """
+        if self.response and "sql_database_function" in self.response:
+            code = self.response["sql_database_function"]
+            if markdown:
+                return Markdown(f"```python\n{code}\n```")
+            return code
+        return None
+
+    def get_recommended_sql_steps(self, markdown=False):
+        """
+        Retrieves the recommended SQL steps from the agent's response.
+        
+        Parameters
+        ----------
+        markdown : bool, optional
+            If True, returns the steps in Markdown format.
+
+        Returns
+        -------
+        str or None
+            Recommended steps or None if not available.
+        """
+        if self.response and "recommended_steps" in self.response:
+            if markdown:
+                return Markdown(self.response["recommended_steps"])
+            return self.response["recommended_steps"]
+        return None
+
+
+
+# Function
+
+def make_sql_database_agent(
+    model, 
+    connection, 
+    n_samples=1, 
+    log=False, 
+    log_path=None, 
+    file_name="sql_database.py",
+    function_name="sql_database_pipeline",
+    overwrite = True, 
+    human_in_the_loop=False, 
+    bypass_recommended_steps=False, 
+    bypass_explain_code=False,
+    checkpointer=None,
+    smart_schema_pruning=False,
+):
+    """
+    Creates a SQL Database Agent that can recommend SQL steps and generate SQL code to query a database. 
+    
+    Parameters
+    ----------
+    model : ChatOpenAI
+        The language model to use for the agent.
+    connection : sqlalchemy.engine.base.Engine
+        The connection to the SQL database.
+    n_samples : int, optional
+        The number of samples to retrieve for each column, by default 1. 
+        If you get an error due to maximum tokens, try reducing this number.
+        > "This model's maximum context length is 128000 tokens. However, your messages resulted in 333858 tokens. Please reduce the length of the messages."
+    log : bool, optional
+        Whether to log the generated code, by default False
+    log_path : str, optional
+        The path to the log directory, by default None
+    file_name : str, optional
+        The name of the file to save the generated code, by default "sql_database.py"
+    overwrite : bool, optional
+        Whether to overwrite the existing log file, by default True
+    human_in_the_loop : bool, optional
+        Whether or not to use human in the loop. If True, adds an interput and human in the loop step that asks the user to review the feature engineering instructions. Defaults to False.
+    bypass_recommended_steps : bool, optional
+        Bypass the recommendation step, by default False
+    bypass_explain_code : bool, optional
+        Bypass the code explanation step, by default False.
+    checkpointer : Checkpointer, optional
+        A checkpointer to save and load the agent's state. Defaults to None.
+    smart_schema_pruning : bool, optional
+        If True, filters the tables and columns with an extra LLM step to reduce tokens for large databases. Increases processing time but can avoid errors due to hitting max token limits with large databases. Defaults to False.
+    
+    Returns
+    -------
+    app : langchain.graphs.CompiledStateGraph
+        The data cleaning agent as a state graph.
+        
+    Examples
+    --------
+    ```python
+    from ai_data_science_team.agents import make_sql_database_agent
+    import sqlalchemy as sql
+    from langchain_openai import ChatOpenAI
+
+    sql_engine = sql.create_engine("sqlite:///data/leads_scored.db")
+
+    conn = sql_engine.connect()
+
+    llm = ChatOpenAI(model="gpt-4o-mini")
+    
+    sql_agent = make_sql_database_agent(
+        model=llm, 
+        connection=conn
+    )
+
+    sql_agent
+
+    response = sql_agent.invoke({
+        "user_instructions": "List the tables in the database",
+        "max_retries":3, 
+        "retry_count":0
+    })
+    ```
+    """
+    
+    llm = model
+    
+    if human_in_the_loop:
+        if checkpointer is None:
+            print("Human in the loop is enabled. A checkpointer is required. Setting to MemorySaver().")
+            checkpointer = MemorySaver()
+    
+    # Human in th loop requires recommended steps
+    if bypass_recommended_steps and human_in_the_loop:
+        bypass_recommended_steps = False
+        print("Bypass recommended steps set to False to enable human in the loop.")
+    
+    # Setup Log Directory
+    if log:
+        if log_path is None:
+            log_path = LOG_PATH
+        if not os.path.exists(log_path):
+            os.makedirs(log_path)
+            
+    # Get the database metadata
+    is_engine = isinstance(connection, sql.engine.base.Engine)
+    conn = connection.connect() if is_engine else connection
+        
+    
+    class GraphState(TypedDict):
+        messages: Annotated[Sequence[BaseMessage], operator.add]
+        user_instructions: str
+        recommended_steps: str
+        data_sql: dict
+        all_sql_database_summary: str
+        sql_query_code: str
+        sql_database_function: str
+        sql_database_function_path: str
+        sql_database_function_file_name: str
+        sql_database_function_name: str
+        sql_database_error: str
+        max_retries: int
+        retry_count: int
+    
+    def recommend_sql_steps(state: GraphState):
+        
+        print(format_agent_name(AGENT_NAME))
+        
+        all_sql_database_summary = get_database_metadata(conn, n_samples=n_samples)
+    
+        all_sql_database_summary = smart_schema_filter(
+            llm, 
+            state.get("user_instructions"), 
+            all_sql_database_summary, 
+            smart_filtering=smart_schema_pruning
+        )
+        
+        print("    * RECOMMEND STEPS")
+        
+        
+        # Prompt to get recommended steps from the LLM
+        recommend_steps_prompt = PromptTemplate(
+            template="""
+            You are a SQL Database Instructions Expert. Given the following information about the SQL database, 
+            recommend a series of numbered steps to take to collect the data and process it according to user instructions. 
+            The steps should be tailored to the SQL database characteristics and should be helpful 
+            for a sql database coding agent that will write the SQL code.
+            
+            IMPORTANT INSTRUCTIONS:
+            - Take into account the user instructions and the previously recommended steps.
+            - If no user instructions are provided, just return the steps needed to understand the database.
+            - Take into account the database dialect and the tables and columns in the database.
+            - Pay attention to use only the column names you can see in the tables below. Be careful to not query for columns that do not exist. Also, pay attention to which column is in which table.
+            - IMPORTANT: Pay attention to the table names and column names in the database. Make sure to use the correct table and column names in the SQL code. If a space is present in the table name or column name, make sure to account for it.
+            
+            
+            User instructions / Question:
+            {user_instructions}
+
+            Previously Recommended Steps (if any):
+            {recommended_steps}
+
+            Below are summaries of the database metadata and the SQL tables:
+            {all_sql_database_summary}
+
+            Return steps as a numbered list. You can return short code snippets to demonstrate actions. But do not return a fully coded solution. The code will be generated separately by a Coding Agent.
+            
+            Consider these:
+            
+            1. Consider the database dialect and the tables and columns in the database.
+            
+            
+            Avoid these:
+            1. Do not include steps to save files.
+            2. Do not include steps to modify existing tables, create new tables or modify the database schema.
+            3. Do not include steps that alter the existing data in the database.
+            4. Make sure not to include unsafe code that could cause data loss or corruption or SQL injections.
+            5. Make sure to not include irrelevant steps that do not help in the SQL agent's data collection and processing. Examples include steps to create new tables, modify the schema, save files, create charts, etc.
+  
+            
+            """,
+            input_variables=["user_instructions", "recommended_steps", "all_sql_database_summary"]
+        )
+        
+        steps_agent = recommend_steps_prompt | llm
+        
+        recommended_steps = steps_agent.invoke({
+            "user_instructions": state.get("user_instructions"),
+            "recommended_steps": state.get("recommended_steps"),
+            "all_sql_database_summary": all_sql_database_summary
+        })
+        
+        return {
+            "recommended_steps": format_recommended_steps(recommended_steps.content.strip(), heading="# Recommended SQL Database Steps:"),
+            "all_sql_database_summary": all_sql_database_summary
+        }
+        
+    def create_sql_query_code(state: GraphState):
+        if bypass_recommended_steps:
+            print(format_agent_name(AGENT_NAME))
+            all_sql_database_summary = get_database_metadata(conn, n_samples=n_samples)
+            all_sql_database_summary = smart_schema_filter(
+                llm, 
+                state.get("user_instructions"), 
+                all_sql_database_summary, 
+                smart_filtering=smart_schema_pruning
+            )
+        else:
+            all_sql_database_summary = state.get("all_sql_database_summary")    
+        print("    * CREATE SQL QUERY CODE")
+        
+        # Prompt to get the SQL code from the LLM
+        sql_query_code_prompt = PromptTemplate(
+            template="""
+            You are a SQL Database Coding Expert. Given the following information about the SQL database, 
+            write the SQL code to collect the data and process it according to user instructions. 
+            The code should be tailored to the SQL database characteristics and should take into account user instructions, recommended steps, database and table characteristics.
+            
+            IMPORTANT INSTRUCTIONS:
+            - Do not use a LIMIT clause unless a user specifies a limit to be returned.
+            - Return SQL in ```sql ``` format.
+            - Only return a single query if possible.
+            - Pay attention to use only the column names you can see in the tables below. Be careful to not query for columns that do not exist. Also, pay attention to which column is in which table.
+            - Pay attention to the SQL dialect from the database summary metadata. Write the SQL code according to the dialect specified.
+            - IMPORTANT: Pay attention to the table names and column names in the database. Make sure to use the correct table and column names in the SQL code. If a space is present in the table name or column name, make sure to account for it.
+            
+            
+            User instructions / Question:
+            {user_instructions}
+
+            Recommended Steps:
+            {recommended_steps}
+
+            Below are summaries of the database metadata and the SQL tables:
+            {all_sql_database_summary}
+
+            Return:
+            - The SQL code in ```sql ``` format to collect the data and process it according to the user instructions.
+            
+            Avoid these:
+            - Do not include steps to save files.
+            - Do not include steps to modify existing tables, create new tables or modify the database schema.
+            - Make sure not to alter the existing data in the database.
+            - Make sure not to include unsafe code that could cause data loss or corruption.
+            
+            """,
+            input_variables=["user_instructions", "recommended_steps", "all_sql_database_summary"]
+        )
+        
+        sql_query_code_agent = sql_query_code_prompt | llm | SQLOutputParser()
+        
+        sql_query_code = sql_query_code_agent.invoke({
+            "user_instructions": state.get("user_instructions"),
+            "recommended_steps": state.get("recommended_steps"),
+            "all_sql_database_summary": all_sql_database_summary
+        })
+        
+        print("    * CREATE PYTHON FUNCTION TO RUN SQL CODE")
+        
+        response = f"""
+def {function_name}(connection):
+    import pandas as pd
+    import sqlalchemy as sql
+    
+    # Create a connection if needed
+    is_engine = isinstance(connection, sql.engine.base.Engine)
+    conn = connection.connect() if is_engine else connection
+
+    sql_query = '''
+    {sql_query_code}
+    '''
+    
+    return pd.read_sql(sql_query, connection)
+        """
+        
+        response = add_comments_to_top(response, AGENT_NAME)
+            
+        # For logging: store the code generated
+        file_path, file_name_2 = log_ai_function(
+            response=response,
+            file_name=file_name,
+            log=log,
+            log_path=log_path,
+            overwrite=overwrite
+        )
+        
+        return {
+            "sql_query_code": sql_query_code,
+            "sql_database_function": response,
+            "sql_database_function_path": file_path,
+            "sql_database_function_file_name": file_name_2,
+            "sql_database_function_name": function_name,
+            "all_sql_database_summary": all_sql_database_summary
+        }
+        
+    # Human Review   
+    
+    prompt_text_human_review = "Are the following SQL agent instructions correct? (Answer 'yes' or provide modifications)\n{steps}"
+    
+    if not bypass_explain_code:
+        def human_review(state: GraphState) -> Command[Literal["recommend_sql_steps", "explain_sql_database_code"]]:
+            return node_func_human_review(
+                state=state,
+                prompt_text=prompt_text_human_review,
+                yes_goto= 'explain_sql_database_code',
+                no_goto="recommend_sql_steps",
+                user_instructions_key="user_instructions",
+                recommended_steps_key="recommended_steps",
+                code_snippet_key="sql_database_function",
+            )
+    else:
+        def human_review(state: GraphState) -> Command[Literal["recommend_sql_steps", "__end__"]]:
+            return node_func_human_review(
+                state=state,
+                prompt_text=prompt_text_human_review,
+                yes_goto= '__end__',
+                no_goto="recommend_sql_steps",
+                user_instructions_key="user_instructions",
+                recommended_steps_key="recommended_steps",
+                code_snippet_key="sql_database_function", 
+            )
+    
+    def execute_sql_database_code(state: GraphState):
+        
+        is_engine = isinstance(connection, sql.engine.base.Engine)
+        conn = connection.connect() if is_engine else connection
+        
+        return node_func_execute_agent_from_sql_connection(
+            state=state,
+            connection=conn,
+            result_key="data_sql",
+            error_key="sql_database_error",
+            code_snippet_key="sql_database_function",
+            agent_function_name=state.get("sql_database_function_name"),
+            post_processing=lambda df: df.to_dict() if isinstance(df, pd.DataFrame) else df,
+            error_message_prefix="An error occurred during executing the sql database pipeline: "
+        )
+    
+    def fix_sql_database_code(state: GraphState):
+        prompt = """
+        You are a SQL Database Agent code fixer. Your job is to create a {function_name}(connection) function that can be run on a sql connection. The function is currently broken and needs to be fixed.
+        
+        Make sure to only return the function definition for {function_name}().
+        
+        Return Python code in ```python``` format with a single function definition, {function_name}(connection), that includes all imports inside the function. The connection object is a SQLAlchemy connection object. Don't specify the class of the connection object, just use it as an argument to the function.
+        
+        This is the broken code (please fix): 
+        {code_snippet}
+
+        Last Known Error:
+        {error}
+        """
+
+        return node_func_fix_agent_code(
+            state=state,
+            code_snippet_key="sql_database_function",
+            error_key="sql_database_error",
+            llm=llm,  
+            prompt_template=prompt,
+            agent_name=AGENT_NAME,
+            log=log,
+            file_path=state.get("sql_database_function_path", None),
+            function_name=state.get("sql_database_function_name"),
+        )
+        
+    # Final reporting node
+    def report_agent_outputs(state: GraphState):
+        return node_func_report_agent_outputs(
+            state=state,
+            keys_to_include=[
+                "recommended_steps",
+                "sql_database_function",
+                "sql_database_function_path",
+                "sql_database_function_name",
+                "sql_database_error",
+            ],
+            result_key="messages",
+            role=AGENT_NAME,
+            custom_title="SQL Database Agent Outputs"
+        )
+        
+    # Create the graph
+    node_functions = {
+        "recommend_sql_steps": recommend_sql_steps,
+        "human_review": human_review,
+        "create_sql_query_code": create_sql_query_code,
+        "execute_sql_database_code": execute_sql_database_code,
+        "fix_sql_database_code": fix_sql_database_code,
+        "report_agent_outputs": report_agent_outputs, 
+    }
+    
+    app = create_coding_agent_graph(
+        GraphState=GraphState,
+        node_functions=node_functions,
+        recommended_steps_node_name="recommend_sql_steps",
+        create_code_node_name="create_sql_query_code",
+        execute_code_node_name="execute_sql_database_code",
+        fix_code_node_name="fix_sql_database_code",
+        explain_code_node_name="report_agent_outputs",
+        error_key="sql_database_error",
+        human_in_the_loop=human_in_the_loop,
+        human_review_node_name="human_review",
+        checkpointer=checkpointer,
+        bypass_recommended_steps=bypass_recommended_steps,
+        bypass_explain_code=bypass_explain_code,
+        agent_name=AGENT_NAME,
+    )
+        
+    return app
+        
+             
+            
+        
+def smart_schema_filter(llm, user_instructions, all_sql_database_summary, smart_filtering = True):
+    """
+    This function filters the tables and columns based on the user instructions and the recommended steps.
+    """
+    # Smart schema filtering
+    if smart_filtering:
+        print("    * SMART FILTER SCHEMA")
+        
+        filter_schema_prompt = PromptTemplate(
+            template="""
+            You are a highly skilled data engineer. The user question is:
+
+                "{user_instructions}"
+
+            You have the full database metadata in JSON format below:
+
+                {all_sql_database_summary}
+            
+            
+            Please return ONLY the subset of this metadata that is relevant to answering the user’s question. 
+            - Preserve the same JSON structure for "schemas" -> "tables" -> "columns". 
+            - If any schemas/tables are irrelevant, omit them entirely.
+            - If some columns in a relevant table are not needed, you can still keep them if you aren't sure. 
+            - However, try to keep only the minimum amount of data required to answer the user’s question.
+
+            Return a valid JSON object. Do not include any additional explanation or text outside of the JSON.
+            """,
+            input_variables=["user_instructions", "full_metadata_json"]
+        )
+        
+        filter_schema_agent = filter_schema_prompt | llm | JsonOutputParser()
+        
+        response = filter_schema_agent.invoke({
+            "user_instructions": user_instructions,
+            "all_sql_database_summary": all_sql_database_summary
+        })
+        
+        return response
+    else:
+        return all_sql_database_summary
+        
+        
+    
+

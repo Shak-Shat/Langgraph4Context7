@@ -1,0 +1,4245 @@
+Directory structure:
+└── uipath_langchain/
+    ├── __init__.py
+    ├── middlewares.py
+    ├── _cli/
+    │   ├── __init__.py
+    │   ├── cli_init.py
+    │   ├── cli_new.py
+    │   ├── cli_run.py
+    │   ├── _runtime/
+    │   │   ├── _context.py
+    │   │   ├── _escalation.py
+    │   │   ├── _exception.py
+    │   │   ├── _input.py
+    │   │   ├── _output.py
+    │   │   └── _runtime.py
+    │   ├── _templates/
+    │   │   ├── langgraph.json.template
+    │   │   └── main.py.template
+    │   └── _utils/
+    │       └── _graph.py
+    ├── _utils/
+    │   ├── __init__.py
+    │   ├── _request_mixin.py
+    │   ├── _settings.py
+    │   └── _sleep_policy.py
+    ├── chat/
+    │   ├── __init__.py
+    │   └── models.py
+    ├── embeddings/
+    │   ├── __init__.py
+    │   └── embeddings.py
+    ├── retrievers/
+    │   ├── __init__.py
+    │   └── context_grounding_retriever.py
+    ├── tracers/
+    │   ├── __init__.py
+    │   ├── _events.py
+    │   ├── _instrument_traceable.py
+    │   ├── _utils.py
+    │   ├── AsyncUiPathTracer.py
+    │   └── UiPathTracer.py
+    └── vectorstores/
+        ├── __init__.py
+        └── context_grounding_vectorstore.py
+
+================================================
+FILE: src/uipath_langchain/__init__.py
+================================================
+from .middlewares import register_middleware
+
+__all__ = ["register_middleware"]
+
+
+
+================================================
+FILE: src/uipath_langchain/middlewares.py
+================================================
+from uipath._cli.middlewares import Middlewares
+
+from ._cli.cli_init import langgraph_init_middleware
+from ._cli.cli_new import langgraph_new_middleware
+from ._cli.cli_run import langgraph_run_middleware
+
+
+def register_middleware():
+    """This function will be called by the entry point system when uipath_langchain is installed"""
+    Middlewares.register("init", langgraph_init_middleware)
+    Middlewares.register("run", langgraph_run_middleware)
+    Middlewares.register("new", langgraph_new_middleware)
+
+
+
+================================================
+FILE: src/uipath_langchain/_cli/__init__.py
+================================================
+__all__: list[str] = []
+
+
+
+================================================
+FILE: src/uipath_langchain/_cli/cli_init.py
+================================================
+import asyncio
+import json
+import os
+import uuid
+from typing import Any, Dict
+
+from langgraph.graph.state import CompiledStateGraph
+from uipath._cli._utils._console import ConsoleLogger
+from uipath._cli._utils._parse_ast import generate_bindings_json  # type: ignore
+from uipath._cli.middlewares import MiddlewareResult
+
+from ._utils._graph import LangGraphConfig
+
+console = ConsoleLogger()
+
+
+def resolve_refs(schema, root=None):
+    """Recursively resolves $ref references in a JSON schema."""
+    if root is None:
+        root = schema  # Store the root schema to resolve $refs
+
+    if isinstance(schema, dict):
+        if "$ref" in schema:
+            ref_path = schema["$ref"].lstrip("#/").split("/")
+            ref_schema = root
+            for part in ref_path:
+                ref_schema = ref_schema.get(part, {})
+            return resolve_refs(ref_schema, root)
+
+        return {k: resolve_refs(v, root) for k, v in schema.items()}
+
+    elif isinstance(schema, list):
+        return [resolve_refs(item, root) for item in schema]
+
+    return schema
+
+
+def process_nullable_types(
+    schema: Dict[str, Any] | list[Any] | Any,
+) -> Dict[str, Any] | list[Any]:
+    """Process the schema to handle nullable types by removing anyOf with null and keeping the base type."""
+    if isinstance(schema, dict):
+        if "anyOf" in schema and len(schema["anyOf"]) == 2:
+            types = [t.get("type") for t in schema["anyOf"]]
+            if "null" in types:
+                non_null_type = next(
+                    t for t in schema["anyOf"] if t.get("type") != "null"
+                )
+                return non_null_type
+
+        return {k: process_nullable_types(v) for k, v in schema.items()}
+    elif isinstance(schema, list):
+        return [process_nullable_types(item) for item in schema]
+    return schema
+
+
+def generate_schema_from_graph(graph: CompiledStateGraph) -> Dict[str, Any]:
+    """Extract input/output schema from a LangGraph graph"""
+    schema = {
+        "input": {"type": "object", "properties": {}, "required": []},
+        "output": {"type": "object", "properties": {}, "required": []},
+    }
+
+    if hasattr(graph, "input_schema"):
+        if hasattr(graph.input_schema, "model_json_schema"):
+            input_schema = graph.input_schema.model_json_schema()
+            unpacked_ref_def_properties = resolve_refs(input_schema)
+
+            # Process the schema to handle nullable types
+            processed_properties = process_nullable_types(
+                unpacked_ref_def_properties.get("properties", {})
+            )
+
+            schema["input"]["properties"] = processed_properties
+            schema["input"]["required"] = unpacked_ref_def_properties.get(
+                "required", []
+            )
+
+    if hasattr(graph, "output_schema"):
+        if hasattr(graph.output_schema, "model_json_schema"):
+            output_schema = graph.output_schema.model_json_schema()
+            unpacked_ref_def_properties = resolve_refs(output_schema)
+
+            # Process the schema to handle nullable types
+            processed_properties = process_nullable_types(
+                unpacked_ref_def_properties.get("properties", {})
+            )
+
+            schema["output"]["properties"] = processed_properties
+            schema["output"]["required"] = unpacked_ref_def_properties.get(
+                "required", []
+            )
+
+    return schema
+
+
+async def langgraph_init_middleware_async(entrypoint: str) -> MiddlewareResult:
+    """Middleware to check for langgraph.json and create uipath.json with schemas"""
+    config = LangGraphConfig()
+    if not config.exists:
+        return MiddlewareResult(
+            should_continue=True
+        )  # Continue with normal flow if no langgraph.json
+
+    try:
+        config.load_config()
+        entrypoints = []
+        all_bindings = {"version": "2.0", "resources": []}
+        mermaids = {}
+
+        for graph in config.graphs:
+            if entrypoint and graph.name != entrypoint:
+                continue
+
+            try:
+                loaded_graph = await graph.load_graph()
+                state_graph = (
+                    loaded_graph.builder
+                    if isinstance(loaded_graph, CompiledStateGraph)
+                    else loaded_graph
+                )
+                compiled_graph = state_graph.compile()
+                graph_schema = generate_schema_from_graph(compiled_graph)
+
+                mermaids[graph.name] = compiled_graph.get_graph(xray=1).draw_mermaid()
+
+                try:
+                    # Make sure the file path exists
+                    if os.path.exists(graph.file_path):
+                        file_bindings = generate_bindings_json(graph.file_path)
+
+                        # Merge bindings
+                        if "resources" in file_bindings:
+                            all_bindings["resources"] = file_bindings["resources"]
+                except Exception as e:
+                    console.warning(
+                        f"Warning: Could not generate bindings for {graph.file_path}: {str(e)}"
+                    )
+
+                new_entrypoint: dict[str, Any] = {
+                    "filePath": graph.name,
+                    "uniqueId": str(uuid.uuid4()),
+                    "type": "agent",
+                    "input": graph_schema["input"],
+                    "output": graph_schema["output"],
+                }
+                entrypoints.append(new_entrypoint)
+
+            except Exception as e:
+                console.error(f"Error during graph load: {e}")
+                return MiddlewareResult(
+                    should_continue=False,
+                    should_include_stacktrace=True,
+                )
+            finally:
+                await graph.cleanup()
+
+        if entrypoint and not entrypoints:
+            console.error(f"Error: No graph found with name '{entrypoint}'")
+            return MiddlewareResult(
+                should_continue=False,
+            )
+
+        uipath_config = {"entryPoints": entrypoints, "bindings": all_bindings}
+
+        # Save the uipath.json file
+        config_path = "uipath.json"
+        with open(config_path, "w") as f:
+            json.dump(uipath_config, f, indent=2)
+
+        for graph_name, mermaid_content in mermaids.items():
+            mermaid_file_path = f"{graph_name}.mermaid"
+            try:
+                with open(mermaid_file_path, "w") as f:
+                    f.write(mermaid_content)
+                console.success(f" Created '{mermaid_file_path}' file.")
+            except Exception as write_error:
+                console.error(
+                    f"Error writing mermaid file for '{graph_name}': {str(write_error)}"
+                )
+                return MiddlewareResult(
+                    should_continue=False,
+                    should_include_stacktrace=True,
+                )
+        console.success(f" Created '{config_path}' file.")
+        return MiddlewareResult(should_continue=False)
+
+    except Exception as e:
+        console.error(f"Error processing langgraph configuration: {str(e)}")
+        return MiddlewareResult(
+            should_continue=False,
+            should_include_stacktrace=True,
+        )
+
+
+def langgraph_init_middleware(entrypoint: str) -> MiddlewareResult:
+    """Middleware to check for langgraph.json and create uipath.json with schemas"""
+    return asyncio.run(langgraph_init_middleware_async(entrypoint))
+
+
+
+================================================
+FILE: src/uipath_langchain/_cli/cli_new.py
+================================================
+import os
+import shutil
+
+import click
+from uipath._cli._utils._console import ConsoleLogger
+from uipath._cli.middlewares import MiddlewareResult
+
+console = ConsoleLogger()
+
+
+def generate_script(target_directory):
+    template_script_path = os.path.join(
+        os.path.dirname(__file__), "_templates/main.py.template"
+    )
+    target_path = os.path.join(target_directory, "main.py")
+
+    shutil.copyfile(template_script_path, target_path)
+
+    template_langgraph_json_path = os.path.join(
+        os.path.dirname(__file__), "_templates/langgraph.json.template"
+    )
+    target_path = os.path.join(target_directory, "langgraph.json")
+    shutil.copyfile(template_langgraph_json_path, target_path)
+
+
+def generate_pyproject(target_directory, project_name):
+    project_toml_path = os.path.join(target_directory, "pyproject.toml")
+    toml_content = f"""[project]
+name = "{project_name}"
+version = "0.0.1"
+description = "{project_name}"
+authors = [{{ name = "John Doe", email = "john.doe@myemail.com" }}]
+dependencies = [
+    "uipath-langchain>=0.0.106",
+    "langchain-anthropic>=0.3.8",
+]
+requires-python = ">=3.10"
+"""
+
+    with open(project_toml_path, "w") as f:
+        f.write(toml_content)
+
+
+def langgraph_new_middleware(name: str) -> MiddlewareResult:
+    """Middleware to create demo langchain agent"""
+
+    directory = os.getcwd()
+
+    try:
+        with console.spinner(f"Creating new agent {name} in current directory ..."):
+            generate_pyproject(directory, name)
+            generate_script(directory)
+            console.success("Created 'main.py' file.")
+            console.success("Created 'langgraph.json' file.")
+            generate_pyproject(directory, name)
+            console.success("Created 'pyproject.toml' file.")
+            console.config(
+                f""" Please ensure to define either {click.style("ANTHROPIC_API_KEY", fg="bright_yellow")} or {click.style("OPENAI_API_KEY", fg="bright_yellow")} in your .env file. """
+            )
+            init_command = """uipath init"""
+            run_command = """uipath run agent '{"topic": "UiPath"}'"""
+            console.hint(
+                f""" Initialize project: {click.style(init_command, fg="cyan")}"""
+            )
+            console.hint(f""" Run agent: {click.style(run_command, fg="cyan")}""")
+        return MiddlewareResult(should_continue=False)
+    except Exception as e:
+        console.error(f"Error creating demo agent {str(e)}")
+        return MiddlewareResult(
+            should_continue=False,
+            should_include_stacktrace=True,
+        )
+
+
+
+================================================
+FILE: src/uipath_langchain/_cli/cli_run.py
+================================================
+import asyncio
+from os import environ as env
+from typing import Optional
+
+from dotenv import load_dotenv
+from uipath._cli._runtime._contracts import UiPathTraceContext
+from uipath._cli.middlewares import MiddlewareResult
+
+from ._runtime._context import LangGraphRuntimeContext
+from ._runtime._exception import LangGraphRuntimeError
+from ._runtime._runtime import LangGraphRuntime
+from ._utils._graph import LangGraphConfig
+
+load_dotenv()
+
+
+def langgraph_run_middleware(
+    entrypoint: Optional[str], input: Optional[str], resume: bool
+) -> MiddlewareResult:
+    """Middleware to handle langgraph execution"""
+    config = LangGraphConfig()
+    if not config.exists:
+        return MiddlewareResult(
+            should_continue=True
+        )  # Continue with normal flow if no langgraph.json
+
+    try:
+
+        async def execute():
+            context = LangGraphRuntimeContext.from_config(
+                env.get("UIPATH_CONFIG_PATH", "uipath.json")
+            )
+
+            context.entrypoint = entrypoint
+            context.input = input
+            context.resume = resume
+            context.langgraph_config = config
+            context.logs_min_level = env.get("LOG_LEVEL", "INFO")
+            context.job_id = env.get("UIPATH_JOB_KEY")
+            context.trace_id = env.get("UIPATH_TRACE_ID")
+            context.tracing_enabled = env.get("UIPATH_TRACING_ENABLED", True)
+            context.trace_context = UiPathTraceContext(
+                enabled=env.get("UIPATH_TRACING_ENABLED", True),
+                trace_id=env.get("UIPATH_TRACE_ID"),
+                parent_span_id=env.get("UIPATH_PARENT_SPAN_ID"),
+                root_span_id=env.get("UIPATH_ROOT_SPAN_ID"),
+                job_id=env.get("UIPATH_JOB_KEY"),
+                org_id=env.get("UIPATH_ORGANIZATION_ID"),
+                tenant_id=env.get("UIPATH_TENANT_ID"),
+                process_key=env.get("UIPATH_PROCESS_UUID"),
+                folder_key=env.get("UIPATH_FOLDER_KEY"),
+            )
+            context.langsmith_tracing_enabled = env.get("LANGSMITH_TRACING", False)
+
+            # Add default env variables
+            env["UIPATH_REQUESTING_PRODUCT"] = "uipath-python-sdk"
+            env["UIPATH_REQUESTING_FEATURE"] = "langgraph-agent"
+
+            async with LangGraphRuntime.from_context(context) as runtime:
+                await runtime.execute()
+
+        asyncio.run(execute())
+
+        return MiddlewareResult(should_continue=False, error_message=None)
+
+    except LangGraphRuntimeError as e:
+        return MiddlewareResult(
+            should_continue=False,
+            error_message=e.error_info.detail,
+            should_include_stacktrace=True,
+        )
+    except Exception as e:
+        return MiddlewareResult(
+            should_continue=False,
+            error_message=f"Error: {str(e)}",
+            should_include_stacktrace=True,
+        )
+
+
+
+================================================
+FILE: src/uipath_langchain/_cli/_runtime/_context.py
+================================================
+from typing import Any, Optional, Union
+
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.graph import StateGraph
+from uipath._cli._runtime._contracts import UiPathRuntimeContext
+
+from .._utils._graph import LangGraphConfig
+
+
+class LangGraphRuntimeContext(UiPathRuntimeContext):
+    """Context information passed throughout the runtime execution."""
+
+    langgraph_config: Optional[LangGraphConfig] = None
+    state_graph: Optional[StateGraph] = None
+    output: Optional[Any] = None
+    state: Optional[Any] = (
+        None  # TypedDict issue, the actual type is: Optional[langgraph.types.StateSnapshot]
+    )
+    memory: Optional[AsyncSqliteSaver] = None
+    langsmith_tracing_enabled: Union[str, bool, None] = False
+    resume_triggers_table: str = "__uipath_resume_triggers"
+
+
+
+================================================
+FILE: src/uipath_langchain/_cli/_runtime/_escalation.py
+================================================
+import json
+import logging
+from pathlib import Path
+from typing import Any, Dict, Optional, Union
+
+from uipath import UiPath
+from uipath.models.actions import Action
+
+logger = logging.getLogger(__name__)
+
+
+class Escalation:
+    """
+    Class to handle default escalation.
+    """
+
+    def __init__(self, config_path: Union[str, Path] = "uipath.json"):
+        """
+        Initialize the escalation with a config file path.
+
+        Args:
+            config_path: Path to the configuration file (string or Path object)
+        """
+        self.config_path = Path(config_path)
+        self._config = None
+        self._enabled = False
+
+        self._load_config()
+
+    def _load_config(self) -> None:
+        """
+        Load and validate the default escalation from the config file.
+
+        If the 'defaultEscalation' section exists, validates required fields.
+        Raises error if required fields are missing.
+        """
+        try:
+            config_data = json.loads(self.config_path.read_text(encoding="utf-8"))
+            escalation_config = config_data.get("defaultEscalation")
+
+            if escalation_config:
+                required_fields = {"request", "title"}
+                missing_fields = [
+                    field for field in required_fields if field not in escalation_config
+                ]
+
+                if not any(key in escalation_config for key in ("appName", "appKey")):
+                    missing_fields.append("appName or appKey")
+
+                if missing_fields:
+                    raise ValueError(
+                        f"Missing required fields in configuration: {', '.join(missing_fields)}"
+                    )
+
+                self._config = escalation_config
+                self._enabled = True
+                logger.debug("Escalation configuration loaded successfully")
+            else:
+                self._enabled = False
+
+        except FileNotFoundError:
+            logger.debug(f"Config file not found: {self.config_path}")
+            self._enabled = False
+
+        except json.JSONDecodeError:
+            logger.warning(
+                f"Failed to parse config file {self.config_path}: Invalid JSON"
+            )
+            self._enabled = False
+
+        except ValueError as e:
+            logger.error(str(e))
+            raise
+
+        except Exception as e:
+            logger.error(f"Unexpected error loading config {self.config_path}: {e}")
+            self._enabled = False
+
+    @property
+    def enabled(self) -> bool:
+        """
+        Check if escalation is enabled.
+
+        Returns:
+            True if configuration is valid and loaded
+        """
+        return self._enabled
+
+    def prepare_data(self, value: Any) -> Dict[str, Any]:
+        """
+        Prepare action data by replacing $VALUE placeholders with the provided value.
+
+        Args:
+            value: The value to substitute into the template
+
+        Returns:
+            Prepared data dictionary with substitutions applied
+        """
+        if not self.enabled or not self._config:
+            return {}
+
+        template = self._config.get("request", {})
+
+        if isinstance(value, str):
+            try:
+                value_obj = json.loads(value)
+            except json.JSONDecodeError:
+                value_obj = value
+        else:
+            value_obj = value
+
+        return self._substitute_values(template, value_obj)
+
+    def _substitute_values(
+        self, template: Dict[str, Any], value: Any
+    ) -> Dict[str, Any]:
+        """
+        Replace template placeholders with actual values.
+
+        Args:
+            template: Template dictionary containing placeholders
+            value: Values to substitute into the template
+
+        Returns:
+            Template with values substituted
+        """
+
+        def process_value(template_value):
+            if isinstance(template_value, dict):
+                return {k: process_value(v) for k, v in template_value.items()}
+            elif isinstance(template_value, list):
+                return [process_value(item) for item in template_value]
+            elif isinstance(template_value, str):
+                if template_value == "$VALUE":
+                    return value
+                elif template_value.startswith("$VALUE."):
+                    return self._resolve_value_path(template_value, value)
+
+            return template_value
+
+        return process_value(template)
+
+    def _resolve_value_path(self, path_expr: str, value: Any) -> Any:
+        """
+        Resolve a dot-notation path expression against a value.
+
+        Args:
+            path_expr: Path expression (e.g. "$VALUE.user.name")
+            value: Value object to extract data from
+
+        Returns:
+            Extracted value or None if path doesn't exist
+        """
+        path_parts = path_expr.replace("$VALUE.", "").split(".")
+        current = value
+
+        for part in path_parts:
+            if not isinstance(current, dict) or part not in current:
+                return None
+            current = current.get(part)
+
+        return current
+
+    def extract_response_value(self, action_data: Dict[str, Any]) -> Any:
+        if not self._config:
+            return ""
+
+        response_template = self._config.get("response")
+        if not response_template:
+            return ""
+
+        for key, template_value in response_template.items():
+            if key in action_data:
+                extracted_value = None
+
+                if template_value == "$VALUE":
+                    extracted_value = action_data[key]
+                elif isinstance(template_value, str) and template_value.startswith(
+                    "$VALUE."
+                ):
+                    path_parts = template_value.replace("$VALUE.", "").split(".")
+                    current = action_data[key]
+
+                    valid_path = True
+                    for part in path_parts:
+                        if not isinstance(current, dict) or part not in current:
+                            valid_path = False
+                            break
+                        current = current.get(part)
+
+                    if valid_path:
+                        extracted_value = current
+
+                if extracted_value is not None:
+                    if isinstance(extracted_value, str):
+                        if extracted_value.lower() == "true":
+                            return True
+                        elif extracted_value.lower() == "false":
+                            return False
+
+                        try:
+                            if "." in extracted_value:
+                                return float(extracted_value)
+                            else:
+                                return int(extracted_value)
+                        except ValueError:
+                            pass
+
+                    return extracted_value
+
+        return action_data
+
+    async def create(self, value: Any) -> Optional[Action]:
+        """
+        Create an escalation Action with the prepared data.
+
+        Args:
+            value: The dynamic value to be substituted into the template
+
+        Returns:
+            The created Action object or None if creation fails
+        """
+        if not self.enabled or not self._config:
+            return None
+
+        action_data = self.prepare_data(value)
+
+        if not action_data:
+            logger.warning("Action creation skipped: empty data after preparation")
+            return None
+
+        try:
+            uipath = UiPath()
+            action = uipath.actions.create(
+                title=self._config.get("title", "Default escalation"),
+                app_name=self._config.get("appName"),
+                app_key=self._config.get("appKey"),
+                app_version=self._config.get("appVersion", 1),
+                data=action_data,
+            )
+            logger.info(f"Action created successfully: {action.key}")
+            return action
+        except Exception as e:
+            logger.error(f"Error creating action: {e}")
+            return None
+
+
+
+================================================
+FILE: src/uipath_langchain/_cli/_runtime/_exception.py
+================================================
+from typing import Optional
+
+from uipath._cli._runtime._contracts import UiPathErrorCategory, UiPathRuntimeError
+
+
+class LangGraphRuntimeError(UiPathRuntimeError):
+    """Custom exception for LangGraph runtime errors with structured error information."""
+
+    def __init__(
+        self,
+        code: str,
+        title: str,
+        detail: str,
+        category: UiPathErrorCategory = UiPathErrorCategory.UNKNOWN,
+        status: Optional[int] = None,
+    ):
+        super().__init__(code, title, detail, category, status, prefix="LANGGRAPH")
+
+
+
+================================================
+FILE: src/uipath_langchain/_cli/_runtime/_input.py
+================================================
+import json
+import logging
+from typing import Any, Optional, cast
+
+from langgraph.types import Command
+from uipath import UiPath
+from uipath._cli._runtime._contracts import (
+    UiPathErrorCategory,
+    UiPathResumeTriggerType,
+    UiPathRuntimeStatus,
+)
+
+from ._context import LangGraphRuntimeContext
+from ._escalation import Escalation
+from ._exception import LangGraphRuntimeError
+
+logger = logging.getLogger(__name__)
+
+
+def try_convert_to_json_format(value: str) -> str:
+    try:
+        return json.loads(value)
+    except json.decoder.JSONDecodeError:
+        return value
+
+
+class LangGraphInputProcessor:
+    """
+    Handles input processing for graph execution, including resume scenarios
+    where it needs to fetch data from UiPath.
+    """
+
+    def __init__(self, context: LangGraphRuntimeContext):
+        """
+        Initialize the LangGraphInputProcessor.
+
+        Args:
+            context: The runtime context for the graph execution.
+        """
+        self.context = context
+        self.escalation = Escalation(self.context.config_path)
+        self.uipath = UiPath()
+
+    async def process(self) -> Any:
+        """
+        Process the input data, handling resume scenarios by fetching
+        necessary data from UiPath if needed.
+        """
+        logger.debug(f"Resumed: {self.context.resume} Input: {self.context.input_json}")
+
+        if not self.context.resume:
+            return self.context.input_json
+
+        if self.context.input_json:
+            return Command(resume=self.context.input_json)
+
+        trigger = await self._get_latest_trigger()
+        if not trigger:
+            return Command(resume=self.context.input_json)
+
+        type, key, folder_path, folder_key, payload = trigger
+        logger.debug(f"ResumeTrigger: {type} {key}")
+        if type == UiPathResumeTriggerType.ACTION.value and key:
+            action = await self.uipath.actions.retrieve_async(
+                key, app_folder_key=folder_key, app_folder_path=folder_path
+            )
+            logger.debug(f"Action: {action}")
+            if action.data is None:
+                return Command(resume={})
+            if self.escalation and self.escalation.enabled:
+                extracted_value = self.escalation.extract_response_value(action.data)
+                return Command(resume=extracted_value)
+            return Command(resume=action.data)
+        elif type == UiPathResumeTriggerType.API.value and key:
+            payload = await self._get_api_payload(key)
+            if payload:
+                return Command(resume=payload)
+        elif type == UiPathResumeTriggerType.JOB.value and key:
+            job = await self.uipath.jobs.retrieve_async(key)
+            if (
+                job.state
+                and not job.state.lower()
+                == UiPathRuntimeStatus.SUCCESSFUL.value.lower()
+            ):
+                error_code = "INVOKED_PROCESS_FAILURE"
+                error_title = "Invoked process did not finish successfully."
+                error_detail = try_convert_to_json_format(
+                    str(job.job_error or job.info)
+                )
+                raise LangGraphRuntimeError(
+                    error_code,
+                    error_title,
+                    error_detail,
+                    UiPathErrorCategory.USER,
+                )
+            if job.output_arguments:
+                return Command(resume=try_convert_to_json_format(job.output_arguments))
+        return Command(resume=self.context.input_json)
+
+    async def _get_latest_trigger(self) -> Optional[tuple[str, str, str, str, str]]:
+        """Fetch the most recent trigger from the database."""
+        if self.context.memory is None:
+            return None
+        try:
+            await self.context.memory.setup()
+            async with (
+                self.context.memory.lock,
+                self.context.memory.conn.cursor() as cur,
+            ):
+                await cur.execute(f"""
+                    SELECT type, key, folder_path, folder_key, payload
+                    FROM {self.context.resume_triggers_table}
+                    ORDER BY timestamp DESC
+                    LIMIT 1
+                """)
+                result = await cur.fetchone()
+                if result is None:
+                    return None
+                return cast(tuple[str, str, str, str, str], tuple(result))
+        except Exception as e:
+            raise LangGraphRuntimeError(
+                "DB_QUERY_FAILED",
+                "Database query failed",
+                f"Error querying resume trigger information: {str(e)}",
+                UiPathErrorCategory.SYSTEM,
+            ) from e
+
+    async def _get_api_payload(self, inbox_id: str) -> Any:
+        """
+        Fetch payload data for API triggers.
+
+        Args:
+            inbox_id: The Id of the inbox to fetch the payload for.
+
+        Returns:
+            The value field from the API response payload, or None if an error occurs.
+        """
+        try:
+            response = self.uipath.api_client.request(
+                "GET",
+                f"/orchestrator_/api/JobTriggers/GetPayload/{inbox_id}",
+                include_folder_headers=True,
+            )
+            data = response.json()
+            return data.get("payload")
+        except Exception as e:
+            raise LangGraphRuntimeError(
+                "API_CONNECTION_ERROR",
+                "Failed to get trigger payload",
+                f"Error fetching API trigger payload for inbox {inbox_id}: {str(e)}",
+                UiPathErrorCategory.SYSTEM,
+                response.status_code,
+            ) from e
+
+
+
+================================================
+FILE: src/uipath_langchain/_cli/_runtime/_output.py
+================================================
+import json
+import logging
+import uuid
+from dataclasses import asdict, dataclass
+from functools import cached_property
+from typing import Any, Dict, Optional, Union, cast
+
+from langgraph.types import Interrupt, StateSnapshot
+from uipath import UiPath
+from uipath._cli._runtime._contracts import (
+    UiPathApiTrigger,
+    UiPathErrorCategory,
+    UiPathResumeTrigger,
+    UiPathResumeTriggerType,
+    UiPathRuntimeResult,
+    UiPathRuntimeStatus,
+)
+from uipath.models import CreateAction, InvokeProcess, WaitAction, WaitJob
+from uipath.models.actions import Action
+
+from ._context import LangGraphRuntimeContext
+from ._escalation import Escalation
+from ._exception import LangGraphRuntimeError
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class InterruptInfo:
+    """Contains all information about an interrupt."""
+
+    value: Any
+
+    @property
+    def type(self) -> Optional[UiPathResumeTriggerType]:
+        """Returns the type of the interrupt value."""
+        if isinstance(self.value, CreateAction):
+            return UiPathResumeTriggerType.ACTION
+        if isinstance(self.value, WaitAction):
+            return UiPathResumeTriggerType.ACTION
+        if isinstance(self.value, InvokeProcess):
+            return UiPathResumeTriggerType.JOB
+        if isinstance(self.value, WaitJob):
+            return UiPathResumeTriggerType.JOB
+        return None
+
+    @property
+    def identifier(self) -> Optional[str]:
+        """Returns the identifier based on the type."""
+        if isinstance(self.value, Action):
+            return str(self.value.key)
+        return None
+
+    def serialize(self) -> str:
+        """
+        Converts the interrupt value to a JSON string if possible,
+        falls back to string representation if not.
+        """
+        try:
+            if hasattr(self.value, "dict"):
+                data = self.value.dict()
+            elif hasattr(self.value, "to_dict"):
+                data = self.value.to_dict()
+            elif hasattr(self.value, "__dataclass_fields__"):
+                data = asdict(self.value)
+            else:
+                data = dict(self.value)
+
+            return json.dumps(data, default=str)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return str(self.value)
+
+    @cached_property
+    def resume_trigger(self) -> UiPathResumeTrigger:
+        """Creates the resume trigger based on interrupt type."""
+        if self.type is None:
+            return UiPathResumeTrigger(
+                api_resume=UiPathApiTrigger(
+                    inbox_id=str(uuid.uuid4()), request=self.serialize()
+                )
+            )
+        else:
+            return UiPathResumeTrigger(itemKey=self.identifier, triggerType=self.type)
+
+
+class LangGraphOutputProcessor:
+    """
+    Contains and manages the complete output information from graph execution.
+    Handles serialization, interrupt data, and file output.
+    """
+
+    def __init__(self, context: LangGraphRuntimeContext):
+        """
+        Initialize the LangGraphOutputProcessor.
+
+        Args:
+            context: The runtime context for the graph execution.
+        """
+        self.context = context
+        self._interrupt_info: Optional[InterruptInfo] = None
+        self._resume_trigger: Optional[UiPathResumeTrigger] = None
+
+        # Process interrupt information during initialization
+        state = cast(StateSnapshot, self.context.state)
+        if not state or not hasattr(state, "next") or not state.next:
+            return
+
+        for task in state.tasks:
+            if hasattr(task, "interrupts") and task.interrupts:
+                for interrupt in task.interrupts:
+                    if isinstance(interrupt, Interrupt):
+                        self._interrupt_info = InterruptInfo(interrupt.value)
+                        self._resume_trigger = self._interrupt_info.resume_trigger
+                        return
+
+    @property
+    def status(self) -> UiPathRuntimeStatus:
+        """Determines the execution status based on state."""
+        return (
+            UiPathRuntimeStatus.SUSPENDED
+            if self._interrupt_info
+            else UiPathRuntimeStatus.SUCCESSFUL
+        )
+
+    @property
+    def interrupt_value(self) -> Union[Action, InvokeProcess, Any]:
+        """Returns the actual value of the interrupt, with its specific type."""
+        if self.interrupt_info is None:
+            return None
+        return self.interrupt_info.value
+
+    @property
+    def interrupt_info(self) -> Optional[InterruptInfo]:
+        """Gets interrupt information if available."""
+        return self._interrupt_info
+
+    @property
+    def resume_trigger(self) -> Optional[UiPathResumeTrigger]:
+        """Gets resume trigger if interrupted."""
+        return self._resume_trigger
+
+    @cached_property
+    def serialized_output(self) -> Dict[str, Any]:
+        """Serializes the graph execution result."""
+        try:
+            if self.context.output is None:
+                return {}
+
+            return self._serialize_object(self.context.output)
+
+        except Exception as e:
+            raise LangGraphRuntimeError(
+                "OUTPUT_SERIALIZATION_FAILED",
+                "Failed to serialize graph output",
+                f"Error serializing output data: {str(e)}",
+                UiPathErrorCategory.SYSTEM,
+            ) from e
+
+    def _serialize_object(self, obj):
+        """Recursively serializes an object and all its nested components."""
+        # Handle Pydantic models
+        if hasattr(obj, "dict"):
+            return self._serialize_object(obj.dict())
+        elif hasattr(obj, "model_dump"):
+            return self._serialize_object(obj.model_dump(by_alias=True))
+        elif hasattr(obj, "to_dict"):
+            return self._serialize_object(obj.to_dict())
+        # Handle dictionaries
+        elif isinstance(obj, dict):
+            return {k: self._serialize_object(v) for k, v in obj.items()}
+        # Handle lists
+        elif isinstance(obj, list):
+            return [self._serialize_object(item) for item in obj]
+        # Handle other iterable objects (convert to dict first)
+        elif hasattr(obj, "__iter__") and not isinstance(obj, (str, bytes)):
+            try:
+                return self._serialize_object(dict(obj))
+            except (TypeError, ValueError):
+                return obj
+        # Return primitive types as is
+        else:
+            return obj
+
+    async def process(self) -> UiPathRuntimeResult:
+        """
+        Process the output and prepare the final execution result.
+
+        Returns:
+            UiPathRuntimeResult: The processed execution result.
+
+        Raises:
+            LangGraphRuntimeError: If processing fails.
+        """
+        try:
+            await self._save_resume_trigger()
+
+            return UiPathRuntimeResult(
+                output=self.serialized_output,
+                status=self.status,
+                resume=self.resume_trigger if self.resume_trigger else None,
+            )
+
+        except LangGraphRuntimeError:
+            raise
+        except Exception as e:
+            raise LangGraphRuntimeError(
+                "OUTPUT_PROCESSING_FAILED",
+                "Failed to process execution output",
+                f"Unexpected error during output processing: {str(e)}",
+                UiPathErrorCategory.SYSTEM,
+            ) from e
+
+    async def _save_resume_trigger(self) -> None:
+        """
+        Stores the resume trigger in the SQLite database if available.
+
+        Raises:
+            LangGraphRuntimeError: If database operations fail.
+        """
+        if not self.resume_trigger or not self.context.memory:
+            return
+
+        try:
+            await self.context.memory.setup()
+            async with (
+                self.context.memory.lock,
+                self.context.memory.conn.cursor() as cur,
+            ):
+                try:
+                    await cur.execute(f"""
+                        CREATE TABLE IF NOT EXISTS {self.context.resume_triggers_table} (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            type TEXT NOT NULL,
+                            key TEXT,
+                            folder_key TEXT,
+                            folder_path TEXT,
+                            payload TEXT,
+                            timestamp DATETIME DEFAULT (strftime('%Y-%m-%d %H:%M:%S', 'now', 'utc'))
+                        )
+                    """)
+                except Exception as e:
+                    raise LangGraphRuntimeError(
+                        "DB_TABLE_CREATION_FAILED",
+                        "Failed to create resume triggers table",
+                        f"Database error while creating table: {str(e)}",
+                        UiPathErrorCategory.SYSTEM,
+                    ) from e
+
+                try:
+                    default_escalation = Escalation()
+                    if default_escalation.enabled and isinstance(
+                        self.interrupt_value, str
+                    ):
+                        action = await default_escalation.create(self.interrupt_value)
+                        if action:
+                            self._resume_trigger = UiPathResumeTrigger(
+                                trigger_type=UiPathResumeTriggerType.ACTION,
+                                item_key=action.key,
+                            )
+                    if isinstance(self.interrupt_info, InterruptInfo):
+                        uipath_sdk = UiPath()
+                        if self.interrupt_info.type is UiPathResumeTriggerType.JOB:
+                            if isinstance(self.interrupt_value, InvokeProcess):
+                                job = await uipath_sdk.processes.invoke_async(
+                                    name=self.interrupt_value.name,
+                                    input_arguments=self.interrupt_value.input_arguments,
+                                )
+                                if job:
+                                    self._resume_trigger = UiPathResumeTrigger(
+                                        trigger_type=UiPathResumeTriggerType.JOB,
+                                        item_key=job.key,
+                                    )
+                            elif isinstance(self.interrupt_value, WaitJob):
+                                self._resume_trigger = UiPathResumeTrigger(
+                                    triggerType=UiPathResumeTriggerType.JOB,
+                                    itemKey=self.interrupt_value.job.key,
+                                )
+                        elif self.interrupt_info.type is UiPathResumeTriggerType.ACTION:
+                            if isinstance(self.interrupt_value, CreateAction):
+                                action = uipath_sdk.actions.create(
+                                    title=self.interrupt_value.title,
+                                    app_name=self.interrupt_value.app_name
+                                    if self.interrupt_value.app_name
+                                    else "",
+                                    app_folder_path=self.interrupt_value.app_folder_path
+                                    if self.interrupt_value.app_folder_path
+                                    else "",
+                                    app_folder_key=self.interrupt_value.app_folder_key
+                                    if self.interrupt_value.app_folder_key
+                                    else "",
+                                    app_key=self.interrupt_value.app_key
+                                    if self.interrupt_value.app_key
+                                    else "",
+                                    app_version=self.interrupt_value.app_version
+                                    if self.interrupt_value.app_version
+                                    else 1,
+                                    assignee=self.interrupt_value.assignee
+                                    if self.interrupt_value.assignee
+                                    else "",
+                                    data=self.interrupt_value.data,
+                                )
+                                if action:
+                                    self._resume_trigger = UiPathResumeTrigger(
+                                        trigger_type=UiPathResumeTriggerType.ACTION,
+                                        item_key=action.key,
+                                        payload=self.interrupt_value.model_dump_json(),
+                                        folder_path=self.interrupt_value.app_folder_path
+                                        if self.interrupt_value.app_folder_path
+                                        else None,
+                                        folder_key=self.interrupt_value.app_folder_key
+                                        if self.interrupt_value.app_folder_key
+                                        else None,
+                                    )
+                            elif isinstance(self.interrupt_value, WaitAction):
+                                self._resume_trigger = UiPathResumeTrigger(
+                                    triggerType=UiPathResumeTriggerType.ACTION,
+                                    itemKey=self.interrupt_value.action.key,
+                                    payload=self.interrupt_value.model_dump_json(),
+                                    folder_path=self.interrupt_value.app_folder_path
+                                    if self.interrupt_value.app_folder_path
+                                    else None,
+                                    folder_key=self.interrupt_value.app_folder_key
+                                    if self.interrupt_value.app_folder_key
+                                    else None,
+                                )
+
+                except Exception as e:
+                    raise LangGraphRuntimeError(
+                        "ESCALATION_CREATION_FAILED",
+                        "Failed to create escalation action",
+                        f"Error while creating escalation action: {str(e)}",
+                        UiPathErrorCategory.SYSTEM,
+                    ) from e
+
+                if (
+                    self.resume_trigger.trigger_type.value
+                    == UiPathResumeTriggerType.API.value
+                    and self.resume_trigger.api_resume
+                ):
+                    trigger_key = self.resume_trigger.api_resume.inbox_id
+                    trigger_type = self.resume_trigger.trigger_type.value
+                else:
+                    trigger_key = self.resume_trigger.item_key
+                    trigger_type = self.resume_trigger.trigger_type.value
+
+                try:
+                    logger.debug(f"ResumeTrigger: {trigger_type} {trigger_key}")
+                    await cur.execute(
+                        f"INSERT INTO {self.context.resume_triggers_table} (type, key, payload, folder_path, folder_key) VALUES (?, ?, ?, ?, ?)",
+                        (
+                            trigger_type,
+                            trigger_key,
+                            self.resume_trigger.payload,
+                            self.resume_trigger.folder_path,
+                            self.resume_trigger.folder_key,
+                        ),
+                    )
+                    await self.context.memory.conn.commit()
+                except Exception as e:
+                    raise LangGraphRuntimeError(
+                        "DB_INSERT_FAILED",
+                        "Failed to save resume trigger",
+                        f"Database error while saving resume trigger: {str(e)}",
+                        UiPathErrorCategory.SYSTEM,
+                    ) from e
+        except LangGraphRuntimeError:
+            raise
+        except Exception as e:
+            raise LangGraphRuntimeError(
+                "RESUME_TRIGGER_SAVE_FAILED",
+                "Failed to save resume trigger",
+                f"Unexpected error while saving resume trigger: {str(e)}",
+                UiPathErrorCategory.SYSTEM,
+            ) from e
+
+
+
+================================================
+FILE: src/uipath_langchain/_cli/_runtime/_runtime.py
+================================================
+import json
+import logging
+import os
+from typing import List, Optional
+
+from langchain_core.callbacks.base import BaseCallbackHandler
+from langchain_core.runnables.config import RunnableConfig
+from langchain_core.tracers.langchain import wait_for_all_tracers
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from langgraph.errors import EmptyInputError, GraphRecursionError, InvalidUpdateError
+from langgraph.graph.state import CompiledStateGraph
+from uipath._cli._runtime._contracts import (
+    UiPathBaseRuntime,
+    UiPathErrorCategory,
+    UiPathRuntimeResult,
+)
+
+from ..._utils import _instrument_traceable_attributes
+from ...tracers import AsyncUiPathTracer
+from ._context import LangGraphRuntimeContext
+from ._exception import LangGraphRuntimeError
+from ._input import LangGraphInputProcessor
+from ._output import LangGraphOutputProcessor
+
+logger = logging.getLogger(__name__)
+
+
+class LangGraphRuntime(UiPathBaseRuntime):
+    """
+    A runtime class implementing the async context manager protocol.
+    This allows using the class with 'async with' statements.
+    """
+
+    def __init__(self, context: LangGraphRuntimeContext):
+        super().__init__(context)
+        self.context: LangGraphRuntimeContext = context
+
+    async def execute(self) -> Optional[UiPathRuntimeResult]:
+        """
+        Execute the graph with the provided input and configuration.
+
+        Returns:
+            Dictionary with execution results
+
+        Raises:
+            LangGraphRuntimeError: If execution fails
+        """
+        _instrument_traceable_attributes()
+
+        await self.validate()
+
+        if self.context.state_graph is None:
+            return None
+
+        tracer = None
+
+        try:
+            if self.context.resume is False and self.context.job_id is None:
+                # Delete the previous graph state file at debug time
+                if os.path.exists(self.state_file_path):
+                    os.remove(self.state_file_path)
+
+            async with AsyncSqliteSaver.from_conn_string(
+                self.state_file_path
+            ) as memory:
+                self.context.memory = memory
+
+                # Compile the graph with the checkpointer
+                graph = self.context.state_graph.compile(
+                    checkpointer=self.context.memory
+                )
+
+                # Process input, handling resume if needed
+                input_processor = LangGraphInputProcessor(context=self.context)
+
+                processed_input = await input_processor.process()
+
+                # Set up tracing if available
+                callbacks: List[BaseCallbackHandler] = []
+
+                if self.context.job_id and self.context.tracing_enabled:
+                    tracer = AsyncUiPathTracer(context=self.context.trace_context)
+                    callbacks = [tracer]
+
+                graph_config: RunnableConfig = {
+                    "configurable": {
+                        "thread_id": self.context.job_id
+                        if self.context.job_id
+                        else "default"
+                    },
+                    "callbacks": callbacks,
+                }
+
+                recursion_limit = os.environ.get("LANGCHAIN_RECURSION_LIMIT", None)
+                max_concurrency = os.environ.get("LANGCHAIN_MAX_CONCURRENCY", None)
+
+                if recursion_limit is not None:
+                    graph_config["recursion_limit"] = int(recursion_limit)
+                if max_concurrency is not None:
+                    graph_config["max_concurrency"] = int(max_concurrency)
+
+                # Stream the output at debug time
+                if self.context.job_id is None:
+                    # Get final chunk while streaming
+                    final_chunk = None
+                    async for chunk in graph.astream(
+                        processed_input,
+                        graph_config,
+                        stream_mode="values",
+                        subgraphs=True,
+                    ):
+                        logger.info("%s", chunk)
+                        final_chunk = chunk
+
+                    # Extract data from the subgraph tuple format (namespace, data)
+                    if isinstance(final_chunk, tuple) and len(final_chunk) == 2:
+                        final_chunk = final_chunk[1]
+
+                    # Process the final chunk to match ainvoke's output format
+                    if isinstance(final_chunk, dict) and hasattr(
+                        graph, "output_channels"
+                    ):
+                        output_channels = graph.output_channels
+
+                        # Case 1: Single output channel as string
+                        if (
+                            isinstance(output_channels, str)
+                            and output_channels in final_chunk
+                        ):
+                            self.context.output = final_chunk[output_channels]
+
+                        # Case 2: Sequence of output channels
+                        elif hasattr(output_channels, "__iter__") and not isinstance(
+                            output_channels, str
+                        ):
+                            # Check if all channels are present in the chunk
+                            if all(ch in final_chunk for ch in output_channels):
+                                result = {}
+                                for channel in output_channels:
+                                    result[channel] = final_chunk[channel]
+                                self.context.output = result
+                            else:
+                                # Fallback if not all channels are present
+                                self.context.output = final_chunk
+                    else:
+                        # Use the whole chunk as output if we can't determine output channels
+                        self.context.output = final_chunk
+                else:
+                    # Execute the graph normally at runtime
+                    self.context.output = await graph.ainvoke(
+                        processed_input, graph_config
+                    )
+
+                # Get the state if available
+                try:
+                    self.context.state = await graph.aget_state(graph_config)
+                except Exception:
+                    pass
+
+                output_processor = LangGraphOutputProcessor(context=self.context)
+
+                self.context.result = await output_processor.process()
+
+                return self.context.result
+
+        except Exception as e:
+            if isinstance(e, LangGraphRuntimeError):
+                raise
+
+            detail = f"Error: {str(e)}"
+
+            if isinstance(e, GraphRecursionError):
+                raise LangGraphRuntimeError(
+                    "GRAPH_RECURSION_ERROR",
+                    "Graph recursion limit exceeded",
+                    detail,
+                    UiPathErrorCategory.USER,
+                ) from e
+
+            if isinstance(e, InvalidUpdateError):
+                raise LangGraphRuntimeError(
+                    "GRAPH_INVALID_UPDATE",
+                    str(e),
+                    detail,
+                    UiPathErrorCategory.USER,
+                ) from e
+
+            if isinstance(e, EmptyInputError):
+                raise LangGraphRuntimeError(
+                    "GRAPH_EMPTY_INPUT",
+                    "The input data is empty",
+                    detail,
+                    UiPathErrorCategory.USER,
+                ) from e
+
+            raise LangGraphRuntimeError(
+                "EXECUTION_ERROR",
+                "Graph execution failed",
+                detail,
+                UiPathErrorCategory.USER,
+            ) from e
+        finally:
+            if tracer is not None:
+                await tracer.wait_for_all_tracers()
+
+            if self.context.langsmith_tracing_enabled:
+                wait_for_all_tracers()
+
+    async def validate(self) -> None:
+        """Validate runtime inputs."""
+        """Load and validate the graph configuration ."""
+        try:
+            if self.context.input:
+                self.context.input_json = json.loads(self.context.input)
+        except json.JSONDecodeError as e:
+            raise LangGraphRuntimeError(
+                "INPUT_INVALID_JSON",
+                "Invalid JSON input",
+                "The input data is not valid JSON.",
+                UiPathErrorCategory.USER,
+            ) from e
+
+        if self.context.langgraph_config is None:
+            raise LangGraphRuntimeError(
+                "CONFIG_MISSING",
+                "Invalid configuration",
+                "Failed to load configuration",
+                UiPathErrorCategory.DEPLOYMENT,
+            )
+
+        try:
+            self.context.langgraph_config.load_config()
+        except Exception as e:
+            raise LangGraphRuntimeError(
+                "CONFIG_INVALID",
+                "Invalid configuration",
+                f"Failed to load configuration: {str(e)}",
+                UiPathErrorCategory.DEPLOYMENT,
+            ) from e
+
+        # Determine entrypoint if not provided
+        graphs = self.context.langgraph_config.graphs
+        if not self.context.entrypoint and len(graphs) == 1:
+            self.context.entrypoint = graphs[0].name
+        elif not self.context.entrypoint:
+            graph_names = ", ".join(g.name for g in graphs)
+            raise LangGraphRuntimeError(
+                "ENTRYPOINT_MISSING",
+                "Entrypoint required",
+                f"Multiple graphs available. Please specify one of: {graph_names}.",
+                UiPathErrorCategory.DEPLOYMENT,
+            )
+
+        # Get the specified graph
+        self.graph_config = self.context.langgraph_config.get_graph(
+            self.context.entrypoint
+        )
+        if not self.graph_config:
+            raise LangGraphRuntimeError(
+                "GRAPH_NOT_FOUND",
+                "Graph not found",
+                f"Graph '{self.context.entrypoint}' not found.",
+                UiPathErrorCategory.DEPLOYMENT,
+            )
+        try:
+            loaded_graph = await self.graph_config.load_graph()
+            self.context.state_graph = (
+                loaded_graph.builder
+                if isinstance(loaded_graph, CompiledStateGraph)
+                else loaded_graph
+            )
+        except ImportError as e:
+            raise LangGraphRuntimeError(
+                "GRAPH_IMPORT_ERROR",
+                "Graph import failed",
+                f"Failed to import graph '{self.context.entrypoint}': {str(e)}",
+                UiPathErrorCategory.USER,
+            ) from e
+        except TypeError as e:
+            raise LangGraphRuntimeError(
+                "GRAPH_TYPE_ERROR",
+                "Invalid graph type",
+                f"Graph '{self.context.entrypoint}' is not a valid StateGraph or CompiledStateGraph: {str(e)}",
+                UiPathErrorCategory.USER,
+            ) from e
+        except ValueError as e:
+            raise LangGraphRuntimeError(
+                "GRAPH_VALUE_ERROR",
+                "Invalid graph value",
+                f"Invalid value in graph '{self.context.entrypoint}': {str(e)}",
+                UiPathErrorCategory.USER,
+            ) from e
+        except Exception as e:
+            raise LangGraphRuntimeError(
+                "GRAPH_LOAD_ERROR",
+                "Failed to load graph",
+                f"Unexpected error loading graph '{self.context.entrypoint}': {str(e)}",
+                UiPathErrorCategory.USER,
+            ) from e
+
+    async def cleanup(self):
+        if hasattr(self, "graph_config") and self.graph_config:
+            await self.graph_config.cleanup()
+
+
+
+================================================
+FILE: src/uipath_langchain/_cli/_templates/langgraph.json.template
+================================================
+{
+    "dependencies": ["."],
+    "graphs": {
+      "agent": "./main.py:graph"
+    },
+    "env": ".env"
+  }
+
+
+
+================================================
+FILE: src/uipath_langchain/_cli/_templates/main.py.template
+================================================
+from langchain_anthropic import ChatAnthropic
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
+from langgraph.graph import START, StateGraph, END
+from pydantic import BaseModel
+import os
+
+class GraphInput(BaseModel):
+    topic: str
+
+class GraphOutput(BaseModel):
+    report: str
+
+async def generate_report(state: GraphInput) -> GraphOutput:
+    if os.getenv("ANTHROPIC_API_KEY"):
+        llm_model = ChatAnthropic(model="claude-3-5-sonnet-latest")
+    elif os.getenv("OPENAI_API_KEY"):
+        llm_model = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    else:
+        raise Exception("Missing API Key. Please define either ANTHROPIC_API_KEY or OPENAI_API_KEY.")
+
+    system_prompt = "You are a report generator. Please provide a brief report based on the given topic."
+    output = await llm_model.ainvoke([SystemMessage(system_prompt), HumanMessage(state.topic)])
+    return GraphOutput(report=output.content)
+
+builder = StateGraph(input=GraphInput, output=GraphOutput)
+
+builder.add_node("generate_report", generate_report)
+
+builder.add_edge(START, "generate_report")
+builder.add_edge("generate_report", END)
+
+graph = builder.compile()
+
+
+
+================================================
+FILE: src/uipath_langchain/_cli/_utils/_graph.py
+================================================
+import importlib.util
+import inspect
+import json
+import logging
+import os
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union, cast
+
+from dotenv import load_dotenv
+from langgraph.graph import StateGraph
+from langgraph.graph.state import CompiledStateGraph
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class GraphConfig:
+    name: str
+    path: str
+    file_path: str
+    graph_var: str
+    _graph: Optional[Union[StateGraph, CompiledStateGraph]] = None
+
+    @classmethod
+    def from_config(cls, name: str, path: str) -> "GraphConfig":
+        file_path, graph_var = path.split(":")
+        return cls(name=name, path=path, file_path=file_path, graph_var=graph_var)
+
+    async def load_graph(self) -> Union[StateGraph, CompiledStateGraph]:
+        """Load graph from the specified path"""
+        try:
+            cwd = os.path.abspath(os.getcwd())
+            abs_file_path = os.path.abspath(os.path.normpath(self.file_path))
+
+            if not abs_file_path.startswith(cwd):
+                raise ValueError(
+                    f"Script path must be within the current directory. Found: {self.file_path}"
+                )
+
+            if not os.path.exists(abs_file_path):
+                raise FileNotFoundError(f"Script not found: {abs_file_path}")
+
+            if cwd not in sys.path:
+                sys.path.insert(0, cwd)
+
+            module_name = Path(abs_file_path).stem
+            spec = importlib.util.spec_from_file_location(module_name, abs_file_path)
+
+            if not spec or not spec.loader:
+                raise ImportError(f"Could not load module from: {abs_file_path}")
+
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[module_name] = module
+            spec.loader.exec_module(module)
+
+            graph = getattr(module, self.graph_var, None)
+
+            # Get the graph object or function
+            graph_obj = getattr(module, self.graph_var, None)
+
+            # Handle callable graph factory
+            if callable(graph_obj):
+                if inspect.iscoroutinefunction(graph_obj):
+                    # Handle async function
+                    try:
+                        graph_obj = await graph_obj()
+                    except RuntimeError as e:
+                        raise e
+                else:
+                    # Call regular function
+                    graph_obj = graph_obj()
+
+            # Handle async context manager
+            if (
+                graph_obj is not None
+                and hasattr(graph_obj, "__aenter__")
+                and callable(graph_obj.__aenter__)
+            ):
+                self._context_manager = graph_obj
+                graph = await graph_obj.__aenter__()
+
+                # No need for atexit registration - the calling code should
+                # maintain a reference to this object and call cleanup explicitly
+
+            else:
+                # Not a context manager, use directly
+                graph = graph_obj
+
+            if not isinstance(graph, (StateGraph, CompiledStateGraph)):
+                raise TypeError(
+                    f"Expected StateGraph, CompiledStateGraph, or a callable returning one of these, got {type(graph)}"
+                )
+
+            self._graph = graph
+            return graph
+
+        except Exception as e:
+            logger.error(f"Failed to load graph {self.name}: {str(e)}")
+            raise
+
+    async def get_input_schema(self) -> Dict[str, Any]:
+        """Extract input schema from graph"""
+        if not self._graph:
+            self._graph = await self.load_graph()
+
+        if hasattr(self._graph, "input_schema"):
+            return cast(dict[str, Any], self._graph.input_schema)
+        return {}
+
+    async def cleanup(self):
+        """
+        Clean up resources when done with the graph.
+        This should be called when the graph is no longer needed.
+        """
+        if hasattr(self, "_context_manager") and self._context_manager:
+            try:
+                await self._context_manager.__aexit__(None, None, None)
+            except Exception as e:
+                logger.warning(f"Error during context cleanup: {str(e)}")
+            finally:
+                self._context_manager = None
+                self._graph = None
+
+
+class LangGraphConfig:
+    def __init__(self, config_path: str = "langgraph.json"):
+        self.config_path = config_path
+        self._config: Optional[Dict[str, Any]] = None
+        self._graphs: List[GraphConfig] = []
+
+    @property
+    def exists(self) -> bool:
+        """Check if langgraph.json exists"""
+        return os.path.exists(self.config_path)
+
+    def load_config(self) -> Dict[str, Any]:
+        """Load and validate langgraph configuration"""
+        if not self.exists:
+            raise FileNotFoundError(f"Config file not found: {self.config_path}")
+
+        try:
+            with open(self.config_path, "r") as f:
+                config = json.load(f)
+
+            required_fields = ["graphs"]
+            missing_fields = [field for field in required_fields if field not in config]
+            if missing_fields:
+                raise ValueError(
+                    f"Missing required fields in langgraph.json: {missing_fields}"
+                )
+
+            if env_file := config.get("env"):
+                env_path = os.path.abspath(os.path.normpath(env_file))
+                if os.path.exists(env_path):
+                    if not load_dotenv(env_path):
+                        # log warning only if dotenv is not empty
+                        if os.path.getsize(env_path) > 0:
+                            logger.warning(
+                                f"Could not load environment variables from {env_path}"
+                            )
+                    else:
+                        logger.debug(f"Loaded environment variables from {env_path}")
+
+            self._config = config
+            self._load_graphs()
+            return config
+        except Exception as e:
+            logger.error(f"Failed to load langgraph.json: {str(e)}")
+            raise
+
+    def _load_graphs(self):
+        """Load all graph configurations"""
+        if not self._config:
+            return
+
+        self._graphs = [
+            GraphConfig.from_config(name, path)
+            for name, path in self._config["graphs"].items()
+        ]
+
+    @property
+    def graphs(self) -> List[GraphConfig]:
+        """Get all graph configurations"""
+        if not self._graphs:
+            self.load_config()
+        return self._graphs
+
+    def get_graph(self, name: str) -> Optional[GraphConfig]:
+        """Get a specific graph configuration by name"""
+        return next((g for g in self.graphs if g.name == name), None)
+
+    @property
+    def dependencies(self) -> List[str]:
+        """Get project dependencies"""
+        return self._config.get("dependencies", []) if self._config else []
+
+    @property
+    def env_file(self) -> Optional[str]:
+        """Get environment file path"""
+        return self._config.get("env") if self._config else None
+
+
+
+================================================
+FILE: src/uipath_langchain/_utils/__init__.py
+================================================
+from ..tracers._instrument_traceable import _instrument_traceable_attributes
+from ._request_mixin import UiPathRequestMixin
+
+__all__ = ["UiPathRequestMixin", "_instrument_traceable_attributes"]
+
+
+
+================================================
+FILE: src/uipath_langchain/_utils/_request_mixin.py
+================================================
+# mypy: disable-error-code="no-redef,arg-type"
+import json
+import logging
+import os
+import time
+from typing import Any, Dict, List, Mapping, Optional
+
+import httpx
+import openai
+from langchain_core.embeddings import Embeddings
+from langchain_core.language_models.chat_models import _cleanup_llm_representation
+from pydantic import BaseModel, Field, SecretStr
+from tenacity import (
+    AsyncRetrying,
+    Retrying,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential_jitter,
+)
+
+from uipath_langchain._utils._settings import (
+    UiPathClientFactorySettings,
+    UiPathClientSettings,
+    get_uipath_token_header,
+)
+from uipath_langchain._utils._sleep_policy import before_sleep_log
+
+
+def get_from_uipath_url():
+    url = os.getenv("UIPATH_URL")
+    if url:
+        return "/".join(url.split("/", 3)[:3])
+    return None
+
+
+class UiPathRequestMixin(BaseModel):
+    class Config:
+        arbitrary_types_allowed = True
+
+    default_headers: Optional[Mapping[str, str]] = {
+        "X-UiPath-Streaming-Enabled": "false",
+    }
+    model_name: Optional[str] = Field(
+        default_factory=lambda: os.getenv("UIPATH_MODEL_NAME", "gpt-4o-2024-08-06"),
+        alias="model",
+    )
+    settings: Optional[UiPathClientSettings] = None
+    client_id: Optional[str] = Field(
+        default_factory=lambda: os.getenv("UIPATH_CLIENT_ID")
+    )
+    client_secret: Optional[str] = Field(
+        default_factory=lambda: os.getenv("UIPATH_CLIENT_SECRET")
+    )
+    base_url: Optional[str] = Field(
+        default_factory=lambda data: getattr(data["settings"], "base_url", None)
+        or os.getenv("UIPATH_BASE_URL")
+        or get_from_uipath_url(),
+        alias="azure_endpoint",
+    )
+    access_token: Optional[str] = Field(
+        default_factory=lambda data: (
+            getattr(data["settings"], "access_token", None)
+            or os.getenv("UIPATH_ACCESS_TOKEN")  # Environment variable
+            or os.getenv("UIPATH_SERVICE_TOKEN")  # Environment variable
+            or get_uipath_token_header(
+                UiPathClientFactorySettings(
+                    UIPATH_BASE_URL=data["base_url"],
+                    UIPATH_CLIENT_ID=data["client_id"],
+                    UIPATH_CLIENT_SECRET=data["client_secret"],
+                )
+            )  # Get service token from UiPath
+        )
+    )
+    org_id: Any = Field(
+        default_factory=lambda data: getattr(data["settings"], "org_id", None)
+        or os.getenv("UIPATH_ORGANIZATION_ID", "")
+    )
+    tenant_id: Any = Field(
+        default_factory=lambda data: getattr(data["settings"], "tenant_id", None)
+        or os.getenv("UIPATH_TENANT_ID", "")
+    )
+    requesting_product: Any = Field(
+        default_factory=lambda data: getattr(
+            data["settings"], "requesting_product", None
+        )
+        or os.getenv("UIPATH_REQUESTING_PRODUCT", "")
+    )
+    requesting_feature: Any = Field(
+        default_factory=lambda data: getattr(
+            data["settings"], "requesting_feature", None
+        )
+        or os.getenv("UIPATH_REQUESTING_FEATURE", "")
+    )
+    default_request_timeout: Any = Field(
+        default_factory=lambda data: float(
+            getattr(data["settings"], "timeout_seconds", None)
+            or os.getenv("UIPATH_TIMEOUT_SECONDS", "120")
+        ),
+        alias="timeout",
+    )
+
+    openai_api_version: Optional[str] = Field(
+        default_factory=lambda: os.getenv("OPENAI_API_VERSION", "2024-08-01-preview"),
+        alias="api_version",
+    )
+    include_account_id: bool = False
+    temperature: Optional[float] = 0.0
+    max_tokens: Optional[int] = 1000
+    frequency_penalty: Optional[float] = None
+    presence_penalty: Optional[float] = None
+
+    logger: Optional[logging.Logger] = None
+    max_retries: Optional[int] = 5
+    base_delay: float = 5.0
+    max_delay: float = 60.0
+
+    _url: Optional[str] = None
+    _auth_headers: Optional[Dict[str, str]] = None
+
+    # required to instantiate AzureChatOpenAI subclasses
+    azure_endpoint: Optional[str] = Field(
+        default="placeholder", description="Bypassed Azure endpoint"
+    )
+    openai_api_key: Optional[SecretStr] = Field(
+        default=SecretStr("placeholder"), description="Bypassed API key"
+    )
+    # required to instatiate ChatAnthropic subclasses (will be needed when passthrough is implemented for Anthropic models)
+    stop_sequences: Optional[List[str]] = Field(
+        default=None, description="Bypassed stop sequence"
+    )
+
+    def _request(
+        self, url: str, request_body: Dict[str, Any], headers: Dict[str, str]
+    ) -> Dict[str, Any]:
+        """Run an asynchronous call to the LLM."""
+        # if self.logger:
+        #     self.logger.info(f"Completion request: {request_body['messages'][:2]}")
+        with httpx.Client(
+            event_hooks={
+                "request": [self._log_request_duration],
+                "response": [self._log_response_duration],
+            }
+        ) as client:
+            response = client.post(
+                url,
+                headers=headers,
+                json=request_body,
+                timeout=self.default_request_timeout,
+            )
+
+            # Handle HTTP errors and map them to OpenAI exceptions
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as err:
+                if self.logger:
+                    self.logger.error(
+                        "Error querying UiPath: %s (%s)",
+                        err.response.reason_phrase,
+                        err.response.status_code,
+                        extra={
+                            "ActionName": self.settings.action_name,
+                            "ActionId": self.settings.action_id,
+                        }
+                        if self.settings
+                        else None,
+                    )
+                raise self._make_status_error_from_response(err.response) from err
+
+            return response.json()
+
+    def _call(
+        self, url: str, request_body: Dict[str, Any], headers: Dict[str, str]
+    ) -> Dict[str, Any]:
+        """Run a synchronous call with retries to LLM"""
+        if self.max_retries is None:
+            return self._request(url, request_body, headers)
+
+        retryer = Retrying(
+            stop=stop_after_attempt(self.max_retries),
+            wait=wait_exponential_jitter(
+                initial=self.base_delay,
+                max=self.max_delay,
+                jitter=1.0,
+            ),
+            retry=retry_if_exception_type(
+                (openai.RateLimitError, httpx.TimeoutException)
+            ),
+            reraise=True,
+            before_sleep=before_sleep_log(self.logger, logging.WARNING)
+            if self.logger is not None
+            else None,
+        )
+
+        try:
+            return retryer(self._request, url, request_body, headers)
+        except openai.APIStatusError as err:
+            if self.logger:
+                self.logger.error(
+                    "Failed querying LLM after retries: %s",
+                    err,
+                    extra={
+                        "ActionName": self.settings.action_name,
+                        "ActionId": self.settings.action_id,
+                    }
+                    if self.settings
+                    else None,
+                )
+            raise err
+
+    async def _arequest(
+        self, url: str, request_body: Dict[str, Any], headers: Dict[str, str]
+    ) -> Dict[str, Any]:
+        # if self.logger:
+        #     self.logger.info(f"Completion request: {request_body['messages'][:2]}")
+        async with httpx.AsyncClient(
+            event_hooks={
+                "request": [self._alog_request_duration],
+                "response": [self._alog_response_duration],
+            }
+        ) as client:
+            response = await client.post(
+                url,
+                headers=headers,
+                json=request_body,
+                timeout=self.default_request_timeout,
+            )
+            # Handle HTTP errors and map them to OpenAI exceptions
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as err:
+                if self.logger:
+                    self.logger.error(
+                        "Error querying LLM: %s (%s)",
+                        err.response.reason_phrase,
+                        err.response.status_code,
+                        extra={
+                            "ActionName": self.settings.action_name,
+                            "ActionId": self.settings.action_id,
+                        }
+                        if self.settings
+                        else None,
+                    )
+                raise self._make_status_error_from_response(err.response) from err
+
+            return response.json()
+
+    async def _acall(
+        self, url: str, request_body: Dict[str, Any], headers: Dict[str, str]
+    ) -> Dict[str, Any]:
+        """Run an asynchronous call with retries to the LLM."""
+        if self.max_retries is None:
+            return await self._arequest(url, request_body, headers)
+
+        retryer = AsyncRetrying(
+            stop=stop_after_attempt(self.max_retries),
+            wait=wait_exponential_jitter(
+                initial=self.base_delay,
+                max=self.max_delay,
+                jitter=1.0,
+            ),
+            retry=retry_if_exception_type(
+                (openai.RateLimitError, httpx.TimeoutException)
+            ),
+            reraise=True,
+            before_sleep=before_sleep_log(self.logger, logging.WARNING)
+            if self.logger is not None
+            else None,
+        )
+
+        try:
+            response: Any = await retryer(self._arequest, url, request_body, headers)
+            if self.logger:
+                self.logger.info(
+                    f"[uipath_langchain_client] Finished retryer after {retryer.statistics['attempt_number'] - 1} retries",
+                    extra={
+                        "retry": f"{retryer.statistics['attempt_number'] - 1}",
+                        "ActionName": self.settings.action_name,
+                        "ActionId": self.settings.action_id,
+                    }
+                    if self.settings
+                    else {
+                        "retry": f"{retryer.statistics['attempt_number'] - 1}",
+                    },
+                )
+            return response
+        except openai.APIStatusError as err:
+            if self.logger:
+                self.logger.error(
+                    "[uipath_langchain_client] Failed querying LLM after retries: %s",
+                    err,
+                    extra={
+                        "reason": err.message,
+                        "statusCode": err.status_code,
+                        "ActionName": self.settings.action_name,
+                        "ActionId": self.settings.action_id,
+                    }
+                    if self.settings
+                    else {
+                        "reason": err.message,
+                        "statusCode": err.status_code,
+                    },
+                )
+            raise err
+
+    def _make_status_error_from_response(
+        self,
+        response: httpx.Response,
+    ) -> openai.APIStatusError:
+        """Function reproduced from openai._client to handle UiPath errors."""
+        if response.is_closed and not response.is_stream_consumed:
+            # We can't read the response body as it has been closed
+            # before it was read. This can happen if an event hook
+            # raises a status error.
+            body = None
+            err_msg = f"Error code: {response.status_code}"
+        else:
+            err_text = response.text.strip()
+            body = err_text
+
+            try:
+                body = json.loads(err_text)
+                err_msg = f"Error code: {response.status_code} - {body}"
+            except Exception:
+                err_msg = err_text or f"Error code: {response.status_code}"
+
+        return self._make_status_error(err_msg, body=body, response=response)
+
+    def _make_status_error(
+        self,
+        err_msg: str,
+        *,
+        body: object,
+        response: httpx.Response,
+    ) -> openai.APIStatusError:
+        """Function reproduced from openai._client to handle UiPath errors."""
+        data = body.get("error", body) if isinstance(body, Mapping) else body
+        if response.status_code == 400:
+            return openai.BadRequestError(err_msg, response=response, body=data)
+
+        if response.status_code == 401:
+            return openai.AuthenticationError(err_msg, response=response, body=data)
+
+        if response.status_code == 403:
+            return openai.PermissionDeniedError(err_msg, response=response, body=data)
+
+        if response.status_code == 404:
+            return openai.NotFoundError(err_msg, response=response, body=data)
+
+        if response.status_code == 409:
+            return openai.ConflictError(err_msg, response=response, body=data)
+
+        if response.status_code == 422:
+            return openai.UnprocessableEntityError(
+                err_msg, response=response, body=data
+            )
+
+        if response.status_code == 429:
+            return openai.RateLimitError(err_msg, response=response, body=data)
+
+        if response.status_code >= 500:
+            return openai.InternalServerError(err_msg, response=response, body=data)
+        return openai.APIStatusError(err_msg, response=response, body=data)
+
+    def _log_request_duration(self, request: httpx.Request):
+        """Log the start time of the request."""
+        if self.logger:
+            request.extensions["start_time"] = time.monotonic()
+
+    def _log_response_duration(self, response: httpx.Response):
+        """Log the duration of the request."""
+        if self.logger:
+            start_time = response.request.extensions.get("start_time")
+            if start_time:
+                duration = time.monotonic() - start_time
+                type = "embedding"
+                if not isinstance(self, Embeddings):
+                    type = "normalized" if self.is_normalized else "completion"
+                self.logger.info(
+                    f"[uipath_langchain_client] Request to {response.request.url} took {duration:.2f} seconds.",
+                    extra={
+                        "requestUrl": f"{response.request.url}",
+                        "duration": f"{duration:.2f}",
+                        "type": type,
+                        "ActionName": self.settings.action_name,
+                        "ActionId": self.settings.action_id,
+                    }
+                    if self.settings
+                    else {
+                        "requestUrl": f"{response.request.url}",
+                        "duration": f"{duration:.2f}",
+                        "type": type,
+                    },
+                )
+
+    async def _alog_request_duration(self, request: httpx.Request):
+        """Log the start time of the request."""
+        self._log_request_duration(request)
+
+    async def _alog_response_duration(self, response: httpx.Response):
+        """Log the duration of the request."""
+        self._log_response_duration(response)
+
+    @property
+    def _llm_type(self) -> str:
+        """Get the type of language model used by this chat model. Used for logging purposes only."""
+        return "uipath"
+
+    @property
+    def _identifying_params(self) -> Dict[str, Any]:
+        return {
+            "url": self.url,
+            "model": self.model_name,
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+            "frequency_penalty": self.frequency_penalty,
+            "presence_penalty": self.presence_penalty,
+        }
+
+    def _prepare_url(self, url: str) -> httpx.URL:
+        return httpx.URL(self.url)
+
+    def _build_headers(self, options, retries_taken: int = 0) -> httpx.Headers:
+        return httpx.Headers(self.auth_headers)
+
+    @property
+    def url(self) -> str:
+        if not self._url:
+            env_uipath_url = os.getenv("UIPATH_URL")
+
+            if env_uipath_url:
+                self._url = f"{env_uipath_url.rstrip('/')}/{self.endpoint}"
+            else:
+                self._url = (
+                    f"{self.base_url}/{self.org_id}/{self.tenant_id}/{self.endpoint}"
+                )
+        return self._url
+
+    @property
+    def endpoint(self) -> str:
+        raise NotImplementedError(
+            "The endpoint property is not implemented for this class."
+        )
+
+    @property
+    def auth_headers(self) -> Dict[str, str]:
+        if not self._auth_headers:
+            self._auth_headers = {
+                **self.default_headers,  # type: ignore
+                "Authorization": f"Bearer {self.access_token}",
+                "X-UiPath-LlmGateway-RequestingProduct": self.requesting_product,
+                "X-UiPath-LlmGateway-RequestingFeature": self.requesting_feature,
+                "X-UiPath-LlmGateway-TimeoutSeconds": str(self.default_request_timeout),
+            }
+            if self.is_normalized and self.model_name:
+                self._auth_headers["X-UiPath-LlmGateway-NormalizedApi-ModelName"] = (
+                    self.model_name
+                )
+            if self.include_account_id:
+                self._auth_headers["x-uipath-internal-accountid"] = self.org_id
+                self._auth_headers["x-uipath-internal-tenantid"] = self.tenant_id
+        return self._auth_headers
+
+    def _get_llm_string(self, stop: Optional[list[str]] = None, **kwargs: Any) -> str:
+        serialized_repr = getattr(self, "_serialized", self.model_dump())
+        _cleanup_llm_representation(serialized_repr, 1)
+        kwargs = serialized_repr.get("kwargs", serialized_repr)
+        for key in [
+            "base_url",
+            "access_token",
+            "client_id",
+            "client_secret",
+            "org_id",
+            "tenant_id",
+            "requesting_product",
+            "requesting_feature",
+            "azure_endpoint",
+            "openai_api_version",
+            "openai_api_key",
+            "default_request_timeout",
+            "max_retries",
+            "base_delay",
+            "max_delay",
+            "logger",
+            "settings",
+        ]:
+            if key in kwargs:
+                kwargs.pop(key, None)
+        llm_string = json.dumps(serialized_repr, sort_keys=True)
+        return llm_string
+
+    @property
+    def is_normalized(self) -> bool:
+        return False
+
+
+
+================================================
+FILE: src/uipath_langchain/_utils/_settings.py
+================================================
+# mypy: disable-error-code="syntax"
+import os
+from enum import Enum
+from typing import Any, Optional
+
+import httpx
+from pydantic import Field
+from pydantic_settings import BaseSettings
+
+
+class UiPathCachedPathsSettings(BaseSettings):
+    cached_completion_db: str = Field(
+        default=os.path.join(
+            os.path.dirname(__file__), "tests", "tests_uipath_cache.db"
+        ),
+        alias="CACHED_COMPLETION_DB",
+    )
+    cached_embeddings_dir: str = Field(
+        default=os.path.join(os.path.dirname(__file__), "tests", "cached_embeddings"),
+        alias="CACHED_EMBEDDINGS_DIR",
+    )
+
+
+uipath_cached_paths_settings = UiPathCachedPathsSettings()
+uipath_token_header: Optional[str] = None
+
+
+class UiPathClientFactorySettings(BaseSettings):
+    base_url: str = Field(default="", alias="UIPATH_BASE_URL")
+    client_id: str = Field(default="", alias="UIPATH_CLIENT_ID")
+    client_secret: str = Field(default="", alias="UIPATH_CLIENT_SECRET")
+
+
+class UiPathClientSettings(BaseSettings):
+    access_token: str = Field(default_factory=lambda: get_uipath_token_header())
+    base_url: str = Field(default="", alias="UIPATH_BASE_URL")
+    org_id: str = Field(default="", alias="UIPATH_ORGANIZATION_ID")
+    tenant_id: str = Field(default="", alias="UIPATH_TENANT_ID")
+    requesting_product: str = Field(default="", alias="UIPATH_REQUESTING_PRODUCT")
+    requesting_feature: str = Field(default="", alias="UIPATH_REQUESTING_FEATURE")
+    timeout_seconds: str = Field(default="120", alias="UIPATH_TIMEOUT_SECONDS")
+    action_name: str = Field(default="DefaultActionName", alias="UIPATH_ACTION_NAME")
+    action_id: str = Field(default="DefaultActionId", alias="UIPATH_ACTION_ID")
+
+
+class UiPathEndpoints(Enum):
+    NORMALIZED_COMPLETION_ENDPOINT = "llmgateway_/api/chat/completions"
+    PASSTHROUGH_COMPLETION_ENDPOINT = "llmgateway_/openai/deployments/{model}/chat/completions?api-version={api_version}"
+    EMBEDDING_ENDPOINT = (
+        "llmgateway_/openai/deployments/{model}/embeddings?api-version={api_version}"
+    )
+
+
+def get_uipath_token_header(
+    settings: Any = None,
+) -> str:
+    global uipath_token_header
+    if not uipath_token_header:
+        settings = settings or UiPathClientFactorySettings()
+        url_get_token = f"{settings.base_url}/identity_/connect/token"
+        token_credentials = dict(
+            client_id=settings.client_id,
+            client_secret=settings.client_secret,
+            grant_type="client_credentials",
+        )
+        with httpx.Client() as client:
+            res = client.post(url_get_token, data=token_credentials)
+            res_json = res.json()
+            uipath_token_header = res_json.get("access_token")
+
+    return uipath_token_header or ""
+
+
+async def get_token_header_async(
+    settings: Any = None,
+) -> str:
+    global uipath_token_header
+    if not uipath_token_header:
+        settings = settings or UiPathClientFactorySettings()
+        url_get_token = f"{settings.base_url}/identity_/connect/token"
+        token_credentials = dict(
+            client_id=settings.client_id,
+            client_secret=settings.client_secret,
+            grant_type="client_credentials",
+        )
+
+        with httpx.Client() as client:
+            res_json = client.post(url_get_token, data=token_credentials).json()
+            uipath_token_header = res_json.get("access_token")
+
+    return uipath_token_header or ""
+
+
+
+================================================
+FILE: src/uipath_langchain/_utils/_sleep_policy.py
+================================================
+import logging
+from typing import Callable
+
+from tenacity import (
+    RetryCallState,
+    _utils,
+)
+
+
+def before_sleep_log(
+    logger: "logging.Logger",
+    log_level: int,
+    exc_info: bool = False,
+) -> Callable[["RetryCallState"], None]:
+    """Before call strategy that logs to some logger the attempt."""
+
+    def log_it(retry_state: "RetryCallState") -> None:
+        if retry_state.outcome is None:
+            raise RuntimeError("log_it() called before outcome was set")
+
+        if retry_state.next_action is None:
+            raise RuntimeError("log_it() called before next_action was set")
+
+        if retry_state.outcome.failed:
+            ex = retry_state.outcome.exception()
+            verb, value = "raised", f"{ex.__class__.__name__}: {ex}"
+        else:
+            verb, value = "returned", retry_state.outcome.result()
+
+        if retry_state.fn is None:
+            fn_name = "<unknown>"
+        else:
+            fn_name = _utils.get_callback_name(retry_state.fn)
+
+        logger.log(
+            log_level,
+            f"Retrying #{retry_state.attempt_number} {fn_name} in {retry_state.next_action.sleep} seconds as it {verb} {value}.",
+            {"retries": f"{retry_state.attempt_number}"},
+        )
+
+    return log_it
+
+
+
+================================================
+FILE: src/uipath_langchain/chat/__init__.py
+================================================
+from .models import UiPathAzureChatOpenAI, UiPathChat
+
+__all__ = [
+    "UiPathChat",
+    "UiPathAzureChatOpenAI",
+]
+
+
+
+================================================
+FILE: src/uipath_langchain/chat/models.py
+================================================
+import json
+from typing import Any, Dict, List, Literal, Optional, Union
+
+from langchain_core.callbacks import (
+    AsyncCallbackManagerForLLMRun,
+    CallbackManagerForLLMRun,
+)
+from langchain_core.language_models import LanguageModelInput
+from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages.ai import UsageMetadata
+from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_core.runnables import Runnable
+from langchain_openai.chat_models import AzureChatOpenAI
+from pydantic import BaseModel
+
+from uipath_langchain._utils._request_mixin import UiPathRequestMixin
+from uipath_langchain._utils._settings import UiPathEndpoints
+
+
+class UiPathAzureChatOpenAI(UiPathRequestMixin, AzureChatOpenAI):
+    """Custom LLM connector for LangChain integration with UiPath."""
+
+    def _generate(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        if "tools" in kwargs and not kwargs["tools"]:
+            del kwargs["tools"]
+        payload = self._get_request_payload(messages, stop=stop, **kwargs)
+        response = self._call(self.url, payload, self.auth_headers)
+        return self._create_chat_result(response)
+
+    async def _agenerate(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[AsyncCallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        if "tools" in kwargs and not kwargs["tools"]:
+            del kwargs["tools"]
+        payload = self._get_request_payload(messages, stop=stop, **kwargs)
+        response = await self._acall(self.url, payload, self.auth_headers)
+        return self._create_chat_result(response)
+
+    def with_structured_output(
+        self,
+        schema: Optional[Any] = None,
+        *,
+        method: Literal["function_calling", "json_mode", "json_schema"] = "json_schema",
+        include_raw: bool = False,
+        strict: Optional[bool] = None,
+        **kwargs: Any,
+    ) -> Runnable[LanguageModelInput, Any]:
+        """Model wrapper that returns outputs formatted to match the given schema."""
+        schema = (
+            schema.model_json_schema()
+            if isinstance(schema, type) and issubclass(schema, BaseModel)
+            else schema
+        )
+        return super().with_structured_output(
+            schema=schema,
+            method=method,
+            include_raw=include_raw,
+            strict=strict,
+            **kwargs,
+        )
+
+    @property
+    def endpoint(self) -> str:
+        return UiPathEndpoints.PASSTHROUGH_COMPLETION_ENDPOINT.value.format(
+            model=self.model_name, api_version=self.openai_api_version
+        )
+
+
+class UiPathChat(UiPathRequestMixin, AzureChatOpenAI):
+    """Custom LLM connector for LangChain integration with UiPath Normalized."""
+
+    def _create_chat_result(
+        self,
+        response: Union[Dict[str, Any], BaseModel],
+        generation_info: Optional[Dict[Any, Any]] = None,
+    ) -> ChatResult:
+        if not isinstance(response, dict):
+            response = response.model_dump()
+        message = response["choices"][0]["message"]
+        usage = response["usage"]
+
+        ai_message = AIMessage(
+            content=message.get("content", ""),
+            usage_metadata=UsageMetadata(
+                input_tokens=usage.get("prompt_tokens", 0),
+                output_tokens=usage.get("completion_tokens", 0),
+                total_tokens=usage.get("total_tokens", 0),
+            ),
+            additional_kwargs={},
+            response_metadata={
+                "token_usage": response["usage"],
+                "model_name": self.model_name,
+                "finish_reason": response["choices"][0].get("finish_reason", None),
+                "system_fingerprint": response["id"],
+                "created": response["created"],
+            },
+        )
+
+        if "tool_calls" in message:
+            ai_message.tool_calls = [
+                {
+                    "id": tool["id"],
+                    "name": tool["name"],
+                    "args": tool["arguments"],
+                }
+                for tool in message["tool_calls"]
+            ]
+        generation = ChatGeneration(message=ai_message)
+        return ChatResult(generations=[generation])
+
+    def _get_request_payload(
+        self,
+        input_: LanguageModelInput,
+        *,
+        stop: Optional[List[str]] = None,
+        **kwargs: Any,
+    ) -> Dict[Any, Any]:
+        payload = super()._get_request_payload(input_, stop=stop, **kwargs)
+        # hacks to make the request work with uipath normalized
+        for message in payload["messages"]:
+            if message["content"] is None:
+                message["content"] = ""
+            if "tool_calls" in message:
+                for tool_call in message["tool_calls"]:
+                    tool_call["name"] = tool_call["function"]["name"]
+                    tool_call["arguments"] = json.loads(
+                        tool_call["function"]["arguments"]
+                    )
+            if message["role"] == "tool":
+                message["content"] = {
+                    "result": message["content"],
+                    "call_id": message["tool_call_id"],
+                }
+        return payload
+
+    def _generate(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        """Override the _generate method to implement the chat model logic.
+
+        This can be a call to an API, a call to a local model, or any other
+        implementation that generates a response to the input prompt.
+
+        Args:
+            messages: the prompt composed of a list of messages.
+            stop: a list of strings on which the model should stop generating.
+                  If generation stops due to a stop token, the stop token itself
+                  SHOULD BE INCLUDED as part of the output. This is not enforced
+                  across models right now, but it's a good practice to follow since
+                  it makes it much easier to parse the output of the model
+                  downstream and understand why generation stopped.
+            run_manager: A run manager with callbacks for the LLM.
+        """
+        if kwargs.get("tools"):
+            kwargs["tools"] = [tool["function"] for tool in kwargs["tools"]]
+        if "tool_choice" in kwargs and kwargs["tool_choice"]["type"] == "function":
+            kwargs["tool_choice"] = {
+                "type": "tool",
+                "name": kwargs["tool_choice"]["function"]["name"],
+            }
+        payload = self._get_request_payload(messages, stop=stop, **kwargs)
+
+        response = self._call(self.url, payload, self.auth_headers)
+        return self._create_chat_result(response)
+
+    async def _agenerate(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[AsyncCallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        """Override the _generate method to implement the chat model logic.
+
+        This can be a call to an API, a call to a local model, or any other
+        implementation that generates a response to the input prompt.
+
+        Args:
+            messages: the prompt composed of a list of messages.
+            stop: a list of strings on which the model should stop generating.
+                  If generation stops due to a stop token, the stop token itself
+                  SHOULD BE INCLUDED as part of the output. This is not enforced
+                  across models right now, but it's a good practice to follow since
+                  it makes it much easier to parse the output of the model
+                  downstream and understand why generation stopped.
+            run_manager: A run manager with callbacks for the LLM.
+        """
+        if kwargs.get("tools"):
+            kwargs["tools"] = [tool["function"] for tool in kwargs["tools"]]
+        if "tool_choice" in kwargs and kwargs["tool_choice"]["type"] == "function":
+            kwargs["tool_choice"] = {
+                "type": "tool",
+                "name": kwargs["tool_choice"]["function"]["name"],
+            }
+        payload = self._get_request_payload(messages, stop=stop, **kwargs)
+
+        response = await self._acall(self.url, payload, self.auth_headers)
+        return self._create_chat_result(response)
+
+    def with_structured_output(
+        self,
+        schema: Optional[Any] = None,
+        *,
+        method: Literal[
+            "function_calling", "json_mode", "json_schema"
+        ] = "function_calling",
+        include_raw: bool = False,
+        strict: Optional[bool] = None,
+        **kwargs: Any,
+    ) -> Runnable[LanguageModelInput, Any]:
+        """Model wrapper that returns outputs formatted to match the given schema."""
+        if method == "json_schema" and (
+            not self.model_name or not self.model_name.startswith("gpt")
+        ):
+            method = "function_calling"
+            if self.logger:
+                self.logger.warning(
+                    "The json_schema output is not supported for non-GPT models. Using function_calling instead.",
+                    extra={
+                        "ActionName": self.settings.action_name,
+                        "ActionId": self.settings.action_id,
+                    }
+                    if self.settings
+                    else None,
+                )
+        schema = (
+            schema.model_json_schema()
+            if isinstance(schema, type) and issubclass(schema, BaseModel)
+            else schema
+        )
+        return super().with_structured_output(
+            schema=schema,
+            method=method,
+            include_raw=include_raw,
+            strict=strict,
+            **kwargs,
+        )
+
+    @property
+    def endpoint(self) -> str:
+        return UiPathEndpoints.NORMALIZED_COMPLETION_ENDPOINT.value
+
+    @property
+    def is_normalized(self) -> bool:
+        return True
+
+
+
+================================================
+FILE: src/uipath_langchain/embeddings/__init__.py
+================================================
+from .embeddings import UiPathAzureOpenAIEmbeddings, UiPathOpenAIEmbeddings
+
+__all__ = [
+    "UiPathAzureOpenAIEmbeddings",
+    "UiPathOpenAIEmbeddings",
+]
+
+
+
+================================================
+FILE: src/uipath_langchain/embeddings/embeddings.py
+================================================
+import os
+from typing import List, Optional
+
+import httpx
+from langchain_community.callbacks.manager import openai_callback_var
+from langchain_openai.embeddings import AzureOpenAIEmbeddings, OpenAIEmbeddings
+from pydantic import Field
+
+from uipath_langchain._utils._request_mixin import UiPathRequestMixin
+from uipath_langchain._utils._settings import UiPathEndpoints
+
+
+class UiPathAzureOpenAIEmbeddings(UiPathRequestMixin, AzureOpenAIEmbeddings):
+    """Custom Embeddings connector for LangChain integration with UiPath, with minimal changes compared to AzureOpenAIEmbeddings."""
+
+    model_name: Optional[str] = Field(
+        default_factory=lambda: os.getenv(
+            "UIPATH_MODEL_NAME", "text-embedding-3-large"
+        ),
+        alias="model",
+    )
+
+    def __init__(self, **kwargs):
+        super().__init__(
+            http_client=httpx.Client(
+                event_hooks={
+                    "request": [self._log_request_duration],
+                    "response": [self._log_response_duration],
+                }
+            ),
+            http_async_client=httpx.AsyncClient(
+                event_hooks={
+                    "request": [self._alog_request_duration],
+                    "response": [self._alog_response_duration],
+                }
+            ),
+            **kwargs,
+        )
+        self.client._client._prepare_url = self._prepare_url
+        self.client._client._build_headers = self._build_headers
+        self.async_client._client._prepare_url = self._prepare_url
+        self.async_client._client._build_headers = self._build_headers
+
+    @property
+    def endpoint(self) -> str:
+        return UiPathEndpoints.EMBEDDING_ENDPOINT.value.format(
+            model=self.model_name, api_version=self.openai_api_version
+        )
+
+
+class UiPathOpenAIEmbeddings(UiPathRequestMixin, OpenAIEmbeddings):
+    """Custom Embeddings connector for LangChain integration with UiPath, with full control over the embedding call."""
+
+    model_name: Optional[str] = Field(
+        default_factory=lambda: os.getenv(
+            "UIPATH_MODEL_NAME", "text-embedding-3-large"
+        ),
+        alias="model",
+    )
+
+    def embed_documents(
+        self, texts: List[str], chunk_size: Optional[int] = None
+    ) -> List[List[float]]:
+        """Embed a list of documents using the UiPath."""
+        embeddings = []
+        total_tokens = 0
+        # Process in chunks if specified
+        chunk_size_ = chunk_size or self.chunk_size or len(texts)
+        for i in range(0, len(texts), chunk_size_):
+            chunk = texts[i : i + chunk_size_]
+            payload = {"input": chunk}
+            response = self._call(self.url, payload, self.auth_headers)
+            chunk_embeddings = [r["embedding"] for r in response["data"]]
+            total_tokens += response["usage"]["prompt_tokens"]
+            embeddings.extend(chunk_embeddings)
+        if contextvar := openai_callback_var.get():
+            contextvar.prompt_tokens += total_tokens
+            contextvar.total_tokens += total_tokens
+            contextvar.successful_requests += 1
+        return embeddings
+
+    async def aembed_documents(
+        self,
+        texts: List[str],
+        chunk_size: Optional[int] = None,
+    ) -> List[List[float]]:
+        """Async version of embed_documents."""
+        embeddings = []
+        total_tokens = 0
+        # Process in chunks if specified
+        chunk_size_ = chunk_size or self.chunk_size or len(texts)
+        for i in range(0, len(texts), chunk_size_):
+            chunk = texts[i : i + chunk_size_]
+            payload = {"input": chunk}
+            response = await self._acall(self.url, payload, self.auth_headers)
+            chunk_embeddings = [r["embedding"] for r in response["data"]]
+            total_tokens += response["usage"]["prompt_tokens"]
+            embeddings.extend(chunk_embeddings)
+        if contextvar := openai_callback_var.get():
+            contextvar.prompt_tokens += total_tokens
+            contextvar.total_tokens += total_tokens
+            contextvar.successful_requests += 1
+        return embeddings
+
+    @property
+    def endpoint(self) -> str:
+        return UiPathEndpoints.EMBEDDING_ENDPOINT.value.format(
+            model=self.model_name, api_version=self.openai_api_version
+        )
+
+
+
+================================================
+FILE: src/uipath_langchain/retrievers/__init__.py
+================================================
+from .context_grounding_retriever import ContextGroundingRetriever
+
+__all__ = ["ContextGroundingRetriever"]
+
+
+
+================================================
+FILE: src/uipath_langchain/retrievers/context_grounding_retriever.py
+================================================
+from typing import List, Optional
+
+from langchain_core.callbacks import (
+    AsyncCallbackManagerForRetrieverRun,
+    CallbackManagerForRetrieverRun,
+)
+from langchain_core.documents import Document
+from langchain_core.retrievers import BaseRetriever
+from uipath import UiPath
+
+
+class ContextGroundingRetriever(BaseRetriever):
+    index_name: str
+    folder_path: Optional[str] = None
+    folder_key: Optional[str] = None
+    uipath_sdk: Optional[UiPath] = None
+    number_of_results: Optional[int] = 10
+
+    def _get_relevant_documents(
+        self, query: str, *, run_manager: CallbackManagerForRetrieverRun
+    ) -> List[Document]:
+        """Sync implementations for retriever calls context_grounding API to search the requested index."""
+
+        sdk = self.uipath_sdk if self.uipath_sdk is not None else UiPath()
+        results = sdk.context_grounding.search(
+            self.index_name,
+            query,
+            self.number_of_results if self.number_of_results is not None else 10,
+            folder_path=self.folder_path,
+            folder_key=self.folder_key,
+        )
+
+        return [
+            Document(
+                page_content=x.content,
+                metadata={
+                    "source": x.source,
+                    "page_number": x.page_number,
+                },
+            )
+            for x in results
+        ]
+
+    async def _aget_relevant_documents(
+        self, query: str, *, run_manager: AsyncCallbackManagerForRetrieverRun
+    ) -> List[Document]:
+        """Async implementations for retriever calls context_grounding API to search the requested index."""
+
+        sdk = self.uipath_sdk if self.uipath_sdk is not None else UiPath()
+        results = await sdk.context_grounding.search_async(
+            self.index_name,
+            query,
+            self.number_of_results if self.number_of_results is not None else 10,
+            folder_path=self.folder_path,
+            folder_key=self.folder_key,
+        )
+
+        return [
+            Document(
+                page_content=x.content,
+                metadata={
+                    "source": x.source,
+                    "page_number": x.page_number,
+                },
+            )
+            for x in results
+        ]
+
+
+
+================================================
+FILE: src/uipath_langchain/tracers/__init__.py
+================================================
+from ._instrument_traceable import _instrument_traceable_attributes
+from .AsyncUiPathTracer import AsyncUiPathTracer
+from .UiPathTracer import UiPathTracer
+
+__all__ = [
+    "AsyncUiPathTracer",
+    "UiPathTracer",
+    "_instrument_traceable_attributes",
+]
+
+
+
+================================================
+FILE: src/uipath_langchain/tracers/_events.py
+================================================
+from typing import Any, Dict, List, Literal, Optional
+
+RUN_TYPE_T = Literal[
+    "tool", "chain", "llm", "retriever", "embedding", "prompt", "parser"
+]
+
+
+class CustomTraceEvents:
+    UIPATH_TRACE_FUNCTION_CALL = "__uipath_trace_function_call"
+
+
+class FunctionCallEventData:
+    def __init__(
+        self,
+        function_name: str,
+        event_type: str,
+        inputs: Dict[str, Any],
+        call_uuid: str,
+        output: Any,
+        error: Optional[str] = None,
+        run_type: Optional[RUN_TYPE_T] = None,
+        tags: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ):
+        self.function_name = function_name
+        self.event_type = event_type
+        self.inputs = inputs
+        self.call_uuid = call_uuid
+        self.output = output
+        self.error = error
+        self.run_type = run_type or "chain"
+        self.tags = tags
+        self.metadata = metadata
+
+
+
+================================================
+FILE: src/uipath_langchain/tracers/_instrument_traceable.py
+================================================
+import functools
+import importlib
+import inspect
+import logging
+import sys
+import uuid
+from typing import Any, Callable, Dict, List, Literal, Optional
+
+from langchain_core.callbacks import dispatch_custom_event
+from uipath.tracing import TracingManager
+
+from ._events import CustomTraceEvents, FunctionCallEventData
+
+# Original module and traceable function references
+original_langsmith: Any = None
+original_traceable: Any = None
+
+logger = logging.getLogger(__name__)
+
+
+def dispatch_trace_event(
+    func_name,
+    inputs: Dict[str, Any],
+    event_type="call",
+    call_uuid=None,
+    result=None,
+    exception=None,
+    run_type: Optional[
+        Literal["tool", "chain", "llm", "retriever", "embedding", "prompt", "parser"]
+    ] = None,
+    tags: Optional[List[str]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+):
+    """Dispatch trace event to our server."""
+    try:
+        event_data = FunctionCallEventData(
+            function_name=func_name,
+            event_type=event_type,
+            inputs=inputs,
+            call_uuid=call_uuid,
+            output=result,
+            error=str(exception) if exception else None,
+            run_type=run_type,
+            tags=tags,
+            metadata=metadata,
+        )
+
+        dispatch_custom_event(CustomTraceEvents.UIPATH_TRACE_FUNCTION_CALL, event_data)
+    except Exception as e:
+        logger.debug(
+            f"Error dispatching trace event: {e}. Function name: {func_name} Event type: {event_type}"
+        )
+
+
+def format_args_for_trace(
+    signature: inspect.Signature, *args: Any, **kwargs: Any
+) -> Dict[str, Any]:
+    try:
+        """Return a dictionary of inputs from the function signature."""
+        # Create a parameter mapping by partially binding the arguments
+        parameter_binding = signature.bind_partial(*args, **kwargs)
+
+        # Fill in default values for any unspecified parameters
+        parameter_binding.apply_defaults()
+
+        # Extract the input parameters, skipping special Python parameters
+        result = {}
+        for name, value in parameter_binding.arguments.items():
+            # Skip class and instance references
+            if name in ("self", "cls"):
+                continue
+
+            # Handle **kwargs parameters specially
+            param_info = signature.parameters.get(name)
+            if param_info and param_info.kind == inspect.Parameter.VAR_KEYWORD:
+                # Flatten nested kwargs directly into the result
+                if isinstance(value, dict):
+                    result.update(value)
+            else:
+                # Regular parameter
+                result[name] = value
+
+        return result
+    except Exception as e:
+        logger.warning(
+            f"Error formatting arguments for trace: {e}. Using args and kwargs directly."
+        )
+        return {"args": args, "kwargs": kwargs}
+
+
+def _create_traced_wrapper(
+    func: Callable[..., Any],
+    wrapper_func: Optional[Callable[..., Any]] = None,
+    func_name: Optional[str] = None,
+    run_type: Optional[str] = None,
+    span_type: Optional[str] = None,
+    tags: Optional[List[str]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    input_processor: Optional[Callable[..., Any]] = None,
+    output_processor: Optional[Callable[..., Any]] = None,
+):
+    """Create a traced wrapper based on function type."""
+    # Use function name if not provided
+    actual_func_name = func_name or func.__name__
+    # Function to actually call (the wrapped function or original)
+    target_func = wrapper_func or func
+    # Ensure we have metadata
+    actual_metadata = metadata or {}
+
+    # Define all wrapper functions
+
+    @functools.wraps(target_func)
+    async def async_gen_wrapper(*args, **kwargs):
+        try:
+            call_uuid = str(uuid.uuid4())
+
+            # Get inputs and process them if needed
+            inputs = format_args_for_trace(inspect.signature(func), *args, **kwargs)
+            if input_processor is not None:
+                inputs = input_processor(inputs)
+
+            # Add span_type to metadata if provided
+            if span_type:
+                actual_metadata["span_type"] = (
+                    span_type or "function_call_generator_async"
+                )
+
+            dispatch_trace_event(
+                actual_func_name,
+                inputs,
+                "call",
+                call_uuid,
+                run_type=run_type,  # type: ignore
+                tags=tags,
+                metadata=actual_metadata,
+            )
+
+            outputs = []
+            async_gen = target_func(*args, **kwargs)
+            async for item in async_gen:
+                outputs.append(item)
+                yield item
+
+            # Process output if needed
+            output_to_record = outputs
+            if output_processor is not None:
+                output_to_record = output_processor(outputs)
+
+            dispatch_trace_event(
+                actual_func_name,
+                inputs,
+                "completion",
+                call_uuid,
+                result=output_to_record,
+            )
+        except Exception as e:
+            dispatch_trace_event(
+                actual_func_name, inputs, "completion", call_uuid, exception=e
+            )
+            raise
+
+    @functools.wraps(target_func)
+    def gen_wrapper(*args, **kwargs):
+        try:
+            call_uuid = str(uuid.uuid4())
+
+            # Get inputs and process them if needed
+            inputs = format_args_for_trace(inspect.signature(func), *args, **kwargs)
+            if input_processor is not None:
+                inputs = input_processor(inputs)
+
+            # Add span_type to metadata if provided
+            if span_type:
+                actual_metadata["span_type"] = (
+                    span_type or "function_call_generator_sync"
+                )
+
+            dispatch_trace_event(
+                actual_func_name,
+                inputs,
+                "call",
+                call_uuid,
+                run_type=run_type,  # type: ignore
+                tags=tags,
+                metadata=actual_metadata,
+            )
+
+            outputs = []
+            gen = target_func(*args, **kwargs)
+            for item in gen:
+                outputs.append(item)
+                yield item
+
+            # Process output if needed
+            output_to_record = outputs
+            if output_processor is not None:
+                output_to_record = output_processor(outputs)
+
+            dispatch_trace_event(
+                actual_func_name,
+                inputs,
+                "completion",
+                call_uuid,
+                result=output_to_record,
+            )
+        except Exception as e:
+            dispatch_trace_event(
+                actual_func_name, inputs, "completion", call_uuid, exception=e
+            )
+            raise
+
+    @functools.wraps(target_func)
+    async def async_wrapper(*args, **kwargs):
+        try:
+            call_uuid = str(uuid.uuid4())
+
+            # Get inputs and process them if needed
+            inputs = format_args_for_trace(inspect.signature(func), *args, **kwargs)
+            if input_processor is not None:
+                inputs = input_processor(inputs)
+
+            # Add span_type to metadata if provided
+            if span_type:
+                actual_metadata["span_type"] = span_type or "function_call_async"
+
+            dispatch_trace_event(
+                actual_func_name,
+                inputs,
+                "call",
+                call_uuid,
+                run_type=run_type,  # type: ignore
+                tags=tags,
+                metadata=actual_metadata,
+            )
+
+            result = await target_func(*args, **kwargs)
+
+            # Process output if needed
+            output_to_record = result
+            if output_processor is not None:
+                output_to_record = output_processor(result)
+
+            dispatch_trace_event(
+                actual_func_name,
+                inputs,
+                "completion",
+                call_uuid,
+                result=output_to_record,
+            )
+
+            return result
+        except Exception as e:
+            dispatch_trace_event(
+                actual_func_name, inputs, "completion", call_uuid, exception=e
+            )
+            raise
+
+    @functools.wraps(target_func)
+    def sync_wrapper(*args, **kwargs):
+        try:
+            call_uuid = str(uuid.uuid4())
+
+            # Get inputs and process them if needed
+            inputs = format_args_for_trace(inspect.signature(func), *args, **kwargs)
+            if input_processor is not None:
+                inputs = input_processor(inputs)
+
+            # Add span_type to metadata if provided
+            if span_type:
+                actual_metadata["span_type"] = span_type or "function_call_sync"
+
+            dispatch_trace_event(
+                actual_func_name,
+                inputs,
+                "call",
+                call_uuid,
+                run_type=run_type,  # type: ignore
+                tags=tags,
+                metadata=actual_metadata,
+            )
+
+            result = target_func(*args, **kwargs)
+
+            # Process output if needed
+            output_to_record = result
+            if output_processor is not None:
+                output_to_record = output_processor(result)
+
+            dispatch_trace_event(
+                actual_func_name,
+                inputs,
+                "completion",
+                call_uuid,
+                result=output_to_record,
+            )
+
+            return result
+        except Exception as e:
+            dispatch_trace_event(
+                actual_func_name, inputs, "completion", call_uuid, exception=e
+            )
+            raise
+
+    # Return the appropriate wrapper based on the function type
+    if inspect.isasyncgenfunction(target_func):
+        return async_gen_wrapper
+    elif inspect.isgeneratorfunction(target_func):
+        return gen_wrapper
+    elif inspect.iscoroutinefunction(target_func):
+        return async_wrapper
+    else:
+        return sync_wrapper
+
+
+def _create_appropriate_wrapper(
+    original_func: Any, wrapped_func: Any, decorator_kwargs: Dict[str, Any]
+):
+    """Create the appropriate wrapper based on function type."""
+
+    # Get the function name and tags from decorator arguments
+    func_name = decorator_kwargs.get("name", original_func.__name__)
+    tags = decorator_kwargs.get("tags", None)
+    metadata = decorator_kwargs.get("metadata", None)
+    run_type = decorator_kwargs.get("run_type", None)
+
+    return _create_traced_wrapper(
+        func=original_func,
+        wrapper_func=wrapped_func,
+        func_name=func_name,
+        run_type=run_type,
+        tags=tags,
+        metadata=metadata,
+    )
+
+
+def _uipath_traced(
+    name: Optional[str] = None,
+    run_type: Optional[str] = None,
+    span_type: Optional[str] = None,
+    input_processor: Optional[Callable[..., Any]] = None,
+    output_processor: Optional[Callable[..., Any]] = None,
+    *args: Any,
+    **kwargs: Any,
+):
+    """Decorator factory that creates traced functions using dispatch_trace_event."""
+
+    def decorator(func):
+        return _create_traced_wrapper(
+            func=func,
+            func_name=name,
+            run_type=run_type,
+            span_type=span_type,
+            input_processor=input_processor,
+            output_processor=output_processor,
+        )
+
+    return decorator
+
+
+# Create patched version of traceable
+def patched_traceable(*decorator_args, **decorator_kwargs):
+    # Handle the case when @traceable is used directly as decorator without arguments
+    if (
+        len(decorator_args) == 1
+        and callable(decorator_args[0])
+        and not decorator_kwargs
+    ):
+        func = decorator_args[0]
+        return _create_appropriate_wrapper(func, original_traceable(func), {})
+
+    # Handle the case when @traceable(args) is used with parameters
+    original_decorated = original_traceable(*decorator_args, **decorator_kwargs)
+
+    def uipath_trace_decorator(func):
+        # Apply the original decorator with its arguments
+        wrapped_func = original_decorated(func)
+        return _create_appropriate_wrapper(func, wrapped_func, decorator_kwargs)
+
+    return uipath_trace_decorator
+
+
+# Register the UIPath traced decorator
+def register_uipath_tracing():
+    """Register the UIPath tracing decorator with TracedDecoratorRegistry."""
+    # Reapply to all previously decorated functions
+    TracingManager.reapply_traced_decorator(_uipath_traced)
+
+
+# Apply the patch
+def _instrument_traceable_attributes():
+    """Apply the patch to langsmith module at import time."""
+    global original_langsmith, original_traceable
+
+    # Register our custom tracing decorator
+    register_uipath_tracing()
+
+    # Import the original module if not already done
+    if original_langsmith is None:
+        # Temporarily remove our custom module from sys.modules
+        if "langsmith" in sys.modules:
+            original_langsmith = sys.modules["langsmith"]
+            del sys.modules["langsmith"]
+
+        # Import the original module
+        original_langsmith = importlib.import_module("langsmith")
+
+        # Store the original traceable
+        original_traceable = original_langsmith.traceable
+
+        # Replace the traceable function with our patched version
+        original_langsmith.traceable = patched_traceable
+
+        # Put our modified module back
+        sys.modules["langsmith"] = original_langsmith
+
+    return original_langsmith
+
+
+
+================================================
+FILE: src/uipath_langchain/tracers/_utils.py
+================================================
+import datetime
+import logging
+from zoneinfo import ZoneInfo
+
+
+class IgnoreSpecificUrl(logging.Filter):
+    def __init__(self, url_to_ignore):
+        super().__init__()
+        self.url_to_ignore = url_to_ignore
+
+    def filter(self, record):
+        try:
+            if record.msg == 'HTTP Request: %s %s "%s %d %s"':
+                # Ignore the log if the URL matches the one we want to ignore
+                method = record.args[0]
+                url = record.args[1]
+
+                if method == "POST" and url.path.endswith(self.url_to_ignore):
+                    # Check if the URL contains the specific path we want to ignore
+                    return True
+                return False
+
+        except Exception:
+            return False
+
+
+def _setup_tracer_httpx_logging(url: str):
+    # Create a custom logger for httpx
+    # Add the custom filter to the root logger
+    logging.getLogger("httpx").addFilter(IgnoreSpecificUrl(url))
+
+
+def _simple_serialize_defaults(obj):
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump(exclude_none=True, mode="json")
+    if hasattr(obj, "dict"):
+        return obj.dict()
+    if hasattr(obj, "to_dict"):
+        return obj.to_dict()
+
+    if isinstance(obj, (set, tuple)):
+        if hasattr(obj, "_asdict") and callable(obj._asdict):
+            return obj._asdict()
+        return list(obj)
+
+    if isinstance(obj, datetime.datetime):
+        return obj.isoformat()
+
+    if isinstance(obj, (datetime.timezone, ZoneInfo)):
+        return obj.tzname(None)
+
+    return str(obj)
+
+
+
+================================================
+FILE: src/uipath_langchain/tracers/AsyncUiPathTracer.py
+================================================
+import asyncio
+import json
+import logging
+import queue
+import uuid
+import warnings
+from os import environ as env
+from typing import Any, Dict, Optional
+
+import httpx
+from langchain_core.tracers.base import AsyncBaseTracer
+from langchain_core.tracers.schemas import Run
+from pydantic import PydanticDeprecationWarning
+from uipath._cli._runtime._contracts import UiPathTraceContext
+
+from ._events import CustomTraceEvents, FunctionCallEventData
+from ._utils import _setup_tracer_httpx_logging, _simple_serialize_defaults
+
+logger = logging.getLogger(__name__)
+
+_setup_tracer_httpx_logging("/llmops_/api/Agent/trace/")
+
+
+class Status:
+    SUCCESS = 1
+    ERROR = 2
+    INTERRUPTED = 3
+
+
+class AsyncUiPathTracer(AsyncBaseTracer):
+    def __init__(
+        self,
+        context: Optional[UiPathTraceContext] = None,
+        client: Optional[httpx.AsyncClient] = None,
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+
+        self.client = client or httpx.AsyncClient()
+        self.retries = 3
+        self.log_queue: queue.Queue[dict[str, Any]] = queue.Queue()
+
+        self.context = context or UiPathTraceContext()
+
+        self.base_url = self._get_base_url()
+
+        auth_token = env.get("UNATTENDED_USER_ACCESS_TOKEN") or env.get(
+            "UIPATH_ACCESS_TOKEN"
+        )
+
+        self.headers = {"Authorization": f"Bearer {auth_token}"}
+
+        self.running = True
+        self.worker_task = asyncio.create_task(self._worker())
+        self.function_call_run_map: Dict[str, Run] = {}
+
+    async def on_custom_event(
+        self,
+        name: str,
+        data: Any,
+        *,
+        run_id: uuid.UUID,
+        tags=None,
+        metadata=None,
+        **kwargs: Any,
+    ) -> None:
+        if name == CustomTraceEvents.UIPATH_TRACE_FUNCTION_CALL:
+            # only handle the function call event
+
+            if not isinstance(data, FunctionCallEventData):
+                logger.warning(
+                    f"Received unexpected data type for function call event: {type(data)}"
+                )
+                return
+
+            if data.event_type == "call":
+                run = self.run_map[str(run_id)]
+                child_run = run.create_child(
+                    name=data.function_name,
+                    run_type=data.run_type,
+                    tags=data.tags,
+                    inputs=data.inputs,
+                )
+
+                if data.metadata is not None:
+                    run.add_metadata(data.metadata)
+
+                call_uuid = data.call_uuid
+                self.function_call_run_map[call_uuid] = child_run
+
+                self._send_span(run)
+
+            if data.event_type == "completion":
+                call_uuid = data.call_uuid
+                previous_run = self.function_call_run_map.pop(call_uuid, None)
+
+                if previous_run:
+                    previous_run.end(
+                        outputs=self._safe_dict_dump(data.output), error=data.error
+                    )
+                    self._send_span(previous_run)
+
+    async def wait_for_all_tracers(self) -> None:
+        """
+        Wait for all pending log requests to complete
+        """
+        self.running = False
+        if self.worker_task:
+            await self.worker_task
+
+    async def _worker(self):
+        """Worker loop that processes logs from the queue."""
+        while self.running:
+            try:
+                if self.log_queue.empty():
+                    await asyncio.sleep(1)
+                    continue
+
+                span_data = self.log_queue.get_nowait()
+
+                url = self._build_url(self.context.trace_id)
+
+                for attempt in range(self.retries):
+                    response = await self.client.post(
+                        url,
+                        headers=self.headers,
+                        json=[span_data],  # api expects a list of spans
+                        timeout=10,
+                    )
+
+                    if response.is_success:
+                        break
+
+                    await asyncio.sleep(0.5 * (2**attempt))  # Exponential backoff
+
+                    if 400 <= response.status_code < 600:
+                        logger.warning(
+                            f"Error when sending trace: {response}. Body is: {response.text}"
+                        )
+            except Exception as e:
+                logger.warning(f"Exception when sending trace: {e}", exc_info=e)
+
+        # wait for a bit to ensure all logs are sent
+        await asyncio.sleep(1)
+
+        # try to send any remaining logs in the queue
+        while True:
+            try:
+                if self.log_queue.empty():
+                    break
+
+                span_data = self.log_queue.get_nowait()
+                url = self._build_url(self.context.trace_id)
+
+                response = await self.client.post(
+                    url,
+                    headers=self.headers,
+                    json=[span_data],  # api expects a list of spans
+                    timeout=10,
+                )
+            except Exception as e:
+                logger.warning(f"Exception when sending trace: {e}", exc_info=e)
+
+    async def _persist_run(self, run: Run) -> None:
+        # Determine if this is a start or end trace based on whether end_time is set
+        self._send_span(run)
+
+    def _send_span(self, run: Run) -> None:
+        """Send span data for a run to the API"""
+        run_id = str(run.id)
+
+        try:
+            start_time = (
+                run.start_time.isoformat() if run.start_time is not None else None
+            )
+            end_time = (
+                run.end_time.isoformat() if run.end_time is not None else start_time
+            )
+
+            parent_id = (
+                str(run.parent_run_id)
+                if run.parent_run_id is not None
+                else self.context.parent_span_id
+            )
+            attributes = self._safe_jsons_dump(self._run_to_dict(run))
+            status = self._determine_status(run.error)
+
+            span_data = {
+                "id": run_id,
+                "parentId": parent_id,
+                "traceId": self.context.trace_id,
+                "name": run.name,
+                "startTime": start_time,
+                "endTime": end_time,
+                "referenceId": self.context.reference_id,
+                "attributes": attributes,
+                "organizationId": self.context.org_id,
+                "tenantId": self.context.tenant_id,
+                "spanType": "LangGraphRun",
+                "status": status,
+                "jobKey": self.context.job_id,
+                "folderKey": self.context.folder_key,
+                "processKey": self.context.folder_key,
+                "expiryTimeUtc": None,
+            }
+
+            self.log_queue.put(span_data)
+        except Exception as e:
+            logger.warning(f"Exception when adding trace to queue: {e}.")
+
+    async def _start_trace(self, run: Run) -> None:
+        await super()._start_trace(run)
+        await self._persist_run(run)
+
+    async def _end_trace(self, run: Run) -> None:
+        await super()._end_trace(run)
+        await self._persist_run(run)
+
+    def _determine_status(self, error: Optional[str]):
+        if error:
+            if error.startswith("GraphInterrupt("):
+                return Status.INTERRUPTED
+
+            return Status.ERROR
+
+        return Status.SUCCESS
+
+    def _safe_jsons_dump(self, obj) -> str:
+        try:
+            json_str = json.dumps(obj, default=_simple_serialize_defaults)
+            return json_str
+        except Exception as e:
+            logger.warning(f"Error serializing object to JSON: {e}")
+            return "{ }"
+
+    def _safe_dict_dump(self, obj) -> Dict[str, Any]:
+        try:
+            serialized = json.loads(json.dumps(obj, default=_simple_serialize_defaults))
+            return serialized
+        except Exception as e:
+            # Last resort - string representation
+            logger.warning(f"Error serializing object to JSON: {e}")
+            return {"raw": str(obj)}
+
+    def _run_to_dict(self, run: Run):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=PydanticDeprecationWarning)
+
+            return {
+                **run.dict(exclude={"child_runs", "inputs", "outputs", "serialized"}),
+                "inputs": run.inputs.copy() if run.inputs is not None else None,
+                "outputs": run.outputs.copy() if run.outputs is not None else None,
+            }
+
+    def _get_base_url(self) -> str:
+        uipath_url = (
+            env.get("UIPATH_URL") or "https://cloud.uipath.com/dummyOrg/dummyTennant/"
+        )
+
+        uipath_url = uipath_url.rstrip("/")
+
+        return uipath_url
+
+    def _build_url(self, trace_id: Optional[str]) -> str:
+        """Construct the URL for the API request."""
+        return f"{self.base_url}/llmopstenant_/api/Traces/spans?traceId={trace_id}&source=Robots"
+
+
+
+================================================
+FILE: src/uipath_langchain/tracers/UiPathTracer.py
+================================================
+import json
+import logging
+import re
+import uuid
+import warnings
+from os import environ as env
+from time import sleep
+
+import httpx
+from langchain_core.tracers.base import BaseTracer
+from langchain_core.tracers.schemas import Run
+from pydantic import PydanticDeprecationWarning
+
+from ._utils import _simple_serialize_defaults
+
+logger = logging.getLogger(__name__)
+
+
+class UiPathTracer(BaseTracer):
+    def __init__(self, client, **kwargs):
+        super().__init__(**kwargs)
+
+        self.client = client or httpx.Client()
+        self.retries = 3
+
+        llm_ops_pattern = self._get_base_url() + "{orgId}/llmops_"
+        self.orgId = env.get("UIPATH_ORGANIZATION_ID")
+        self.tenantId = env.get("UIPATH_TENANT_ID")
+        self.url = llm_ops_pattern.format(orgId=self.orgId).rstrip("/")
+
+        self.auth_token = env.get("UNATTENDED_USER_ACCESS_TOKEN") or env.get(
+            "UIPATH_ACCESS_TOKEN"
+        )
+
+        self.jobKey = env.get("UIPATH_JOB_KEY")
+        self.folderKey = env.get("UIPATH_FOLDER_KEY")
+        self.processKey = env.get("UIPATH_PROCESS_UUID")
+
+        self.referenceId = self.jobKey or str(uuid.uuid4())
+
+        self.headers = {
+            "Authorization": f"Bearer {self.auth_token}",
+        }
+
+    def _get_base_url(self) -> str:
+        uipath_url = (
+            env.get("UIPATH_URL") or "https://cloud.uipath.com/dummyOrg/dummyTennant/"
+        )
+        uipath_url = uipath_url.rstrip("/")
+
+        # split by "//" to get ['', 'https:', 'alpha.uipath.com/ada/byoa']
+        parts = uipath_url.split("//")
+
+        # after splitting by //, the base URL will be at index 1 along with the rest,
+        # hence split it again using "/" to get ['https:', 'alpha.uipath.com', 'ada', 'byoa']
+        base_url_parts = parts[1].split("/")
+
+        # combine scheme and netloc to get the base URL
+        base_url = parts[0] + "//" + base_url_parts[0] + "/"
+
+        return base_url
+
+    def init_trace(self, run_name, trace_id=None) -> None:
+        trace_id_env = env.get("UIPATH_TRACE_ID")
+
+        if trace_id_env:
+            self.trace_parent = trace_id_env
+        else:
+            self.start_trace(run_name, trace_id)
+
+    def start_trace(self, run_name, trace_id=None) -> None:
+        self.trace_parent = trace_id or str(uuid.uuid4())
+        run_name = run_name or f"Job Run: {self.trace_parent}"
+        trace_data = {
+            "id": self.trace_parent,
+            "name": re.sub(
+                r"[!@#$<>\.]", "", run_name
+            ),  # if we use these characters the Agents UI throws some error (but llmops backend seems fine)
+            "referenceId": self.referenceId,
+            "attributes": "{}",
+            "organizationId": self.orgId,
+            "tenantId": self.tenantId,
+        }
+
+        for attempt in range(self.retries):
+            response = self.client.post(
+                f"{self.url}/api/Agent/trace/", headers=self.headers, json=trace_data
+            )
+
+            if response.is_success:
+                break
+
+            sleep(0.5 * (2**attempt))  # Exponential backoff
+
+        if 400 <= response.status_code < 600:
+            logger.warning(
+                f"Error when sending trace: {response}. Body is: {response.text}"
+            )
+
+    def _persist_run(self, run: Run) -> None:
+        # when (run.id == run.parent_run_id)  it's the start of a new trace
+        # but we treat all as spans and parent to a single Trace with Id == Job.Key
+        start_time = run.start_time.isoformat() if run.start_time is not None else None
+        end_time = run.end_time.isoformat() if run.end_time is not None else start_time
+
+        span_data = {
+            "id": str(run.id),
+            "parentId": str(run.parent_run_id)
+            if run.parent_run_id is not None
+            else None,
+            "traceId": self.trace_parent,
+            "name": run.name,
+            "startTime": start_time,
+            "endTime": end_time,
+            "referenceId": self.referenceId,
+            "attributes": self._safe_json_dump(self._run_to_dict(run)),
+            "organizationId": self.orgId,
+            "tenantId": self.tenantId,
+            "spanType": "LangGraphRun",
+            "status": 2 if run.error else 1,
+            "jobKey": self.jobKey,
+            "folderKey": self.folderKey,
+            "processKey": self.processKey,
+        }
+
+        for attempt in range(self.retries):
+            response = self.client.post(
+                f"{self.url}/api/Agent/span/", headers=self.headers, json=span_data
+            )
+
+            if response.is_success:
+                break
+
+            sleep(0.5 * (2**attempt))  # Exponential backoff
+
+        if 400 <= response.status_code < 600:
+            logger.warning(
+                f"Error when sending trace: {response}. Body is: {response.text}"
+            )
+
+    def _end_trace(self, run: Run) -> None:
+        super()._end_trace(run)
+        self._persist_run(run)
+
+    def _safe_json_dump(self, obj) -> str:
+        try:
+            json_str = json.dumps(obj, default=_simple_serialize_defaults)
+            return json_str
+        except Exception as e:
+            logger.warning(e)
+            return "{ }"
+
+    def _run_to_dict(self, run: Run):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=PydanticDeprecationWarning)
+
+            return {
+                **run.dict(exclude={"child_runs", "inputs", "outputs"}),
+                "inputs": run.inputs.copy() if run.inputs is not None else None,
+                "outputs": run.outputs.copy() if run.outputs is not None else None,
+            }
+
+
+
+================================================
+FILE: src/uipath_langchain/vectorstores/__init__.py
+================================================
+from .context_grounding_vectorstore import ContextGroundingVectorStore
+
+__all__ = ["ContextGroundingVectorStore"]
+
+
+
+================================================
+FILE: src/uipath_langchain/vectorstores/context_grounding_vectorstore.py
+================================================
+"""
+Vector store implementation that connects to UiPath Context Grounding as a backend.
+
+This is a read-only vector store that uses the UiPath Context Grounding API to retrieve documents.
+
+You need to set the following environment variables (also see .env.example):
+### - UIPATH_URL="https://alpha.uipath.com/{ORG_ID}/{TENANT_ID}"
+### - UIPATH_ACCESS_TOKEN={BEARER_TOKEN_WITH_CONTEXT_GROUNDING_PERMISSIONS}
+### - UIPATH_FOLDER_PATH="" - this can be left empty
+### - UIPATH_FOLDER_KEY="" - this can be left empty
+"""
+
+from collections.abc import Iterable
+from typing import Any, Optional, TypeVar
+
+from langchain_core.documents import Document
+from langchain_core.embeddings import Embeddings
+from langchain_core.vectorstores import VectorStore
+from uipath import UiPath
+
+VST = TypeVar("VST", bound="ContextGroundingVectorStore")
+
+
+class ContextGroundingVectorStore(VectorStore):
+    """Vector store that uses UiPath Context Grounding (ECS) as a backend.
+
+    This class provides a straightforward implementation that connects to the
+    UiPath Context Grounding API for semantic searching.
+
+    Example:
+        .. code-block:: python
+
+            from uipath_agents_gym.tools.ecs_vectorstore import ContextGroundingVectorStore
+
+            # Initialize the vector store with an index name
+            vectorstore = ContextGroundingVectorStore(index_name="ECCN")
+
+            # Perform similarity search
+            docs_with_scores = vectorstore.similarity_search_with_score(
+                "How do I process an invoice?", k=5
+            )
+    """
+
+    def __init__(
+        self,
+        index_name: str,
+        uipath_sdk: Optional[UiPath] = None,
+    ):
+        """Initialize the ContextGroundingVectorStore.
+
+        Args:
+            index_name: Name of the context grounding index to use
+            uipath_sdk: Optional SDK instance to use. If not provided, a new instance will be created.
+        """
+        self.index_name = index_name
+        self.sdk = uipath_sdk or UiPath()
+
+    def similarity_search_with_score(
+        self, query: str, k: int = 4, **kwargs: Any
+    ) -> list[tuple[Document, float]]:
+        """Return documents most similar to the query along with the distances.
+        The distance is 1 - score, where score is the relevance score returned by the Context Grounding API.
+
+        Args:
+            query: The query string
+            k: Number of results to return (default=4)
+
+        Returns:
+            list of tuples of (document, score)
+        """
+        # Call the UiPath SDK to perform the search
+        results = self.sdk.context_grounding.search(
+            name=self.index_name,
+            query=query,
+            number_of_results=k,
+        )
+
+        # Convert the results to Documents with scores
+        docs_with_scores = []
+        for result in results:
+            # Create metadata from result fields
+            metadata = {
+                "source": result.source,
+                "id": result.id,
+                "reference": result.reference,
+                "page_number": result.page_number,
+                "source_document_id": result.source_document_id,
+                "caption": result.caption,
+            }
+
+            # Add any operation metadata if available
+            if result.metadata:
+                metadata["operation_id"] = result.metadata.operation_id
+                metadata["strategy"] = result.metadata.strategy
+
+            # Create a Document with the content and metadata
+            doc = Document(
+                page_content=result.content,
+                metadata=metadata,
+            )
+
+            score = 1.0 - float(result.score)
+
+            docs_with_scores.append((doc, score))
+
+        return docs_with_scores
+
+    def similarity_search_with_relevance_scores(
+        self, query: str, k: int = 4, **kwargs: Any
+    ) -> list[tuple[Document, float]]:
+        """Return documents along with their relevance scores on a scale from 0 to 1.
+
+        This directly uses the scores provided by the Context Grounding API,
+        which are already normalized between 0 and 1.
+
+        Args:
+            query: The query string
+            k: Number of documents to return (default=4)
+
+        Returns:
+            list of tuples of (document, relevance_score)
+        """
+        return [
+            (doc, 1.0 - score)
+            for doc, score in self.similarity_search_with_score(query, k, **kwargs)
+        ]
+
+    async def asimilarity_search_with_score(
+        self, query: str, k: int = 4, **kwargs: Any
+    ) -> list[tuple[Document, float]]:
+        """Asynchronously return documents most similar to the query along with scores.
+
+        Args:
+            query: The query string
+            k: Number of results to return (default=4)
+
+        Returns:
+            list of tuples of (document, score)
+        """
+        # Call the UiPath SDK to perform the search asynchronously
+        results = await self.sdk.context_grounding.search_async(
+            name=self.index_name,
+            query=query,
+            number_of_results=k,
+        )
+
+        # Convert the results to Documents with scores
+        docs_with_scores = []
+        for result in results:
+            # Create metadata from result fields
+            metadata = {
+                "source": result.source,
+                "id": result.id,
+                "reference": result.reference,
+                "page_number": result.page_number,
+                "source_document_id": result.source_document_id,
+                "caption": result.caption,
+            }
+
+            # Add any operation metadata if available
+            if result.metadata:
+                metadata["operation_id"] = result.metadata.operation_id
+                metadata["strategy"] = result.metadata.strategy
+
+            # Create a Document with the content and metadata
+            doc = Document(
+                page_content=result.content,
+                metadata=metadata,
+            )
+
+            # Get the distance score as 1 - ecs_score
+            score = 1.0 - float(result.score)
+
+            docs_with_scores.append((doc, score))
+
+        return docs_with_scores
+
+    async def asimilarity_search_with_relevance_scores(
+        self, query: str, k: int = 4, **kwargs: Any
+    ) -> list[tuple[Document, float]]:
+        """Asynchronously return documents along with their relevance scores on a scale from 0 to 1.
+
+        This directly uses the scores provided by the Context Grounding API,
+        which are already normalized between 0 and 1.
+
+        Args:
+            query: The query string
+            k: Number of documents to return (default=4)
+
+        Returns:
+            list of tuples of (document, relevance_score)
+        """
+        return [
+            (doc, 1.0 - score)
+            for doc, score in await self.asimilarity_search_with_score(
+                query, k, **kwargs
+            )
+        ]
+
+    def similarity_search(
+        self, query: str, k: int = 4, **kwargs: Any
+    ) -> list[Document]:
+        """Return documents most similar to the query.
+
+        Args:
+            query: The query string
+            k: Number of results to return (default=4)
+
+        Returns:
+            list of documents most similar to the query
+        """
+        docs_and_scores = self.similarity_search_with_score(query, k, **kwargs)
+        return [doc for doc, _ in docs_and_scores]
+
+    async def asimilarity_search(
+        self, query: str, k: int = 4, **kwargs: Any
+    ) -> list[Document]:
+        """Asynchronously return documents most similar to the query.
+
+        Args:
+            query: The query string
+            k: Number of results to return (default=4)
+
+        Returns:
+            list of documents most similar to the query
+        """
+        docs_and_scores = await self.asimilarity_search_with_score(query, k, **kwargs)
+        return [doc for doc, _ in docs_and_scores]
+
+    @classmethod
+    def from_texts(
+        cls: type[VST],
+        texts: list[str],
+        embedding: Embeddings,
+        metadatas: Optional[list[dict[str, Any]]] = None,
+        **kwargs: Any,
+    ) -> VST:
+        """This method is required by the VectorStore abstract class, but is not supported
+        by ContextGroundingVectorStore which is read-only.
+
+        Raises:
+            NotImplementedError: This method is not supported by ContextGroundingVectorStore
+        """
+        raise NotImplementedError(
+            "ContextGroundingVectorStore is a read-only wrapper for UiPath Context Grounding. "
+            "Creating a vector store from texts is not supported."
+        )
+
+    # Other required methods with minimal implementation to satisfy the interface
+    def add_texts(
+        self,
+        texts: Iterable[str],
+        metadatas: Optional[list[dict[str, Any]]] = None,
+        **kwargs: Any,
+    ) -> list[str]:
+        """Not implemented for ContextGroundingVectorStore as this is a read-only wrapper."""
+        raise NotImplementedError(
+            "ContextGroundingVectorStore is a read-only wrapper for UiPath Context Grounding."
+        )
+
+    def delete(self, ids: Optional[list[str]] = None, **kwargs: Any) -> Optional[bool]:
+        """Not implemented for ContextGroundingVectorStore as this is a read-only wrapper."""
+        raise NotImplementedError(
+            "ContextGroundingVectorStore is a read-only wrapper for UiPath Context Grounding."
+        )
+
+

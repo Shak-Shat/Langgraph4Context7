@@ -1,0 +1,3796 @@
+Directory structure:
+└── langgraph/
+    ├── checkpoint/
+    │   └── mysql/
+    │       ├── __init__.py
+    │       ├── _ainternal.py
+    │       ├── _internal.py
+    │       ├── aio.py
+    │       ├── aio_base.py
+    │       ├── asyncmy.py
+    │       ├── base.py
+    │       ├── py.typed
+    │       ├── pymysql.py
+    │       ├── shallow.py
+    │       └── utils.py
+    └── store/
+        └── mysql/
+            ├── __init__.py
+            ├── aio.py
+            ├── aio_base.py
+            ├── asyncmy.py
+            ├── base.py
+            ├── py.typed
+            └── pymysql.py
+
+================================================
+FILE: langgraph/checkpoint/mysql/__init__.py
+================================================
+import json
+import threading
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
+from typing import Any, Generic, Optional
+
+from langchain_core.runnables import RunnableConfig
+
+from langgraph.checkpoint.base import (
+    WRITES_IDX_MAP,
+    ChannelVersions,
+    Checkpoint,
+    CheckpointMetadata,
+    CheckpointTuple,
+    get_checkpoint_id,
+    get_checkpoint_metadata,
+)
+from langgraph.checkpoint.mysql import _internal
+from langgraph.checkpoint.mysql.base import BaseMySQLSaver
+from langgraph.checkpoint.mysql.utils import (
+    deserialize_channel_values,
+    deserialize_pending_sends,
+    deserialize_pending_writes,
+)
+from langgraph.checkpoint.serde.base import SerializerProtocol
+
+Conn = _internal.Conn  # For backward compatibility
+
+
+class BaseSyncMySQLSaver(BaseMySQLSaver, Generic[_internal.C, _internal.R]):
+    lock: threading.Lock
+
+    def __init__(
+        self,
+        conn: _internal.Conn[_internal.C],
+        serde: Optional[SerializerProtocol] = None,
+    ) -> None:
+        super().__init__(serde=serde)
+
+        self.conn = conn
+        self.lock = threading.Lock()
+
+    @staticmethod
+    def _get_cursor_from_connection(conn: _internal.C) -> _internal.R:
+        raise NotImplementedError
+
+    @contextmanager
+    def _cursor(self, *, pipeline: bool = False) -> Iterator[_internal.R]:
+        """Create a database cursor as a context manager.
+
+        Args:
+            pipeline (bool): whether to use transaction context manager and handle concurrency
+        """
+        with _internal.get_connection(self.conn) as conn:
+            if pipeline:
+                with self.lock:
+                    conn.begin()
+                    try:
+                        with self._get_cursor_from_connection(conn) as cur:
+                            yield cur
+                        conn.commit()
+                    except:
+                        conn.rollback()
+                        raise
+            else:
+                with self.lock, self._get_cursor_from_connection(conn) as cur:
+                    yield cur
+
+    def setup(self) -> None:
+        """Set up the checkpoint database asynchronously.
+
+        This method creates the necessary tables in the MySQL database if they don't
+        already exist and runs database migrations. It MUST be called directly by the user
+        the first time checkpointer is used.
+        """
+        with self._cursor() as cur:
+            cur.execute(self.MIGRATIONS[0])
+            cur.execute("SELECT v FROM checkpoint_migrations ORDER BY v DESC LIMIT 1")
+            row = cur.fetchone()
+            if row is None:
+                version = -1
+            else:
+                version = row["v"]
+            for v, migration in zip(
+                range(version + 1, len(self.MIGRATIONS)),
+                self.MIGRATIONS[version + 1 :],
+            ):
+                cur.execute(migration)
+                cur.execute(f"INSERT INTO checkpoint_migrations (v) VALUES ({v})")
+                cur.execute("COMMIT")
+
+    def list(
+        self,
+        config: Optional[RunnableConfig],
+        *,
+        filter: Optional[dict[str, Any]] = None,
+        before: Optional[RunnableConfig] = None,
+        limit: Optional[int] = None,
+    ) -> Iterator[CheckpointTuple]:
+        """List checkpoints from the database.
+
+        This method retrieves a list of checkpoint tuples from the MySQL database based
+        on the provided config. The checkpoints are ordered by checkpoint ID in descending order (newest first).
+
+        Args:
+            config (RunnableConfig): The config to use for listing the checkpoints.
+            filter (Optional[Dict[str, Any]]): Additional filtering criteria for metadata. Defaults to None.
+            before (Optional[RunnableConfig]): If provided, only checkpoints before the specified checkpoint ID are returned. Defaults to None.
+            limit (Optional[int]): The maximum number of checkpoints to return. Defaults to None.
+
+        Yields:
+            Iterator[CheckpointTuple]: An iterator of checkpoint tuples.
+
+        Examples:
+            >>> from langgraph.checkpoint.mysql import PyMySQLSaver
+            >>> DB_URI = "mysql://mysql:mysql@localhost:5432/mysql"
+            >>> with PyMySQLSaver.from_conn_string(DB_URI) as memory:
+            ... # Run a graph, then list the checkpoints
+            >>>     config = {"configurable": {"thread_id": "1"}}
+            >>>     checkpoints = list(memory.list(config, limit=2))
+            >>> print(checkpoints)
+            [CheckpointTuple(...), CheckpointTuple(...)]
+
+            >>> config = {"configurable": {"thread_id": "1"}}
+            >>> before = {"configurable": {"checkpoint_id": "1ef4f797-8335-6428-8001-8a1503f9b875"}}
+            >>> with PyMySQLSaver.from_conn_string(DB_URI) as memory:
+            ... # Run a graph, then list the checkpoints
+            >>>     checkpoints = list(memory.list(config, before=before))
+            >>> print(checkpoints)
+            [CheckpointTuple(...), ...]
+        """
+        where, args = self._search_where(config, filter, before)
+        query = self._select_sql(where) + " ORDER BY checkpoint_id DESC"
+        if limit:
+            query += f" LIMIT {limit}"
+        # if we change this to use .stream() we need to make sure to close the cursor
+        with self._cursor() as cur:
+            cur.execute(query, args)
+            values = cur.fetchall()
+            for value in values:
+                yield CheckpointTuple(
+                    {
+                        "configurable": {
+                            "thread_id": value["thread_id"],
+                            "checkpoint_ns": value["checkpoint_ns"],
+                            "checkpoint_id": value["checkpoint_id"],
+                        }
+                    },
+                    self._load_checkpoint(
+                        json.loads(value["checkpoint"]),
+                        deserialize_channel_values(value["channel_values"]),
+                        deserialize_pending_sends(value["pending_sends"]),
+                    ),
+                    self._load_metadata(value["metadata"]),
+                    (
+                        {
+                            "configurable": {
+                                "thread_id": value["thread_id"],
+                                "checkpoint_ns": value["checkpoint_ns"],
+                                "checkpoint_id": value["parent_checkpoint_id"],
+                            }
+                        }
+                        if value["parent_checkpoint_id"]
+                        else None
+                    ),
+                    self._load_writes(
+                        deserialize_pending_writes(value["pending_writes"])
+                    ),
+                )
+
+    def get_tuple(self, config: RunnableConfig) -> Optional[CheckpointTuple]:
+        """Get a checkpoint tuple from the database.
+
+        This method retrieves a checkpoint tuple from the MySQL database based on the
+        provided config. If the config contains a "checkpoint_id" key, the checkpoint with
+        the matching thread ID and timestamp is retrieved. Otherwise, the latest checkpoint
+        for the given thread ID is retrieved.
+
+        Args:
+            config (RunnableConfig): The config to use for retrieving the checkpoint.
+
+        Returns:
+            Optional[CheckpointTuple]: The retrieved checkpoint tuple, or None if no matching checkpoint was found.
+
+        Examples:
+
+            Basic:
+            >>> config = {"configurable": {"thread_id": "1"}}
+            >>> checkpoint_tuple = memory.get_tuple(config)
+            >>> print(checkpoint_tuple)
+            CheckpointTuple(...)
+
+            With timestamp:
+
+            >>> config = {
+            ...    "configurable": {
+            ...        "thread_id": "1",
+            ...        "checkpoint_ns": "",
+            ...        "checkpoint_id": "1ef4f797-8335-6428-8001-8a1503f9b875",
+            ...    }
+            ... }
+            >>> checkpoint_tuple = memory.get_tuple(config)
+            >>> print(checkpoint_tuple)
+            CheckpointTuple(...)
+        """  # noqa
+        thread_id = config["configurable"]["thread_id"]
+        checkpoint_id = get_checkpoint_id(config)
+        checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
+        if checkpoint_id:
+            args = {
+                "thread_id": thread_id,
+                "checkpoint_ns": checkpoint_ns,
+                "checkpoint_id": checkpoint_id,
+            }
+            where = "WHERE thread_id = %(thread_id)s AND checkpoint_ns_hash = UNHEX(MD5(%(checkpoint_ns)s)) AND checkpoint_id = %(checkpoint_id)s"
+        else:
+            args = {
+                "thread_id": thread_id,
+                "checkpoint_ns": checkpoint_ns,
+            }
+            where = "WHERE thread_id = %(thread_id)s AND checkpoint_ns_hash = UNHEX(MD5(%(checkpoint_ns)s))"
+
+        query = self._select_sql(where)
+        if not checkpoint_id:
+            query += " ORDER BY checkpoint_id DESC LIMIT 1"
+        with self._cursor() as cur:
+            cur.execute(
+                query,
+                args,
+            )
+            values = cur.fetchall()
+            for value in values:
+                return CheckpointTuple(
+                    {
+                        "configurable": {
+                            "thread_id": thread_id,
+                            "checkpoint_ns": checkpoint_ns,
+                            "checkpoint_id": value["checkpoint_id"],
+                        }
+                    },
+                    self._load_checkpoint(
+                        json.loads(value["checkpoint"]),
+                        deserialize_channel_values(value["channel_values"]),
+                        deserialize_pending_sends(value["pending_sends"]),
+                    ),
+                    self._load_metadata(value["metadata"]),
+                    (
+                        {
+                            "configurable": {
+                                "thread_id": thread_id,
+                                "checkpoint_ns": checkpoint_ns,
+                                "checkpoint_id": value["parent_checkpoint_id"],
+                            }
+                        }
+                        if value["parent_checkpoint_id"]
+                        else None
+                    ),
+                    self._load_writes(
+                        deserialize_pending_writes(value["pending_writes"])
+                    ),
+                )
+
+    def put(
+        self,
+        config: RunnableConfig,
+        checkpoint: Checkpoint,
+        metadata: CheckpointMetadata,
+        new_versions: ChannelVersions,
+    ) -> RunnableConfig:
+        """Save a checkpoint to the database.
+
+        This method saves a checkpoint to the MySQL database. The checkpoint is associated
+        with the provided config and its parent config (if any).
+
+        Args:
+            config (RunnableConfig): The config to associate with the checkpoint.
+            checkpoint (Checkpoint): The checkpoint to save.
+            metadata (CheckpointMetadata): Additional metadata to save with the checkpoint.
+            new_versions (ChannelVersions): New channel versions as of this write.
+
+        Returns:
+            RunnableConfig: Updated configuration after storing the checkpoint.
+
+        Examples:
+
+            >>> from langgraph.checkpoint.mysql import PyMySQLSaver
+            >>> DB_URI = "mysql://mysql:mysql@localhost:5432/mysql"
+            >>> with PyMySQLSaver.from_conn_string(DB_URI) as memory:
+            >>>     config = {"configurable": {"thread_id": "1", "checkpoint_ns": ""}}
+            >>>     checkpoint = {"ts": "2024-05-04T06:32:42.235444+00:00", "id": "1ef4f797-8335-6428-8001-8a1503f9b875", "channel_values": {"key": "value"}}
+            >>>     saved_config = memory.put(config, checkpoint, {"source": "input", "step": 1, "writes": {"key": "value"}}, {})
+            >>> print(saved_config)
+            {'configurable': {'thread_id': '1', 'checkpoint_ns': '', 'checkpoint_id': '1ef4f797-8335-6428-8001-8a1503f9b875'}}
+        """
+        configurable = config["configurable"].copy()
+        thread_id = configurable.pop("thread_id")
+        checkpoint_ns = configurable.pop("checkpoint_ns")
+        checkpoint_id = configurable.pop(
+            "checkpoint_id", configurable.pop("thread_ts", None)
+        )
+        copy = checkpoint.copy()
+        next_config = {
+            "configurable": {
+                "thread_id": thread_id,
+                "checkpoint_ns": checkpoint_ns,
+                "checkpoint_id": checkpoint["id"],
+            }
+        }
+
+        with self._cursor(pipeline=True) as cur:
+            cur.executemany(
+                self.UPSERT_CHECKPOINT_BLOBS_SQL,
+                self._dump_blobs(
+                    thread_id,
+                    checkpoint_ns,
+                    copy.pop("channel_values"),  # type: ignore[misc]
+                    new_versions,
+                ),
+            )
+            cur.execute(
+                self.UPSERT_CHECKPOINTS_SQL,
+                (
+                    thread_id,
+                    checkpoint_ns,
+                    checkpoint_ns,
+                    checkpoint["id"],
+                    checkpoint_id,
+                    json.dumps(self._dump_checkpoint(copy)),
+                    self._dump_metadata(get_checkpoint_metadata(config, metadata)),
+                ),
+            )
+        return next_config
+
+    def put_writes(
+        self,
+        config: RunnableConfig,
+        writes: Sequence[tuple[str, Any]],
+        task_id: str,
+        task_path: str = "",
+    ) -> None:
+        """Store intermediate writes linked to a checkpoint.
+
+        This method saves intermediate writes associated with a checkpoint to the MySQL database.
+
+        Args:
+            config (RunnableConfig): Configuration of the related checkpoint.
+            writes (List[Tuple[str, Any]]): List of writes to store.
+            task_id (str): Identifier for the task creating the writes.
+        """
+        query = (
+            self.UPSERT_CHECKPOINT_WRITES_SQL
+            if all(w[0] in WRITES_IDX_MAP for w in writes)
+            else self.INSERT_CHECKPOINT_WRITES_SQL
+        )
+        with self._cursor(pipeline=True) as cur:
+            cur.executemany(
+                query,
+                self._dump_writes(
+                    config["configurable"]["thread_id"],
+                    config["configurable"]["checkpoint_ns"],
+                    config["configurable"]["checkpoint_id"],
+                    task_id,
+                    task_path,
+                    writes,
+                ),
+            )
+
+    def delete_thread(self, thread_id: str) -> None:
+        """Delete all checkpoints and writes associated with a thread ID.
+        Args:
+            thread_id (str): The thread ID to delete.
+        Returns:
+            None
+        """
+        with self._cursor(pipeline=True) as cur:
+            cur.execute(
+                "DELETE FROM checkpoints WHERE thread_id = %s",
+                (str(thread_id),),
+            )
+            cur.execute(
+                "DELETE FROM checkpoint_blobs WHERE thread_id = %s",
+                (str(thread_id),),
+            )
+            cur.execute(
+                "DELETE FROM checkpoint_writes WHERE thread_id = %s",
+                (str(thread_id),),
+            )
+
+
+
+================================================
+FILE: langgraph/checkpoint/mysql/_ainternal.py
+================================================
+"""Shared async utility functions for the MySQL checkpoint & storage classes."""
+
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import (
+    Any,
+    AsyncContextManager,
+    Generic,
+    Mapping,
+    Optional,
+    Protocol,
+    Sequence,
+    TypeVar,
+    Union,
+    cast,
+)
+
+
+class AsyncDictCursor(AsyncContextManager, Protocol):
+    """
+    Protocol that a cursor should implement.
+
+    Modeled after DBAPICursor from Typeshed.
+    """
+
+    async def execute(
+        self,
+        operation: str,
+        parameters: Union[Sequence[Any], Mapping[str, Any]] = ...,
+        /,
+    ) -> object: ...
+    async def executemany(
+        self, operation: str, seq_of_parameters: Sequence[Sequence[Any]], /
+    ) -> object: ...
+    async def fetchone(self) -> Optional[dict[str, Any]]: ...
+    async def fetchall(self) -> Sequence[dict[str, Any]]: ...
+
+    def __aiter__(self) -> AsyncIterator[dict[str, Any]]: ...
+
+
+R = TypeVar("R", bound=AsyncDictCursor)  # cursor type
+
+
+class AsyncConnection(AsyncContextManager, Protocol):
+    async def begin(self) -> None:
+        """Begin transaction."""
+        ...
+
+    async def commit(self) -> None:
+        """Commit changes to stable storage."""
+        ...
+
+    async def rollback(self) -> None:
+        """Roll back the current transaction."""
+        ...
+
+    async def set_charset(self, charset: str) -> None:
+        """Sets the character set for the current connection"""
+        ...
+
+
+C = TypeVar("C", bound=AsyncConnection)  # connection type
+COut = TypeVar("COut", bound=AsyncConnection, covariant=True)  # connection type
+
+
+class AsyncPool(Protocol, Generic[COut]):
+    def acquire(self) -> COut:
+        """Gets a connection from the connection pool."""
+        ...
+
+
+Conn = Union[C, AsyncPool[C]]
+
+
+@asynccontextmanager
+async def get_connection(
+    conn: Conn[C],
+) -> AsyncIterator[C]:
+    if hasattr(conn, "cursor"):
+        yield cast(C, conn)
+    elif hasattr(conn, "acquire"):
+        async with cast(AsyncPool[C], conn).acquire() as _conn:
+            yield _conn
+    else:
+        raise TypeError(f"Invalid connection type: {type(conn)}")
+
+
+
+================================================
+FILE: langgraph/checkpoint/mysql/_internal.py
+================================================
+"""Shared utility functions for the MySQL checkpoint & storage classes."""
+
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, closing, contextmanager
+from typing import (
+    Any,
+    ContextManager,
+    Mapping,
+    Optional,
+    Protocol,
+    Sequence,
+    TypeVar,
+    Union,
+    cast,
+)
+
+
+class DictCursor(ContextManager, Protocol):
+    """
+    Protocol that a cursor should implement.
+
+    Modeled after DBAPICursor from Typeshed.
+    """
+
+    def execute(
+        self,
+        operation: str,
+        parameters: Union[Sequence[Any], Mapping[str, Any]] = ...,
+        /,
+    ) -> object: ...
+    def executemany(
+        self, operation: str, seq_of_parameters: Sequence[Sequence[Any]], /
+    ) -> object: ...
+    def fetchone(self) -> Optional[dict[str, Any]]: ...
+    def fetchall(self) -> Sequence[dict[str, Any]]: ...
+
+
+R = TypeVar("R", bound=DictCursor)  # cursor type
+
+
+class Connection(AbstractContextManager, Protocol):
+    """Protocol that a synchronous MySQL connection should implement."""
+
+    def begin(self) -> None:
+        """Begin transaction."""
+        ...
+
+    def commit(self) -> None:
+        """Commit changes to stable storage."""
+        ...
+
+    def rollback(self) -> None:
+        """Roll back the current transaction."""
+        ...
+
+
+C = TypeVar("C", bound=Connection)  # connection type
+
+
+ConnectionFactory = Callable[[], Any]
+Conn = Union[C, ConnectionFactory]
+
+
+@contextmanager
+def get_connection(conn: Conn[C]) -> Iterator[C]:
+    if hasattr(conn, "cursor"):
+        yield cast(C, conn)
+    elif callable(conn):
+        _conn = conn()
+        if isinstance(_conn, AbstractContextManager):
+            yield cast(C, _conn)
+        else:
+            with closing(_conn) as __conn:
+                yield __conn
+    # This is kept for backwards incompatibility and should be removed when we
+    # can make a breaking change in favor of just passing a Callable.
+    elif hasattr(conn, "connect"):
+        # sqlalchemy pool
+        factory: ConnectionFactory = getattr(conn, "connect")  # noqa: B009
+        with get_connection(factory) as _conn:
+            yield _conn
+    else:
+        raise TypeError(f"Invalid connection or pool type: {type(conn)}")
+
+
+
+================================================
+FILE: langgraph/checkpoint/mysql/aio.py
+================================================
+import urllib.parse
+import warnings
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import Any, Optional, cast
+
+import aiomysql  # type: ignore
+from typing_extensions import Self, override
+
+from langgraph.checkpoint.mysql import _ainternal
+from langgraph.checkpoint.mysql.aio_base import BaseAsyncMySQLSaver
+from langgraph.checkpoint.mysql.shallow import BaseShallowAsyncMySQLSaver
+from langgraph.checkpoint.serde.base import SerializerProtocol
+
+Conn = _ainternal.Conn[aiomysql.Connection]  # For backward compatibility
+
+
+class AIOMySQLSaver(BaseAsyncMySQLSaver[aiomysql.Connection, aiomysql.DictCursor]):
+    @staticmethod
+    def parse_conn_string(conn_string: str) -> dict[str, Any]:
+        parsed = urllib.parse.urlparse(conn_string)
+
+        # In order to provide additional params via the connection string,
+        # we convert the parsed.query to a dict so we can access the values.
+        # This is necessary when using a unix socket, for example.
+        params_as_dict = dict(urllib.parse.parse_qsl(parsed.query))
+
+        return {
+            "host": parsed.hostname or "localhost",
+            "user": parsed.username,
+            "password": parsed.password or "",
+            "db": parsed.path[1:] or None,
+            "port": parsed.port or 3306,
+            "unix_socket": params_as_dict.get("unix_socket"),
+        }
+
+    @classmethod
+    @asynccontextmanager
+    async def from_conn_string(
+        cls,
+        conn_string: str,
+        *,
+        serde: Optional[SerializerProtocol] = None,
+    ) -> AsyncIterator[Self]:
+        """Create a new AIOMySQLSaver instance from a connection string.
+
+        Args:
+            conn_string (str): The MySQL connection info string.
+
+        Returns:
+            AIOMySQLSaver: A new AIOMySQLSaver instance.
+
+        Example:
+            conn_string=mysql+aiomysql://user:password@localhost/db?unix_socket=/path/to/socket
+        """
+        async with aiomysql.connect(
+            **cls.parse_conn_string(conn_string),
+            autocommit=True,
+        ) as conn:
+            yield cls(conn=conn, serde=serde)
+
+    @override
+    @staticmethod
+    def _get_cursor_from_connection(conn: aiomysql.Connection) -> aiomysql.DictCursor:
+        return cast(aiomysql.DictCursor, conn.cursor(aiomysql.DictCursor))
+
+
+class ShallowAIOMySQLSaver(
+    BaseShallowAsyncMySQLSaver[aiomysql.Connection, aiomysql.DictCursor]
+):
+    def __init__(
+        self,
+        conn: aiomysql.Connection,
+        serde: Optional[SerializerProtocol] = None,
+    ) -> None:
+        warnings.warn(
+            "ShallowAIOMySQLSaver is deprecated as of version 2.0.15 and will be removed in 3.0.0. "
+            "Use AIOMysqlSaver instead, and invoke the graph with `await graph.ainvoke(..., checkpoint_during=False)`.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        super().__init__(conn, serde=serde)
+
+    @classmethod
+    @asynccontextmanager
+    async def from_conn_string(
+        cls,
+        conn_string: str,
+        *,
+        serde: Optional[SerializerProtocol] = None,
+    ) -> AsyncIterator[Self]:
+        """Create a new ShallowAIOMySQLSaver instance from a connection string.
+
+        Args:
+            conn_string (str): The MySQL connection info string.
+
+        Returns:
+            ShallowAIOMySQLSaver: A new ShallowAIOMySQLSaver instance.
+
+        Example:
+            conn_string=mysql+aiomysql://user:password@localhost/db?unix_socket=/path/to/socket
+        """
+        async with aiomysql.connect(
+            **AIOMySQLSaver.parse_conn_string(conn_string),
+            autocommit=True,
+        ) as conn:
+            yield cls(conn=conn, serde=serde)
+
+    @override
+    @staticmethod
+    def _get_cursor_from_connection(conn: aiomysql.Connection) -> aiomysql.DictCursor:
+        return cast(aiomysql.DictCursor, conn.cursor(aiomysql.DictCursor))
+
+
+__all__ = ["AIOMySQLSaver", "ShallowAIOMySQLSaver", "Conn"]
+
+
+
+================================================
+FILE: langgraph/checkpoint/mysql/aio_base.py
+================================================
+import asyncio
+import json
+from collections.abc import AsyncIterator, Iterator, Sequence
+from contextlib import asynccontextmanager
+from typing import Any, Generic, Optional
+
+from langchain_core.runnables import RunnableConfig
+
+from langgraph.checkpoint.base import (
+    WRITES_IDX_MAP,
+    ChannelVersions,
+    Checkpoint,
+    CheckpointMetadata,
+    CheckpointTuple,
+    get_checkpoint_id,
+    get_checkpoint_metadata,
+)
+from langgraph.checkpoint.mysql import _ainternal
+from langgraph.checkpoint.mysql.base import BaseMySQLSaver
+from langgraph.checkpoint.mysql.utils import (
+    deserialize_channel_values,
+    deserialize_pending_sends,
+    deserialize_pending_writes,
+)
+from langgraph.checkpoint.serde.base import SerializerProtocol
+
+
+class BaseAsyncMySQLSaver(BaseMySQLSaver, Generic[_ainternal.C, _ainternal.R]):
+    lock: asyncio.Lock
+
+    def __init__(
+        self,
+        conn: _ainternal.Conn[_ainternal.C],
+        serde: Optional[SerializerProtocol] = None,
+    ) -> None:
+        super().__init__(serde=serde)
+
+        self.conn = conn
+        self.lock = asyncio.Lock()
+        self.loop = asyncio.get_running_loop()
+
+    @staticmethod
+    def _get_cursor_from_connection(conn: _ainternal.C) -> _ainternal.R:
+        raise NotImplementedError
+
+    async def setup(self) -> None:
+        """Set up the checkpoint database asynchronously.
+
+        This method creates the necessary tables in the MySQL database if they don't
+        already exist and runs database migrations. It MUST be called directly by the user
+        the first time checkpointer is used.
+        """
+        async with self._cursor() as cur:
+            await cur.execute(self.MIGRATIONS[0])
+            await cur.execute(
+                "SELECT v FROM checkpoint_migrations ORDER BY v DESC LIMIT 1"
+            )
+            row = await cur.fetchone()
+            if row is None:
+                version = -1
+            else:
+                version = row["v"]
+            for v, migration in zip(
+                range(version + 1, len(self.MIGRATIONS)),
+                self.MIGRATIONS[version + 1 :],
+            ):
+                await cur.execute(migration)
+                await cur.execute(f"INSERT INTO checkpoint_migrations (v) VALUES ({v})")
+
+    async def alist(
+        self,
+        config: Optional[RunnableConfig],
+        *,
+        filter: Optional[dict[str, Any]] = None,
+        before: Optional[RunnableConfig] = None,
+        limit: Optional[int] = None,
+    ) -> AsyncIterator[CheckpointTuple]:
+        """List checkpoints from the database asynchronously.
+
+        This method retrieves a list of checkpoint tuples from the MySQL database based
+        on the provided config. The checkpoints are ordered by checkpoint ID in descending order (newest first).
+
+        Args:
+            config (Optional[RunnableConfig]): Base configuration for filtering checkpoints.
+            filter (Optional[Dict[str, Any]]): Additional filtering criteria for metadata.
+            before (Optional[RunnableConfig]): If provided, only checkpoints before the specified checkpoint ID are returned. Defaults to None.
+            limit (Optional[int]): Maximum number of checkpoints to return.
+
+        Yields:
+            AsyncIterator[CheckpointTuple]: An asynchronous iterator of matching checkpoint tuples.
+        """
+        where, args = self._search_where(config, filter, before)
+        query = self._select_sql(where) + " ORDER BY checkpoint_id DESC"
+        if limit:
+            query += f" LIMIT {limit}"
+        # if we change this to use .stream() we need to make sure to close the cursor
+        async with self._cursor() as cur:
+            await cur.execute(query, args)
+            async for value in cur:
+                yield CheckpointTuple(
+                    {
+                        "configurable": {
+                            "thread_id": value["thread_id"],
+                            "checkpoint_ns": value["checkpoint_ns"],
+                            "checkpoint_id": value["checkpoint_id"],
+                        }
+                    },
+                    await asyncio.to_thread(
+                        self._load_checkpoint,
+                        json.loads(value["checkpoint"]),
+                        deserialize_channel_values(value["channel_values"]),
+                        deserialize_pending_sends(value["pending_sends"]),
+                    ),
+                    self._load_metadata(value["metadata"]),
+                    (
+                        {
+                            "configurable": {
+                                "thread_id": value["thread_id"],
+                                "checkpoint_ns": value["checkpoint_ns"],
+                                "checkpoint_id": value["parent_checkpoint_id"],
+                            }
+                        }
+                        if value["parent_checkpoint_id"]
+                        else None
+                    ),
+                    await asyncio.to_thread(
+                        self._load_writes,
+                        deserialize_pending_writes(value["pending_writes"]),
+                    ),
+                )
+
+    async def aget_tuple(self, config: RunnableConfig) -> Optional[CheckpointTuple]:
+        """Get a checkpoint tuple from the database asynchronously.
+
+        This method retrieves a checkpoint tuple from the MySQL database based on the
+        provided config. If the config contains a "checkpoint_id" key, the checkpoint with
+        the matching thread ID and "checkpoint_id" is retrieved. Otherwise, the latest checkpoint
+        for the given thread ID is retrieved.
+
+        Args:
+            config (RunnableConfig): The config to use for retrieving the checkpoint.
+
+        Returns:
+            Optional[CheckpointTuple]: The retrieved checkpoint tuple, or None if no matching checkpoint was found.
+        """
+        thread_id = config["configurable"]["thread_id"]
+        checkpoint_id = get_checkpoint_id(config)
+        checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
+        if checkpoint_id:
+            args = {
+                "thread_id": thread_id,
+                "checkpoint_ns": checkpoint_ns,
+                "checkpoint_id": checkpoint_id,
+            }
+            where = "WHERE thread_id = %(thread_id)s AND checkpoint_ns_hash = UNHEX(MD5(%(checkpoint_ns)s)) AND checkpoint_id = %(checkpoint_id)s"
+        else:
+            args = {
+                "thread_id": thread_id,
+                "checkpoint_ns": checkpoint_ns,
+            }
+            where = "WHERE thread_id = %(thread_id)s AND checkpoint_ns_hash = UNHEX(MD5(%(checkpoint_ns)s))"
+
+        query = self._select_sql(where)
+        if not checkpoint_id:
+            query += " ORDER BY checkpoint_id DESC LIMIT 1"
+        async with self._cursor() as cur:
+            await cur.execute(
+                query,
+                args,
+            )
+
+            async for value in cur:
+                return CheckpointTuple(
+                    {
+                        "configurable": {
+                            "thread_id": thread_id,
+                            "checkpoint_ns": checkpoint_ns,
+                            "checkpoint_id": value["checkpoint_id"],
+                        }
+                    },
+                    await asyncio.to_thread(
+                        self._load_checkpoint,
+                        json.loads(value["checkpoint"]),
+                        deserialize_channel_values(value["channel_values"]),
+                        deserialize_pending_sends(value["pending_sends"]),
+                    ),
+                    self._load_metadata(value["metadata"]),
+                    (
+                        {
+                            "configurable": {
+                                "thread_id": thread_id,
+                                "checkpoint_ns": checkpoint_ns,
+                                "checkpoint_id": value["parent_checkpoint_id"],
+                            }
+                        }
+                        if value["parent_checkpoint_id"]
+                        else None
+                    ),
+                    await asyncio.to_thread(
+                        self._load_writes,
+                        deserialize_pending_writes(value["pending_writes"]),
+                    ),
+                )
+
+    async def aput(
+        self,
+        config: RunnableConfig,
+        checkpoint: Checkpoint,
+        metadata: CheckpointMetadata,
+        new_versions: ChannelVersions,
+    ) -> RunnableConfig:
+        """Save a checkpoint to the database asynchronously.
+
+        This method saves a checkpoint to the MySQL database. The checkpoint is associated
+        with the provided config and its parent config (if any).
+
+        Args:
+            config (RunnableConfig): The config to associate with the checkpoint.
+            checkpoint (Checkpoint): The checkpoint to save.
+            metadata (CheckpointMetadata): Additional metadata to save with the checkpoint.
+            new_versions (ChannelVersions): New channel versions as of this write.
+
+        Returns:
+            RunnableConfig: Updated configuration after storing the checkpoint.
+        """
+        configurable = config["configurable"].copy()
+        thread_id = configurable.pop("thread_id")
+        checkpoint_ns = configurable.pop("checkpoint_ns")
+        checkpoint_id = configurable.pop(
+            "checkpoint_id", configurable.pop("thread_ts", None)
+        )
+
+        copy = checkpoint.copy()
+        next_config = {
+            "configurable": {
+                "thread_id": thread_id,
+                "checkpoint_ns": checkpoint_ns,
+                "checkpoint_id": checkpoint["id"],
+            }
+        }
+
+        async with self._cursor(pipeline=True) as cur:
+            await cur.executemany(
+                self.UPSERT_CHECKPOINT_BLOBS_SQL,
+                await asyncio.to_thread(
+                    self._dump_blobs,
+                    thread_id,
+                    checkpoint_ns,
+                    copy.pop("channel_values"),  # type: ignore[misc]
+                    new_versions,
+                ),
+            )
+            await cur.execute(
+                self.UPSERT_CHECKPOINTS_SQL,
+                (
+                    thread_id,
+                    checkpoint_ns,
+                    checkpoint_ns,
+                    checkpoint["id"],
+                    checkpoint_id,
+                    json.dumps(self._dump_checkpoint(copy)),
+                    self._dump_metadata(get_checkpoint_metadata(config, metadata)),
+                ),
+            )
+        return next_config
+
+    async def aput_writes(
+        self,
+        config: RunnableConfig,
+        writes: Sequence[tuple[str, Any]],
+        task_id: str,
+        task_path: str = "",
+    ) -> None:
+        """Store intermediate writes linked to a checkpoint asynchronously.
+
+        This method saves intermediate writes associated with a checkpoint to the database.
+
+        Args:
+            config (RunnableConfig): Configuration of the related checkpoint.
+            writes (Sequence[Tuple[str, Any]]): List of writes to store, each as (channel, value) pair.
+            task_id (str): Identifier for the task creating the writes.
+        """
+        query = (
+            self.UPSERT_CHECKPOINT_WRITES_SQL
+            if all(w[0] in WRITES_IDX_MAP for w in writes)
+            else self.INSERT_CHECKPOINT_WRITES_SQL
+        )
+        params = await asyncio.to_thread(
+            self._dump_writes,
+            config["configurable"]["thread_id"],
+            config["configurable"]["checkpoint_ns"],
+            config["configurable"]["checkpoint_id"],
+            task_id,
+            task_path,
+            writes,
+        )
+        async with self._cursor(pipeline=True) as cur:
+            await cur.executemany(query, params)
+
+    async def adelete_thread(self, thread_id: str) -> None:
+        """Delete all checkpoints and writes associated with a thread ID.
+        Args:
+            thread_id (str): The thread ID to delete.
+        Returns:
+            None
+        """
+        async with self._cursor(pipeline=True) as cur:
+            await cur.execute(
+                "DELETE FROM checkpoints WHERE thread_id = %s",
+                (str(thread_id),),
+            )
+            await cur.execute(
+                "DELETE FROM checkpoint_blobs WHERE thread_id = %s",
+                (str(thread_id),),
+            )
+            await cur.execute(
+                "DELETE FROM checkpoint_writes WHERE thread_id = %s",
+                (str(thread_id),),
+            )
+
+    @asynccontextmanager
+    async def _cursor(self, *, pipeline: bool = False) -> AsyncIterator[_ainternal.R]:
+        """Create a database cursor as a context manager.
+
+        Args:
+            pipeline (bool): whether to use transaction context manager and handle concurrency
+        """
+        async with _ainternal.get_connection(self.conn) as conn:
+            if pipeline:
+                async with self.lock:
+                    await conn.begin()
+                    try:
+                        async with self._get_cursor_from_connection(conn) as cur:
+                            yield cur
+                        await conn.commit()
+                    except:
+                        await conn.rollback()
+                        raise
+            else:
+                async with (
+                    self.lock,
+                    self._get_cursor_from_connection(conn) as cur,
+                ):
+                    yield cur
+
+    def list(
+        self,
+        config: Optional[RunnableConfig],
+        *,
+        filter: Optional[dict[str, Any]] = None,
+        before: Optional[RunnableConfig] = None,
+        limit: Optional[int] = None,
+    ) -> Iterator[CheckpointTuple]:
+        """List checkpoints from the database.
+
+        This method retrieves a list of checkpoint tuples from the MySQL database based
+        on the provided config. The checkpoints are ordered by checkpoint ID in descending order (newest first).
+
+        Args:
+            config (Optional[RunnableConfig]): Base configuration for filtering checkpoints.
+            filter (Optional[Dict[str, Any]]): Additional filtering criteria for metadata.
+            before (Optional[RunnableConfig]): If provided, only checkpoints before the specified checkpoint ID are returned. Defaults to None.
+            limit (Optional[int]): Maximum number of checkpoints to return.
+
+        Yields:
+            Iterator[CheckpointTuple]: An iterator of matching checkpoint tuples.
+        """
+        try:
+            # check if we are in the main thread, only bg threads can block
+            # we don't check in other methods to avoid the overhead
+            if asyncio.get_running_loop() is self.loop:
+                raise asyncio.InvalidStateError(
+                    "Synchronous calls to AIOMySQLSaver are only allowed from a "
+                    "different thread. From the main thread, use the async interface. "
+                    "For example, use `checkpointer.alist(...)` or `await "
+                    "graph.ainvoke(...)`."
+                )
+        except RuntimeError:
+            pass
+        aiter_ = self.alist(config, filter=filter, before=before, limit=limit)
+        while True:
+            try:
+                yield asyncio.run_coroutine_threadsafe(
+                    anext(aiter_),  # noqa: F821
+                    self.loop,
+                ).result()
+            except StopAsyncIteration:
+                break
+
+    def get_tuple(self, config: RunnableConfig) -> Optional[CheckpointTuple]:
+        """Get a checkpoint tuple from the database.
+
+        This method retrieves a checkpoint tuple from the MySQL database based on the
+        provided config. If the config contains a "checkpoint_id" key, the checkpoint with
+        the matching thread ID and "checkpoint_id" is retrieved. Otherwise, the latest checkpoint
+        for the given thread ID is retrieved.
+
+        Args:
+            config (RunnableConfig): The config to use for retrieving the checkpoint.
+
+        Returns:
+            Optional[CheckpointTuple]: The retrieved checkpoint tuple, or None if no matching checkpoint was found.
+        """
+        try:
+            # check if we are in the main thread, only bg threads can block
+            # we don't check in other methods to avoid the overhead
+            if asyncio.get_running_loop() is self.loop:
+                raise asyncio.InvalidStateError(
+                    "Synchronous calls to AIOMySQLSaver are only allowed from a "
+                    "different thread. From the main thread, use the async interface. "
+                    "For example, use `await checkpointer.aget_tuple(...)` or `await "
+                    "graph.ainvoke(...)`."
+                )
+        except RuntimeError:
+            pass
+        return asyncio.run_coroutine_threadsafe(
+            self.aget_tuple(config), self.loop
+        ).result()
+
+    def put(
+        self,
+        config: RunnableConfig,
+        checkpoint: Checkpoint,
+        metadata: CheckpointMetadata,
+        new_versions: ChannelVersions,
+    ) -> RunnableConfig:
+        """Save a checkpoint to the database.
+
+        This method saves a checkpoint to the MySQL database. The checkpoint is associated
+        with the provided config and its parent config (if any).
+
+        Args:
+            config (RunnableConfig): The config to associate with the checkpoint.
+            checkpoint (Checkpoint): The checkpoint to save.
+            metadata (CheckpointMetadata): Additional metadata to save with the checkpoint.
+            new_versions (ChannelVersions): New channel versions as of this write.
+
+        Returns:
+            RunnableConfig: Updated configuration after storing the checkpoint.
+        """
+        return asyncio.run_coroutine_threadsafe(
+            self.aput(config, checkpoint, metadata, new_versions), self.loop
+        ).result()
+
+    def put_writes(
+        self,
+        config: RunnableConfig,
+        writes: Sequence[tuple[str, Any]],
+        task_id: str,
+        task_path: str = "",
+    ) -> None:
+        """Store intermediate writes linked to a checkpoint.
+
+        This method saves intermediate writes associated with a checkpoint to the database.
+
+        Args:
+            config (RunnableConfig): Configuration of the related checkpoint.
+            writes (Sequence[Tuple[str, Any]]): List of writes to store, each as (channel, value) pair.
+            task_id (str): Identifier for the task creating the writes.
+            task_path (str): Path of the task creating the writes.
+        """
+        return asyncio.run_coroutine_threadsafe(
+            self.aput_writes(config, writes, task_id, task_path), self.loop
+        ).result()
+
+    def delete_thread(self, thread_id: str) -> None:
+        """Delete all checkpoints and writes associated with a thread ID.
+        Args:
+            thread_id (str): The thread ID to delete.
+        Returns:
+            None
+        """
+        try:
+            # check if we are in the main thread, only bg threads can block
+            # we don't check in other methods to avoid the overhead
+            if asyncio.get_running_loop() is self.loop:
+                raise asyncio.InvalidStateError(
+                    "Synchronous calls to AIOMySQLSaver are only allowed from a "
+                    "different thread. From the main thread, use the async interface. "
+                    "For example, use `await checkpointer.aget_tuple(...)` or `await "
+                    "graph.ainvoke(...)`."
+                )
+        except RuntimeError:
+            pass
+        return asyncio.run_coroutine_threadsafe(
+            self.adelete_thread(thread_id), self.loop
+        ).result()
+
+
+
+================================================
+FILE: langgraph/checkpoint/mysql/asyncmy.py
+================================================
+import urllib.parse
+import warnings
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import Any, Optional, cast
+
+from asyncmy import Connection, connect  # type: ignore
+from asyncmy.cursors import DictCursor  # type: ignore
+from typing_extensions import Self, override
+
+from langgraph.checkpoint.mysql.aio_base import BaseAsyncMySQLSaver
+from langgraph.checkpoint.mysql.shallow import BaseShallowAsyncMySQLSaver
+from langgraph.checkpoint.serde.base import SerializerProtocol
+
+
+class AsyncMySaver(BaseAsyncMySQLSaver[Connection, DictCursor]):
+    @staticmethod
+    def parse_conn_string(conn_string: str) -> dict[str, Any]:
+        parsed = urllib.parse.urlparse(conn_string)
+
+        # In order to provide additional params via the connection string,
+        # we convert the parsed.query to a dict so we can access the values.
+        # This is necessary when using a unix socket, for example.
+        params_as_dict = dict(urllib.parse.parse_qsl(parsed.query))
+
+        return {
+            "host": parsed.hostname or "localhost",
+            "user": parsed.username,
+            "password": parsed.password or "",
+            "db": parsed.path[1:] or None,
+            "port": parsed.port or 3306,
+            "unix_socket": params_as_dict.get("unix_socket"),
+        }
+
+    @classmethod
+    @asynccontextmanager
+    async def from_conn_string(
+        cls,
+        conn_string: str,
+        *,
+        serde: Optional[SerializerProtocol] = None,
+    ) -> AsyncIterator[Self]:
+        """Create a new AsyncMySaver instance from a connection string.
+
+        Args:
+            conn_string (str): The MySQL connection info string.
+
+        Returns:
+            AsyncMySaver: A new AsyncMySaver instance.
+
+        Example:
+            conn_string=mysql+asyncmy://user:password@localhost/db?unix_socket=/path/to/socket
+        """
+        async with connect(
+            **cls.parse_conn_string(conn_string),
+            autocommit=True,
+        ) as conn:
+            yield cls(conn=conn, serde=serde)
+
+    @override
+    @staticmethod
+    def _get_cursor_from_connection(conn: Connection) -> DictCursor:
+        return cast(DictCursor, conn.cursor(DictCursor))
+
+
+class ShallowAsyncMySaver(BaseShallowAsyncMySQLSaver[Connection, DictCursor]):
+    def __init__(
+        self,
+        conn: Connection,
+        serde: Optional[SerializerProtocol] = None,
+    ) -> None:
+        warnings.warn(
+            "ShallowAsyncMySaver is deprecated as of version 2.0.15 and will be removed in 3.0.0. "
+            "Use AsyncMysqlSaver instead, and invoke the graph with `await graph.ainvoke(..., checkpoint_during=False)`.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        super().__init__(conn, serde=serde)
+
+    @classmethod
+    @asynccontextmanager
+    async def from_conn_string(
+        cls,
+        conn_string: str,
+        *,
+        serde: Optional[SerializerProtocol] = None,
+    ) -> AsyncIterator[Self]:
+        """Create a new ShallowAsyncMySaver instance from a connection string.
+
+        Args:
+            conn_string (str): The MySQL connection info string.
+
+        Returns:
+            ShallowAsyncMySaver: A new ShallowAsyncMySaver instance.
+
+        Example:
+            conn_string=mysql+asyncmy://user:password@localhost/db?unix_socket=/path/to/socket
+        """
+        async with connect(
+            **AsyncMySaver.parse_conn_string(conn_string),
+            autocommit=True,
+        ) as conn:
+            yield cls(conn=conn, serde=serde)
+
+    @override
+    @staticmethod
+    def _get_cursor_from_connection(conn: Connection) -> DictCursor:
+        return cast(DictCursor, conn.cursor(DictCursor))
+
+
+__all__ = ["AsyncMySaver", "ShallowAsyncMySaver"]
+
+
+
+================================================
+FILE: langgraph/checkpoint/mysql/base.py
+================================================
+import json
+import random
+from collections.abc import Sequence
+from typing import Any, Optional, cast
+
+from langchain_core.runnables import RunnableConfig
+
+from langgraph.checkpoint.base import (
+    WRITES_IDX_MAP,
+    BaseCheckpointSaver,
+    ChannelVersions,
+    Checkpoint,
+    CheckpointMetadata,
+    get_checkpoint_id,
+)
+from langgraph.checkpoint.mysql.utils import mysql_mariadb_branch
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+from langgraph.checkpoint.serde.types import TASKS, ChannelProtocol
+
+MetadataInput = Optional[dict[str, Any]]
+
+"""
+To add a new migration, add a new string to the MIGRATIONS list.
+The position of the migration in the list is the version number.
+"""
+MIGRATIONS = [
+    """CREATE TABLE IF NOT EXISTS checkpoint_migrations (
+    v INTEGER PRIMARY KEY
+);""",
+    """CREATE TABLE IF NOT EXISTS checkpoints (
+    thread_id VARCHAR(150) NOT NULL,
+    checkpoint_ns VARCHAR(150) NOT NULL DEFAULT '',
+    checkpoint_id VARCHAR(150) NOT NULL,
+    parent_checkpoint_id VARCHAR(150),
+    type VARCHAR(150),
+    checkpoint JSON NOT NULL,
+    metadata JSON NOT NULL DEFAULT ('{}'),
+    PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id)
+);""",
+    """CREATE TABLE IF NOT EXISTS checkpoint_blobs (
+    thread_id VARCHAR(150) NOT NULL,
+    checkpoint_ns VARCHAR(150) NOT NULL DEFAULT '',
+    channel VARCHAR(150) NOT NULL,
+    version VARCHAR(150) NOT NULL,
+    type VARCHAR(150) NOT NULL,
+    `blob` LONGBLOB,
+    PRIMARY KEY (thread_id, checkpoint_ns, channel, version)
+);""",
+    """CREATE TABLE IF NOT EXISTS checkpoint_writes (
+    thread_id VARCHAR(150) NOT NULL,
+    checkpoint_ns VARCHAR(150) NOT NULL DEFAULT '',
+    checkpoint_id VARCHAR(150) NOT NULL,
+    task_id VARCHAR(150) NOT NULL,
+    idx INTEGER NOT NULL,
+    channel VARCHAR(150) NOT NULL,
+    type VARCHAR(150),
+    `blob` LONGBLOB NOT NULL,
+    PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id, task_id, idx)
+);""",
+    "ALTER TABLE checkpoint_blobs MODIFY COLUMN `blob` LONGBLOB;",
+    """
+    CREATE INDEX checkpoints_thread_id_idx ON checkpoints (thread_id);
+    """,
+    """
+    CREATE INDEX checkpoint_blobs_thread_id_idx ON checkpoint_blobs (thread_id);
+    """,
+    """
+    CREATE INDEX checkpoint_writes_thread_id_idx ON checkpoint_writes (thread_id);
+    """,
+    """
+    CREATE INDEX checkpoints_checkpoint_id_idx ON checkpoints (checkpoint_id);
+    """,
+    # The following three migrations were contributed to buy more room for
+    # nested subgraphs, since that contributes to checkpoint_ns length.
+    "ALTER TABLE checkpoints MODIFY COLUMN `checkpoint_ns` VARCHAR(255) NOT NULL DEFAULT '';",
+    "ALTER TABLE checkpoint_blobs MODIFY COLUMN `checkpoint_ns` VARCHAR(255) NOT NULL DEFAULT '';",
+    "ALTER TABLE checkpoint_writes MODIFY COLUMN `checkpoint_ns` VARCHAR(255) NOT NULL DEFAULT '';",
+    # The following three migrations drastically increase the size of the
+    # checkpoint_ns field to support deeply nested subgraphs.
+    """
+    ALTER TABLE checkpoints
+    DROP PRIMARY KEY,
+    ADD PRIMARY KEY (thread_id, checkpoint_id),
+    MODIFY COLUMN `checkpoint_ns` VARCHAR(2000) NOT NULL DEFAULT '';
+    """,
+    """
+    ALTER TABLE checkpoint_blobs
+    DROP PRIMARY KEY,
+    ADD PRIMARY KEY (thread_id, channel, version),
+    MODIFY COLUMN `checkpoint_ns` VARCHAR(2000) NOT NULL DEFAULT '';
+    """,
+    """
+    ALTER TABLE checkpoint_writes
+    DROP PRIMARY KEY,
+    ADD PRIMARY KEY (thread_id, checkpoint_id, task_id, idx),
+    MODIFY COLUMN `checkpoint_ns` VARCHAR(2000) NOT NULL DEFAULT '';
+    """,
+    # The following three migrations restore checkpoint_ns as part of the
+    # primary key, but hashed to fit into the primary key size limit.
+    f"""
+    ALTER TABLE checkpoints
+    {mysql_mariadb_branch(
+        "ADD COLUMN checkpoint_ns_hash BINARY(16) AS (UNHEX(MD5(checkpoint_ns))) STORED,",
+        "ADD COLUMN checkpoint_ns_hash BINARY(16),"
+    )}
+    DROP PRIMARY KEY,
+    ADD PRIMARY KEY (thread_id, checkpoint_ns_hash, checkpoint_id);
+    """,
+    f"""
+    ALTER TABLE checkpoint_blobs
+    {mysql_mariadb_branch(
+        "ADD COLUMN checkpoint_ns_hash BINARY(16) AS (UNHEX(MD5(checkpoint_ns))) STORED,",
+        "ADD COLUMN checkpoint_ns_hash BINARY(16),"
+    )}
+    DROP PRIMARY KEY,
+    ADD PRIMARY KEY (thread_id, checkpoint_ns_hash, channel, version);
+    """,
+    f"""
+    ALTER TABLE checkpoint_writes
+    {mysql_mariadb_branch(
+        "ADD COLUMN checkpoint_ns_hash BINARY(16) AS (UNHEX(MD5(checkpoint_ns))) STORED,",
+        "ADD COLUMN checkpoint_ns_hash BINARY(16),"
+    )}
+    DROP PRIMARY KEY,
+    ADD PRIMARY KEY (thread_id, checkpoint_ns_hash, checkpoint_id, task_id, idx);
+    """,
+    """
+    ALTER TABLE checkpoint_writes ADD COLUMN task_path VARCHAR(2000) NOT NULL DEFAULT '';
+    """,
+    # No longer use STORED generated columns, because MariaDB does not support
+    # using them in primary keys.
+    #
+    #  https://github.com/tjni/langgraph-checkpoint-mysql/issues/51
+    #
+    """
+    ALTER TABLE checkpoints MODIFY COLUMN checkpoint_ns_hash BINARY(16);
+    """,
+    """
+    ALTER TABLE checkpoint_blobs MODIFY COLUMN checkpoint_ns_hash BINARY(16);
+    """,
+    """
+    ALTER TABLE checkpoint_writes MODIFY COLUMN checkpoint_ns_hash BINARY(16);
+    """,
+]
+
+SELECT_SQL = f"""
+with channel_versions as (
+    select thread_id, checkpoint_ns_hash, checkpoint_id, channel, json_unquote(
+        json_extract(checkpoint, concat('$.channel_versions.', '"', channel, '"'))
+    ) as version
+    from checkpoints, json_table(
+        json_keys(checkpoint, '$.channel_versions'),
+        '$[*]' columns (channel VARCHAR(150) CHARACTER SET utf8mb4 PATH '$')
+    ) as channels
+    {{WHERE}}
+)
+select
+    thread_id,
+    checkpoint,
+    checkpoint_ns,
+    checkpoint_id,
+    parent_checkpoint_id,
+    metadata,
+    (
+        select json_arrayagg(json_array(
+            bl.channel,
+            bl.type,
+            {mysql_mariadb_branch("bl.blob", "to_base64(bl.blob)")}
+        ))
+        from channel_versions
+        inner join checkpoint_blobs bl
+            on bl.channel = channel_versions.channel
+            and bl.version = channel_versions.version
+        where bl.thread_id = checkpoints.thread_id
+            and bl.checkpoint_ns_hash = checkpoints.checkpoint_ns_hash
+            and channel_versions.thread_id = checkpoints.thread_id
+            and channel_versions.checkpoint_ns_hash = checkpoints.checkpoint_ns_hash
+            and channel_versions.checkpoint_id = checkpoints.checkpoint_id
+    ) as channel_values,
+    (
+        select
+        json_arrayagg(json_array(
+            cw.task_id,
+            cw.channel,
+            cw.type,
+            {mysql_mariadb_branch("cw.blob", "to_base64(cw.blob)")},
+            cw.idx
+        ))
+        from checkpoint_writes cw
+        where cw.thread_id = checkpoints.thread_id
+            and cw.checkpoint_ns_hash = checkpoints.checkpoint_ns_hash
+            and cw.checkpoint_id = checkpoints.checkpoint_id
+    ) as pending_writes,
+    (
+        select json_arrayagg(json_array(
+            cw.task_path,
+            cw.task_id,
+            cw.type,
+            {mysql_mariadb_branch("cw.blob", "to_base64(cw.blob)")},
+            cw.idx
+        ))
+        from checkpoint_writes cw
+        where cw.thread_id = checkpoints.thread_id
+            and cw.checkpoint_ns_hash = checkpoints.checkpoint_ns_hash
+            and cw.checkpoint_id = checkpoints.parent_checkpoint_id
+            and cw.channel = '{TASKS}'
+    ) as pending_sends
+from checkpoints {{WHERE}} """
+
+UPSERT_CHECKPOINT_BLOBS_SQL = """
+    INSERT IGNORE INTO checkpoint_blobs (thread_id, checkpoint_ns, checkpoint_ns_hash, channel, version, type, `blob`)
+    VALUES (%s, %s, UNHEX(MD5(%s)), %s, %s, %s, %s)
+"""
+
+UPSERT_CHECKPOINTS_SQL = f"""
+    INSERT INTO checkpoints (thread_id, checkpoint_ns, checkpoint_ns_hash, checkpoint_id, parent_checkpoint_id, checkpoint, metadata)
+    VALUES (%s, %s, UNHEX(MD5(%s)), %s, %s, %s, %s) {mysql_mariadb_branch("AS new", "")}
+    ON DUPLICATE KEY UPDATE
+        checkpoint = {mysql_mariadb_branch("new.checkpoint", "VALUE(checkpoint)")},
+        metadata = {mysql_mariadb_branch("new.metadata", "VALUE(metadata)")}
+"""
+
+UPSERT_CHECKPOINT_WRITES_SQL = f"""
+    INSERT INTO checkpoint_writes (thread_id, checkpoint_ns, checkpoint_ns_hash, checkpoint_id, task_id, task_path, idx, channel, type, `blob`)
+    VALUES (%s, %s, UNHEX(MD5(%s)), %s, %s, %s, %s, %s, %s, %s) {mysql_mariadb_branch("AS new", "")}
+    ON DUPLICATE KEY UPDATE
+        channel = {mysql_mariadb_branch("new.channel", "VALUE(channel)")},
+        type = {mysql_mariadb_branch("new.type", "VALUE(type)")},
+        `blob` = {mysql_mariadb_branch("new.blob", "VALUE(`blob`)")};
+"""
+
+INSERT_CHECKPOINT_WRITES_SQL = """
+    INSERT IGNORE INTO checkpoint_writes (thread_id, checkpoint_ns, checkpoint_ns_hash, checkpoint_id, task_id, task_path, idx, channel, type, `blob`)
+    VALUES (%s, %s, UNHEX(MD5(%s)), %s, %s, %s, %s, %s, %s, %s)
+"""
+
+
+class BaseMySQLSaver(BaseCheckpointSaver[str]):
+    MIGRATIONS = MIGRATIONS
+    UPSERT_CHECKPOINT_BLOBS_SQL = UPSERT_CHECKPOINT_BLOBS_SQL
+    UPSERT_CHECKPOINTS_SQL = UPSERT_CHECKPOINTS_SQL
+    UPSERT_CHECKPOINT_WRITES_SQL = UPSERT_CHECKPOINT_WRITES_SQL
+    INSERT_CHECKPOINT_WRITES_SQL = INSERT_CHECKPOINT_WRITES_SQL
+
+    jsonplus_serde = JsonPlusSerializer()
+
+    def _load_checkpoint(
+        self,
+        checkpoint: dict[str, Any],
+        channel_values: list[tuple[str, str, Optional[bytes]]],
+        pending_sends: list[tuple[str, bytes]],
+    ) -> Checkpoint:
+        return {
+            **checkpoint,
+            "pending_sends": [
+                self.serde.loads_typed((c, b)) for c, b in pending_sends or []
+            ],
+            "channel_values": self._load_blobs(channel_values),
+        }
+
+    def _dump_checkpoint(self, checkpoint: Checkpoint) -> dict[str, Any]:
+        return {**checkpoint, "pending_sends": []}
+
+    def _load_blobs(
+        self, blob_values: list[tuple[str, str, Optional[bytes]]]
+    ) -> dict[str, Any]:
+        if not blob_values:
+            return {}
+        return {
+            k: self.serde.loads_typed((t, v))
+            for k, t, v in blob_values
+            if t != "empty" and v is not None
+        }
+
+    def _dump_blobs(
+        self,
+        thread_id: str,
+        checkpoint_ns: str,
+        values: dict[str, Any],
+        versions: ChannelVersions,
+    ) -> list[tuple[str, str, str, str, str, str, Optional[bytes]]]:
+        if not versions:
+            return []
+
+        return [
+            (
+                thread_id,
+                checkpoint_ns,
+                checkpoint_ns,
+                k,
+                cast(str, ver),
+                *(
+                    self.serde.dumps_typed(values[k])
+                    if k in values
+                    else ("empty", None)
+                ),
+            )
+            for k, ver in versions.items()
+        ]
+
+    def _load_writes(
+        self, writes: list[tuple[str, str, str, bytes]]
+    ) -> list[tuple[str, str, Any]]:
+        return (
+            [
+                (
+                    tid,
+                    channel,
+                    self.serde.loads_typed((t, v)),
+                )
+                for tid, channel, t, v in writes
+            ]
+            if writes
+            else []
+        )
+
+    def _dump_writes(
+        self,
+        thread_id: str,
+        checkpoint_ns: str,
+        checkpoint_id: str,
+        task_id: str,
+        task_path: str,
+        writes: Sequence[tuple[str, Any]],
+    ) -> list[tuple[str, str, str, str, str, str, int, str, str, bytes]]:
+        return [
+            (
+                thread_id,
+                checkpoint_ns,
+                checkpoint_ns,
+                checkpoint_id,
+                task_id,
+                task_path,
+                WRITES_IDX_MAP.get(channel, idx),
+                channel,
+                *self.serde.dumps_typed(value),
+            )
+            for idx, (channel, value) in enumerate(writes)
+        ]
+
+    def _load_metadata(self, metadata: str) -> CheckpointMetadata:
+        return self.jsonplus_serde.loads(metadata.encode())
+
+    def _dump_metadata(self, metadata: CheckpointMetadata) -> str:
+        serialized_metadata = self.jsonplus_serde.dumps(metadata)
+        # NOTE: we're using JSON serializer (not msgpack), so we need to remove null characters before writing
+        return serialized_metadata.decode().replace("\\u0000", "")
+
+    def get_next_version(self, current: Optional[str], channel: ChannelProtocol) -> str:
+        if current is None:
+            current_v = 0
+        elif isinstance(current, int):
+            current_v = current
+        else:
+            current_v = int(current.split(".")[0])
+        next_v = current_v + 1
+        next_h = random.random()
+        return f"{next_v:032}.{next_h:016}"
+
+    def _search_where(
+        self,
+        config: Optional[RunnableConfig],
+        filter: MetadataInput,
+        before: Optional[RunnableConfig] = None,
+    ) -> tuple[str, dict[str, Any]]:
+        """Return WHERE clause predicates for alist() given config, filter, before.
+
+        This method returns a tuple of a string and a dict of values. The string
+        is the parametered WHERE clause predicate (including the WHERE keyword):
+        "WHERE column1 = $1 AND column2 IS $2". The dict of values contains the
+        values for each of the corresponding parameters.
+        """
+        wheres = []
+        param_values = {}
+
+        # construct predicate for config filter
+        if config:
+            wheres.append("thread_id = %(thread_id)s ")
+            param_values["thread_id"] = config["configurable"]["thread_id"]
+            checkpoint_ns = config["configurable"].get("checkpoint_ns")
+            if checkpoint_ns is not None:
+                wheres.append("checkpoint_ns_hash = UNHEX(MD5(%(checkpoint_ns)s))")
+                param_values["checkpoint_ns"] = checkpoint_ns
+
+            if checkpoint_id := get_checkpoint_id(config):
+                wheres.append("checkpoint_id = %(checkpoint_id)s ")
+                param_values["checkpoint_id"] = checkpoint_id
+
+        # construct predicate for metadata filter
+        if filter:
+            wheres.append("json_contains(metadata, %(filter)s) ")
+            param_values["filter"] = json.dumps(filter)
+
+        # construct predicate for `before`
+        if before is not None:
+            wheres.append("checkpoint_id < %(before)s ")
+            param_values["before"] = get_checkpoint_id(before)
+
+        return (
+            "WHERE " + " AND ".join(wheres) if wheres else "",
+            param_values,
+        )
+
+    @staticmethod
+    def _select_sql(where: str) -> str:
+        return SELECT_SQL.replace("{WHERE}", where)
+
+
+
+================================================
+FILE: langgraph/checkpoint/mysql/py.typed
+================================================
+
+
+
+================================================
+FILE: langgraph/checkpoint/mysql/pymysql.py
+================================================
+import urllib.parse
+import warnings
+from collections.abc import Iterator
+from contextlib import contextmanager
+from typing import Any, Optional
+
+import pymysql
+from pymysql.cursors import DictCursor
+from typing_extensions import Self, override
+
+from langgraph.checkpoint.mysql import BaseSyncMySQLSaver, _internal
+from langgraph.checkpoint.mysql import Conn as BaseConn
+from langgraph.checkpoint.mysql.shallow import BaseShallowSyncMySQLSaver
+from langgraph.checkpoint.serde.base import SerializerProtocol
+
+Conn = BaseConn[pymysql.Connection]  # type: ignore
+
+
+class PyMySQLSaver(BaseSyncMySQLSaver[pymysql.Connection, DictCursor]):
+    @staticmethod
+    def parse_conn_string(conn_string: str) -> dict[str, Any]:
+        parsed = urllib.parse.urlparse(conn_string)
+
+        # In order to provide additional params via the connection string,
+        # we convert the parsed.query to a dict so we can access the values.
+        # This is necessary when using a unix socket, for example.
+        params_as_dict = dict(urllib.parse.parse_qsl(parsed.query))
+
+        return {
+            "host": parsed.hostname,
+            "user": parsed.username,
+            "password": parsed.password or "",
+            "database": parsed.path[1:] or None,
+            "port": parsed.port or 3306,
+            "unix_socket": params_as_dict.get("unix_socket"),
+        }
+
+    @classmethod
+    @contextmanager
+    def from_conn_string(
+        cls,
+        conn_string: str,
+    ) -> Iterator[Self]:
+        """Create a new PyMySQLSaver instance from a connection string.
+
+        Args:
+            conn_string (str): The MySQL connection info string.
+
+        Returns:
+            PyMySQLSaver: A new PyMySQLSaver instance.
+
+        Example:
+            conn_string=mysql://user:password@localhost/db?unix_socket=/path/to/socket
+        """
+        with pymysql.connect(
+            **cls.parse_conn_string(conn_string),
+            autocommit=True,
+        ) as conn:
+            yield cls(conn)
+
+    @override
+    @staticmethod
+    def _get_cursor_from_connection(conn: pymysql.Connection) -> DictCursor:
+        return conn.cursor(DictCursor)
+
+
+class ShallowPyMySQLSaver(BaseShallowSyncMySQLSaver):
+    def __init__(
+        self,
+        conn: _internal.Conn,
+        serde: Optional[SerializerProtocol] = None,
+    ) -> None:
+        warnings.warn(
+            "ShallowPyMySQLSaver is deprecated as of version 2.0.15 and will be removed in 3.0.0. "
+            "Use PyMySQLSaver instead, and invoke the graph with `await graph.ainvoke(..., checkpoint_during=False)`.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        super().__init__(conn, serde=serde)
+
+    @classmethod
+    @contextmanager
+    def from_conn_string(
+        cls,
+        conn_string: str,
+    ) -> Iterator[Self]:
+        """Create a new ShallowPyMySQLSaver instance from a connection string.
+
+        Args:
+            conn_string (str): The MySQL connection info string.
+
+        Returns:
+            ShallowPyMySQLSaver: A new ShallowPyMySQLSaver instance.
+
+        Example:
+            conn_string=mysql://user:password@localhost/db?unix_socket=/path/to/socket
+        """
+        with pymysql.connect(
+            **PyMySQLSaver.parse_conn_string(conn_string),
+            autocommit=True,
+        ) as conn:
+            yield cls(conn)
+
+    @override
+    @staticmethod
+    def _get_cursor_from_connection(conn: pymysql.Connection) -> DictCursor:
+        return conn.cursor(DictCursor)
+
+
+__all__ = ["PyMySQLSaver", "ShallowPyMySQLSaver", "Conn"]
+
+
+
+================================================
+FILE: langgraph/checkpoint/mysql/shallow.py
+================================================
+import asyncio
+import json
+import threading
+from collections.abc import AsyncIterator, Iterator, Sequence
+from contextlib import asynccontextmanager, contextmanager
+from typing import Any, Generic, Optional
+
+from langchain_core.runnables import RunnableConfig
+
+from langgraph.checkpoint.base import (
+    WRITES_IDX_MAP,
+    ChannelVersions,
+    Checkpoint,
+    CheckpointMetadata,
+    CheckpointTuple,
+    get_checkpoint_metadata,
+)
+from langgraph.checkpoint.mysql import _ainternal, _internal
+from langgraph.checkpoint.mysql.base import BaseMySQLSaver
+from langgraph.checkpoint.mysql.utils import (
+    deserialize_channel_values,
+    deserialize_pending_sends,
+    deserialize_pending_writes,
+    mysql_mariadb_branch,
+)
+from langgraph.checkpoint.serde.base import SerializerProtocol
+from langgraph.checkpoint.serde.types import TASKS
+
+"""
+To add a new migration, add a new string to the MIGRATIONS list.
+The position of the migration in the list is the version number.
+"""
+MIGRATIONS = [
+    """CREATE TABLE IF NOT EXISTS checkpoint_migrations (
+    v INTEGER PRIMARY KEY
+);""",
+    f"""CREATE TABLE IF NOT EXISTS checkpoints (
+    thread_id VARCHAR(150) NOT NULL,
+    checkpoint_ns VARCHAR(2000) NOT NULL DEFAULT '',
+    {mysql_mariadb_branch(
+        "checkpoint_ns_hash BINARY(16) AS (UNHEX(MD5(checkpoint_ns))) STORED,",
+        "checkpoint_ns_hash BINARY(16),",
+    )}
+    type VARCHAR(150),
+    checkpoint JSON NOT NULL,
+    metadata JSON NOT NULL DEFAULT ('{{}}'),
+    PRIMARY KEY (thread_id, checkpoint_ns_hash)
+);""",
+    f"""CREATE TABLE IF NOT EXISTS checkpoint_blobs (
+    thread_id VARCHAR(150) NOT NULL,
+    checkpoint_ns VARCHAR(2000) NOT NULL DEFAULT '',
+    {mysql_mariadb_branch(
+        "checkpoint_ns_hash BINARY(16) AS (UNHEX(MD5(checkpoint_ns))) STORED,",
+        "checkpoint_ns_hash BINARY(16),",
+    )}
+    channel VARCHAR(150) NOT NULL,
+    type VARCHAR(150) NOT NULL,
+    `blob` LONGBLOB,
+    PRIMARY KEY (thread_id, checkpoint_ns_hash, channel)
+);""",
+    f"""CREATE TABLE IF NOT EXISTS checkpoint_writes (
+    thread_id VARCHAR(150) NOT NULL,
+    checkpoint_ns VARCHAR(2000) NOT NULL DEFAULT '',
+    {mysql_mariadb_branch(
+        "checkpoint_ns_hash BINARY(16) AS (UNHEX(MD5(checkpoint_ns))) STORED,",
+        "checkpoint_ns_hash BINARY(16),",
+    )}
+    checkpoint_id VARCHAR(150) NOT NULL,
+    task_id VARCHAR(150) NOT NULL,
+    idx INTEGER NOT NULL,
+    channel VARCHAR(150) NOT NULL,
+    type VARCHAR(150),
+    `blob` LONGBLOB NOT NULL,
+    PRIMARY KEY (thread_id, checkpoint_ns_hash, checkpoint_id, task_id, idx)
+);""",
+    """
+    CREATE INDEX checkpoints_thread_id_idx ON checkpoints (thread_id);
+    """,
+    """
+    CREATE INDEX checkpoint_blobs_thread_id_idx ON checkpoint_blobs (thread_id);
+    """,
+    """
+    CREATE INDEX checkpoint_writes_thread_id_idx ON checkpoint_writes (thread_id);
+    """,
+    """
+    ALTER TABLE checkpoint_writes ADD COLUMN task_path VARCHAR(2000) NOT NULL DEFAULT '';
+    """,
+    # No longer use STORED generated columns, because MariaDB does not support
+    # using them in primary keys.
+    #
+    #  https://github.com/tjni/langgraph-checkpoint-mysql/issues/51
+    #
+    """
+    ALTER TABLE checkpoints MODIFY COLUMN checkpoint_ns_hash BINARY(16);
+    """,
+    """
+    ALTER TABLE checkpoint_blobs MODIFY COLUMN checkpoint_ns_hash BINARY(16);
+    """,
+    """
+    ALTER TABLE checkpoint_writes MODIFY COLUMN checkpoint_ns_hash BINARY(16);
+    """,
+]
+
+SELECT_SQL = f"""
+select
+    thread_id,
+    checkpoint,
+    checkpoint_ns,
+    metadata,
+    (
+        select json_arrayagg(json_array(
+            bl.channel,
+            bl.type,
+            {mysql_mariadb_branch("bl.blob", "to_base64(bl.blob)")}
+        ))
+        from json_table(
+            json_keys(checkpoint, '$.channel_versions'),
+            '$[*]' columns (channel VARCHAR(150) CHARACTER SET utf8mb4 PATH '$')
+        ) as channels
+        inner join checkpoint_blobs bl
+            on bl.channel = channels.channel
+        where bl.thread_id = checkpoints.thread_id
+            and bl.checkpoint_ns_hash = checkpoints.checkpoint_ns_hash
+    ) as channel_values,
+    (
+        select
+        json_arrayagg(json_array(
+            cw.task_id,
+            cw.channel,
+            cw.type,
+            {mysql_mariadb_branch("cw.blob", "to_base64(cw.blob)")},
+            cw.idx
+        ))
+        from checkpoint_writes cw
+        where cw.thread_id = checkpoints.thread_id
+            and cw.checkpoint_ns_hash = checkpoints.checkpoint_ns_hash
+            and cw.checkpoint_id = json_unquote(json_extract(checkpoint, '$.id'))
+    ) as pending_writes,
+    (
+        select json_arrayagg(json_array(
+            cw.task_path,
+            cw.task_id,
+            cw.type,
+            {mysql_mariadb_branch("cw.blob", "to_base64(cw.blob)")},
+            cw.idx
+        ))
+        from checkpoint_writes cw
+        where cw.thread_id = checkpoints.thread_id
+            and cw.checkpoint_ns_hash = checkpoints.checkpoint_ns_hash
+            and cw.channel = '{TASKS}'
+    ) as pending_sends
+from checkpoints """
+
+UPSERT_CHECKPOINT_BLOBS_SQL = f"""
+    INSERT INTO checkpoint_blobs (thread_id, checkpoint_ns, checkpoint_ns_hash, channel, type, `blob`)
+    VALUES (%s, %s, UNHEX(MD5(%s)), %s, %s, %s) {mysql_mariadb_branch("AS new", "")}
+    ON DUPLICATE KEY UPDATE
+        type = {mysql_mariadb_branch("new.type", "VALUE(type)")},
+        `blob` = {mysql_mariadb_branch("new.blob", "VALUE(`blob`)")};
+"""
+
+UPSERT_CHECKPOINTS_SQL = f"""
+    INSERT INTO checkpoints (thread_id, checkpoint_ns, checkpoint_ns_hash, checkpoint, metadata)
+    VALUES (%s, %s, UNHEX(MD5(%s)), %s, %s) {mysql_mariadb_branch("AS new", "")}
+    ON DUPLICATE KEY UPDATE
+        checkpoint = {mysql_mariadb_branch("new.checkpoint", "VALUE(checkpoint)")},
+        metadata = {mysql_mariadb_branch("new.metadata", "VALUE(metadata)")};
+"""
+
+UPSERT_CHECKPOINT_WRITES_SQL = f"""
+    INSERT INTO checkpoint_writes (thread_id, checkpoint_ns, checkpoint_ns_hash, checkpoint_id, task_id, task_path, idx, channel, type, `blob`)
+    VALUES (%s, %s, UNHEX(MD5(%s)), %s, %s, %s, %s, %s, %s, %s) {mysql_mariadb_branch("AS new", "")}
+    ON DUPLICATE KEY UPDATE
+        channel = {mysql_mariadb_branch("new.channel", "VALUE(channel)")},
+        type = {mysql_mariadb_branch("new.type", "VALUE(type)")},
+        `blob` = {mysql_mariadb_branch("new.blob", "VALUE(`blob`)")};
+"""
+
+INSERT_CHECKPOINT_WRITES_SQL = """
+    INSERT IGNORE INTO checkpoint_writes (thread_id, checkpoint_ns, checkpoint_ns_hash, checkpoint_id, task_id, task_path, idx, channel, type, `blob`)
+    VALUES (%s, %s, UNHEX(MD5(%s)), %s, %s, %s, %s, %s, %s, %s)
+"""
+
+
+def _dump_blobs(
+    serde: SerializerProtocol,
+    thread_id: str,
+    checkpoint_ns: str,
+    values: dict[str, Any],
+    versions: ChannelVersions,
+) -> list[tuple[str, str, str, str, str, Optional[bytes]]]:
+    if not versions:
+        return []
+
+    return [
+        (
+            thread_id,
+            checkpoint_ns,
+            checkpoint_ns,
+            k,
+            *(serde.dumps_typed(values[k]) if k in values else ("empty", None)),
+        )
+        for k in versions
+    ]
+
+
+class BaseShallowSyncMySQLSaver(BaseMySQLSaver, Generic[_internal.C, _internal.R]):
+    """A checkpoint saver that uses MySQL to store checkpoints.
+    This checkpointer ONLY stores the most recent checkpoint and does NOT retain any history.
+    It is meant to be a light-weight drop-in replacement for the PostgresSaver that
+    supports most of the LangGraph persistence functionality with the exception of time travel.
+    """
+
+    SELECT_SQL = SELECT_SQL
+    MIGRATIONS = MIGRATIONS
+    UPSERT_CHECKPOINT_BLOBS_SQL = UPSERT_CHECKPOINT_BLOBS_SQL
+    UPSERT_CHECKPOINTS_SQL = UPSERT_CHECKPOINTS_SQL
+    UPSERT_CHECKPOINT_WRITES_SQL = UPSERT_CHECKPOINT_WRITES_SQL
+    INSERT_CHECKPOINT_WRITES_SQL = INSERT_CHECKPOINT_WRITES_SQL
+
+    lock: threading.Lock
+
+    def __init__(
+        self,
+        conn: _internal.Conn,
+        serde: Optional[SerializerProtocol] = None,
+    ) -> None:
+        super().__init__(serde=serde)
+
+        self.conn = conn
+        self.lock = threading.Lock()
+
+    @staticmethod
+    def _get_cursor_from_connection(conn: _internal.C) -> _internal.R:
+        raise NotImplementedError
+
+    @contextmanager
+    def _cursor(self, *, pipeline: bool = False) -> Iterator[_internal.R]:
+        """Create a database cursor as a context manager.
+
+        Args:
+            pipeline (bool): whether to use transaction context manager and handle concurrency
+        """
+        with _internal.get_connection(self.conn) as conn:  # type: _internal.C
+            if pipeline:
+                with self.lock:
+                    conn.begin()
+                    try:
+                        with self._get_cursor_from_connection(conn) as cur:
+                            yield cur
+                        conn.commit()
+                    except:
+                        conn.rollback()
+                        raise
+            else:
+                with self.lock, self._get_cursor_from_connection(conn) as cur:
+                    yield cur
+
+    def setup(self) -> None:
+        """Set up the checkpoint database asynchronously.
+
+        This method creates the necessary tables in the MySQL database if they don't
+        already exist and runs database migrations. It MUST be called directly by the user
+        the first time checkpointer is used.
+        """
+        with self._cursor() as cur:
+            cur.execute(self.MIGRATIONS[0])
+            cur.execute("SELECT v FROM checkpoint_migrations ORDER BY v DESC LIMIT 1")
+            row = cur.fetchone()
+            if row is None:
+                version = -1
+            else:
+                version = row["v"]
+            for v, migration in zip(
+                range(version + 1, len(self.MIGRATIONS)),
+                self.MIGRATIONS[version + 1 :],
+            ):
+                cur.execute(migration)
+                cur.execute(f"INSERT INTO checkpoint_migrations (v) VALUES ({v})")
+                cur.execute("COMMIT")
+
+    def list(
+        self,
+        config: Optional[RunnableConfig],
+        *,
+        filter: Optional[dict[str, Any]] = None,
+        before: Optional[RunnableConfig] = None,
+        limit: Optional[int] = None,
+    ) -> Iterator[CheckpointTuple]:
+        """List checkpoints from the database.
+
+        This method retrieves a list of checkpoint tuples from the MySQL database based
+        on the provided config. For shallow savers, this method returns a list with
+        ONLY the most recent checkpoint.
+        """
+        where, args = self._search_where(config, filter, before)
+        query = self.SELECT_SQL + where
+        if limit:
+            query += f" LIMIT {limit}"
+        with self._cursor() as cur:
+            cur.execute(self.SELECT_SQL + where, args)
+            values = cur.fetchall()
+            for value in values:
+                checkpoint = self._load_checkpoint(
+                    json.loads(value["checkpoint"]),
+                    deserialize_channel_values(value["channel_values"]),
+                    deserialize_pending_sends(value["pending_sends"]),
+                )
+                yield CheckpointTuple(
+                    config={
+                        "configurable": {
+                            "thread_id": value["thread_id"],
+                            "checkpoint_ns": value["checkpoint_ns"],
+                            "checkpoint_id": checkpoint["id"],
+                        }
+                    },
+                    checkpoint=checkpoint,
+                    metadata=self._load_metadata(value["metadata"]),
+                    pending_writes=self._load_writes(
+                        deserialize_pending_writes(value["pending_writes"])
+                    ),
+                )
+
+    def get_tuple(self, config: RunnableConfig) -> Optional[CheckpointTuple]:
+        """Get a checkpoint tuple from the database.
+
+        This method retrieves a checkpoint tuple from the MySQL database based on the
+        provided config (matching the thread ID in the config).
+
+        Args:
+            config (RunnableConfig): The config to use for retrieving the checkpoint.
+
+        Returns:
+            Optional[CheckpointTuple]: The retrieved checkpoint tuple, or None if no matching checkpoint was found.
+
+        Examples:
+
+            Basic:
+            >>> config = {"configurable": {"thread_id": "1"}}
+            >>> checkpoint_tuple = memory.get_tuple(config)
+            >>> print(checkpoint_tuple)
+            CheckpointTuple(...)
+
+            With timestamp:
+
+            >>> config = {
+            ...    "configurable": {
+            ...        "thread_id": "1",
+            ...        "checkpoint_ns": "",
+            ...        "checkpoint_id": "1ef4f797-8335-6428-8001-8a1503f9b875",
+            ...    }
+            ... }
+            >>> checkpoint_tuple = memory.get_tuple(config)
+            >>> print(checkpoint_tuple)
+            CheckpointTuple(...)
+        """  # noqa
+        thread_id = config["configurable"]["thread_id"]
+        checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
+        args = (thread_id, checkpoint_ns)
+        where = "WHERE thread_id = %s AND checkpoint_ns_hash = UNHEX(MD5(%s))"
+
+        with self._cursor() as cur:
+            cur.execute(
+                self.SELECT_SQL + where,
+                args,
+            )
+            values = cur.fetchall()
+            for value in values:
+                checkpoint = self._load_checkpoint(
+                    json.loads(value["checkpoint"]),
+                    deserialize_channel_values(value["channel_values"]),
+                    deserialize_pending_sends(value["pending_sends"]),
+                )
+                return CheckpointTuple(
+                    config={
+                        "configurable": {
+                            "thread_id": thread_id,
+                            "checkpoint_ns": checkpoint_ns,
+                            "checkpoint_id": checkpoint["id"],
+                        }
+                    },
+                    checkpoint=checkpoint,
+                    metadata=self._load_metadata(value["metadata"]),
+                    pending_writes=self._load_writes(
+                        deserialize_pending_writes(value["pending_writes"])
+                    ),
+                )
+
+    def put(
+        self,
+        config: RunnableConfig,
+        checkpoint: Checkpoint,
+        metadata: CheckpointMetadata,
+        new_versions: ChannelVersions,
+    ) -> RunnableConfig:
+        """Save a checkpoint to the database.
+
+        This method saves a checkpoint to the MySQL database. The checkpoint is associated
+        with the provided config. For shallow savers, this method saves ONLY the most recent
+        checkpoint and overwrites a previous checkpoint, if it exists.
+
+        Args:
+            config (RunnableConfig): The config to associate with the checkpoint.
+            checkpoint (Checkpoint): The checkpoint to save.
+            metadata (CheckpointMetadata): Additional metadata to save with the checkpoint.
+            new_versions (ChannelVersions): New channel versions as of this write.
+
+        Returns:
+            RunnableConfig: Updated configuration after storing the checkpoint.
+
+        Examples:
+
+            >>> from langgraph.checkpoint.mysql import PyMySQLSaver
+            >>> DB_URI = "mysql://mysql:mysql@localhost:5432/mysql"
+            >>> with ShallowPyMySQLSaver.from_conn_string(DB_URI) as memory:
+            >>>     config = {"configurable": {"thread_id": "1", "checkpoint_ns": ""}}
+            >>>     checkpoint = {"ts": "2024-05-04T06:32:42.235444+00:00", "id": "1ef4f797-8335-6428-8001-8a1503f9b875", "channel_values": {"key": "value"}}
+            >>>     saved_config = memory.put(config, checkpoint, {"source": "input", "step": 1, "writes": {"key": "value"}}, {})
+            >>> print(saved_config)
+            {'configurable': {'thread_id': '1', 'checkpoint_ns': '', 'checkpoint_id': '1ef4f797-8335-6428-8001-8a1503f9b875'}}
+        """
+        configurable = config["configurable"].copy()
+        thread_id = configurable.pop("thread_id")
+        checkpoint_ns = configurable.pop("checkpoint_ns")
+        copy = checkpoint.copy()
+        next_config = {
+            "configurable": {
+                "thread_id": thread_id,
+                "checkpoint_ns": checkpoint_ns,
+                "checkpoint_id": checkpoint["id"],
+            }
+        }
+
+        with self._cursor(pipeline=True) as cur:
+            cur.execute(
+                """DELETE FROM checkpoint_writes
+                WHERE thread_id = %s AND checkpoint_ns_hash = UNHEX(MD5(%s)) AND checkpoint_id NOT IN (%s, %s)""",
+                (
+                    thread_id,
+                    checkpoint_ns,
+                    checkpoint["id"],
+                    configurable.get("checkpoint_id", ""),
+                ),
+            )
+            cur.executemany(
+                self.UPSERT_CHECKPOINT_BLOBS_SQL,
+                _dump_blobs(
+                    self.serde,
+                    thread_id,
+                    checkpoint_ns,
+                    copy.pop("channel_values"),  # type: ignore[misc]
+                    new_versions,
+                ),
+            )
+            cur.execute(
+                self.UPSERT_CHECKPOINTS_SQL,
+                (
+                    thread_id,
+                    checkpoint_ns,
+                    checkpoint_ns,
+                    json.dumps(self._dump_checkpoint(copy)),
+                    self._dump_metadata(get_checkpoint_metadata(config, metadata)),
+                ),
+            )
+        return next_config
+
+    def put_writes(
+        self,
+        config: RunnableConfig,
+        writes: Sequence[tuple[str, Any]],
+        task_id: str,
+        task_path: str = "",
+    ) -> None:
+        """Store intermediate writes linked to a checkpoint.
+
+        This method saves intermediate writes associated with a checkpoint to the MySQL database.
+
+        Args:
+            config (RunnableConfig): Configuration of the related checkpoint.
+            writes (List[Tuple[str, Any]]): List of writes to store.
+            task_id (str): Identifier for the task creating the writes.
+        """
+        query = (
+            self.UPSERT_CHECKPOINT_WRITES_SQL
+            if all(w[0] in WRITES_IDX_MAP for w in writes)
+            else self.INSERT_CHECKPOINT_WRITES_SQL
+        )
+        with self._cursor(pipeline=True) as cur:
+            cur.executemany(
+                query,
+                self._dump_writes(
+                    config["configurable"]["thread_id"],
+                    config["configurable"]["checkpoint_ns"],
+                    config["configurable"]["checkpoint_id"],
+                    task_id,
+                    task_path,
+                    writes,
+                ),
+            )
+
+
+class BaseShallowAsyncMySQLSaver(BaseMySQLSaver, Generic[_ainternal.C, _ainternal.R]):
+    """A checkpoint saver that uses MySQL to store checkpoints asynchronously.
+    This checkpointer ONLY stores the most recent checkpoint and does NOT retain any history.
+    It is meant to be a light-weight drop-in replacement for the async MySQL saver that
+    supports most of the LangGraph persistence functionality with the exception of time travel.
+    """
+
+    SELECT_SQL = SELECT_SQL
+    MIGRATIONS = MIGRATIONS
+    UPSERT_CHECKPOINT_BLOBS_SQL = UPSERT_CHECKPOINT_BLOBS_SQL
+    UPSERT_CHECKPOINTS_SQL = UPSERT_CHECKPOINTS_SQL
+    UPSERT_CHECKPOINT_WRITES_SQL = UPSERT_CHECKPOINT_WRITES_SQL
+    INSERT_CHECKPOINT_WRITES_SQL = INSERT_CHECKPOINT_WRITES_SQL
+    lock: asyncio.Lock
+
+    def __init__(
+        self,
+        conn: _ainternal.Conn,
+        serde: Optional[SerializerProtocol] = None,
+    ) -> None:
+        super().__init__(serde=serde)
+
+        self.conn = conn
+        self.lock = asyncio.Lock()
+        self.loop = asyncio.get_running_loop()
+
+    @staticmethod
+    def _get_cursor_from_connection(conn: _ainternal.C) -> _ainternal.R:
+        raise NotImplementedError
+
+    @asynccontextmanager
+    async def _cursor(self, *, pipeline: bool = False) -> AsyncIterator[_ainternal.R]:
+        """Create a database cursor as a context manager.
+
+        Args:
+            pipeline (bool): whether to use transaction context manager and handle concurrency
+        """
+        async with _ainternal.get_connection(self.conn) as conn:
+            if pipeline:
+                async with self.lock:
+                    await conn.begin()
+                    try:
+                        async with self._get_cursor_from_connection(conn) as cur:
+                            yield cur
+                        await conn.commit()
+                    except:
+                        await conn.rollback()
+                        raise
+            else:
+                async with (
+                    self.lock,
+                    self._get_cursor_from_connection(conn) as cur,
+                ):
+                    yield cur
+
+    async def setup(self) -> None:
+        """Set up the checkpoint database asynchronously.
+        This method creates the necessary tables in the MySQL database if they don't
+        already exist and runs database migrations. It MUST be called directly by the user
+        the first time checkpointer is used.
+        """
+        async with self._cursor() as cur:
+            await cur.execute(self.MIGRATIONS[0])
+            await cur.execute(
+                "SELECT v FROM checkpoint_migrations ORDER BY v DESC LIMIT 1"
+            )
+            row = await cur.fetchone()
+            if row is None:
+                version = -1
+            else:
+                version = row["v"]
+            for v, migration in zip(
+                range(version + 1, len(self.MIGRATIONS)),
+                self.MIGRATIONS[version + 1 :],
+            ):
+                await cur.execute(migration)
+                await cur.execute(f"INSERT INTO checkpoint_migrations (v) VALUES ({v})")
+
+    async def alist(
+        self,
+        config: Optional[RunnableConfig],
+        *,
+        filter: Optional[dict[str, Any]] = None,
+        before: Optional[RunnableConfig] = None,
+        limit: Optional[int] = None,
+    ) -> AsyncIterator[CheckpointTuple]:
+        """List checkpoints from the database asynchronously.
+        This method retrieves a list of checkpoint tuples from the MySQL database based
+        on the provided config. For shallow savers, this method returns a list with
+        ONLY the most recent checkpoint.
+        """
+        where, args = self._search_where(config, filter, before)
+        query = self.SELECT_SQL + where
+        if limit:
+            query += f" LIMIT {limit}"
+        async with self._cursor() as cur:
+            await cur.execute(self.SELECT_SQL + where, args)
+            async for value in cur:
+                checkpoint = await asyncio.to_thread(
+                    self._load_checkpoint,
+                    json.loads(value["checkpoint"]),
+                    deserialize_channel_values(value["channel_values"]),
+                    deserialize_pending_sends(value["pending_sends"]),
+                )
+                yield CheckpointTuple(
+                    config={
+                        "configurable": {
+                            "thread_id": value["thread_id"],
+                            "checkpoint_ns": value["checkpoint_ns"],
+                            "checkpoint_id": checkpoint["id"],
+                        }
+                    },
+                    checkpoint=checkpoint,
+                    metadata=self._load_metadata(value["metadata"]),
+                    pending_writes=await asyncio.to_thread(
+                        self._load_writes,
+                        deserialize_pending_writes(value["pending_writes"]),
+                    ),
+                )
+
+    async def aget_tuple(self, config: RunnableConfig) -> Optional[CheckpointTuple]:
+        """Get a checkpoint tuple from the database asynchronously.
+        This method retrieves a checkpoint tuple from the MySQL database based on the
+        provided config (matching the thread ID in the config).
+        Args:
+            config (RunnableConfig): The config to use for retrieving the checkpoint.
+        Returns:
+            Optional[CheckpointTuple]: The retrieved checkpoint tuple, or None if no matching checkpoint was found.
+        """
+        thread_id = config["configurable"]["thread_id"]
+        checkpoint_ns = config["configurable"].get("checkpoint_ns", "")
+        args = (thread_id, checkpoint_ns)
+        where = "WHERE thread_id = %s AND checkpoint_ns_hash = UNHEX(MD5(%s))"
+
+        async with self._cursor() as cur:
+            await cur.execute(
+                self.SELECT_SQL + where,
+                args,
+            )
+
+            async for value in cur:
+                checkpoint = await asyncio.to_thread(
+                    self._load_checkpoint,
+                    json.loads(value["checkpoint"]),
+                    deserialize_channel_values(value["channel_values"]),
+                    deserialize_pending_sends(value["pending_sends"]),
+                )
+                return CheckpointTuple(
+                    config={
+                        "configurable": {
+                            "thread_id": thread_id,
+                            "checkpoint_ns": checkpoint_ns,
+                            "checkpoint_id": checkpoint["id"],
+                        }
+                    },
+                    checkpoint=checkpoint,
+                    metadata=self._load_metadata(value["metadata"]),
+                    pending_writes=await asyncio.to_thread(
+                        self._load_writes,
+                        deserialize_pending_writes(value["pending_writes"]),
+                    ),
+                )
+
+    async def aput(
+        self,
+        config: RunnableConfig,
+        checkpoint: Checkpoint,
+        metadata: CheckpointMetadata,
+        new_versions: ChannelVersions,
+    ) -> RunnableConfig:
+        """Save a checkpoint to the database asynchronously.
+        This method saves a checkpoint to the MySQL database. The checkpoint is associated
+        with the provided config. For shallow savers, this method saves ONLY the most recent
+        checkpoint and overwrites a previous checkpoint, if it exists.
+        Args:
+            config (RunnableConfig): The config to associate with the checkpoint.
+            checkpoint (Checkpoint): The checkpoint to save.
+            metadata (CheckpointMetadata): Additional metadata to save with the checkpoint.
+            new_versions (ChannelVersions): New channel versions as of this write.
+        Returns:
+            RunnableConfig: Updated configuration after storing the checkpoint.
+        """
+        configurable = config["configurable"].copy()
+        thread_id = configurable.pop("thread_id")
+        checkpoint_ns = configurable.pop("checkpoint_ns")
+
+        copy = checkpoint.copy()
+        next_config = {
+            "configurable": {
+                "thread_id": thread_id,
+                "checkpoint_ns": checkpoint_ns,
+                "checkpoint_id": checkpoint["id"],
+            }
+        }
+
+        async with self._cursor(pipeline=True) as cur:
+            await cur.execute(
+                """DELETE FROM checkpoint_writes
+                WHERE thread_id = %s AND checkpoint_ns_hash = UNHEX(MD5(%s)) AND checkpoint_id NOT IN (%s, %s)""",
+                (
+                    thread_id,
+                    checkpoint_ns,
+                    checkpoint["id"],
+                    configurable.get("checkpoint_id", ""),
+                ),
+            )
+            await cur.executemany(
+                self.UPSERT_CHECKPOINT_BLOBS_SQL,
+                _dump_blobs(
+                    self.serde,
+                    thread_id,
+                    checkpoint_ns,
+                    copy.pop("channel_values"),  # type: ignore[misc]
+                    new_versions,
+                ),
+            )
+            await cur.execute(
+                self.UPSERT_CHECKPOINTS_SQL,
+                (
+                    thread_id,
+                    checkpoint_ns,
+                    checkpoint_ns,
+                    json.dumps(self._dump_checkpoint(copy)),
+                    self._dump_metadata(get_checkpoint_metadata(config, metadata)),
+                ),
+            )
+        return next_config
+
+    async def aput_writes(
+        self,
+        config: RunnableConfig,
+        writes: Sequence[tuple[str, Any]],
+        task_id: str,
+        task_path: str = "",
+    ) -> None:
+        """Store intermediate writes linked to a checkpoint asynchronously.
+        This method saves intermediate writes associated with a checkpoint to the database.
+        Args:
+            config (RunnableConfig): Configuration of the related checkpoint.
+            writes (Sequence[Tuple[str, Any]]): List of writes to store, each as (channel, value) pair.
+            task_id (str): Identifier for the task creating the writes.
+        """
+        query = (
+            self.UPSERT_CHECKPOINT_WRITES_SQL
+            if all(w[0] in WRITES_IDX_MAP for w in writes)
+            else self.INSERT_CHECKPOINT_WRITES_SQL
+        )
+        params = await asyncio.to_thread(
+            self._dump_writes,
+            config["configurable"]["thread_id"],
+            config["configurable"]["checkpoint_ns"],
+            config["configurable"]["checkpoint_id"],
+            task_id,
+            task_path,
+            writes,
+        )
+        async with self._cursor(pipeline=True) as cur:
+            await cur.executemany(query, params)
+
+    def list(
+        self,
+        config: Optional[RunnableConfig],
+        *,
+        filter: Optional[dict[str, Any]] = None,
+        before: Optional[RunnableConfig] = None,
+        limit: Optional[int] = None,
+    ) -> Iterator[CheckpointTuple]:
+        """List checkpoints from the database.
+        This method retrieves a list of checkpoint tuples from the MySQL database based
+        on the provided config. For shallow savers, this method returns a list with
+        ONLY the most recent checkpoint.
+        """
+        try:
+            # check if we are in the main thread, only bg threads can block
+            # we don't check in other methods to avoid the overhead
+            if asyncio.get_running_loop() is self.loop:
+                raise asyncio.InvalidStateError(
+                    "Synchronous calls to AsyncSqliteSaver are only allowed from a "
+                    "different thread. From the main thread, use the async interface. "
+                    "For example, use `checkpointer.alist(...)` or `await "
+                    "graph.ainvoke(...)`."
+                )
+        except RuntimeError:
+            pass
+        aiter_ = self.alist(config, filter=filter, before=before, limit=limit)
+        while True:
+            try:
+                yield asyncio.run_coroutine_threadsafe(
+                    anext(aiter_),  # noqa: F821
+                    self.loop,
+                ).result()
+            except StopAsyncIteration:
+                break
+
+    def get_tuple(self, config: RunnableConfig) -> Optional[CheckpointTuple]:
+        """Get a checkpoint tuple from the database.
+        This method retrieves a checkpoint tuple from the MySQL database based on the
+        provided config (matching the thread ID in the config).
+        Args:
+            config (RunnableConfig): The config to use for retrieving the checkpoint.
+        Returns:
+            Optional[CheckpointTuple]: The retrieved checkpoint tuple, or None if no matching checkpoint was found.
+        """
+        try:
+            # check if we are in the main thread, only bg threads can block
+            # we don't check in other methods to avoid the overhead
+            if asyncio.get_running_loop() is self.loop:
+                raise asyncio.InvalidStateError(
+                    "Synchronous calls to asynchronous shallow savers are only allowed from a "
+                    "different thread. From the main thread, use the async interface. "
+                    "For example, use `await checkpointer.aget_tuple(...)` or `await "
+                    "graph.ainvoke(...)`."
+                )
+        except RuntimeError:
+            pass
+        return asyncio.run_coroutine_threadsafe(
+            self.aget_tuple(config), self.loop
+        ).result()
+
+    def put(
+        self,
+        config: RunnableConfig,
+        checkpoint: Checkpoint,
+        metadata: CheckpointMetadata,
+        new_versions: ChannelVersions,
+    ) -> RunnableConfig:
+        """Save a checkpoint to the database.
+        This method saves a checkpoint to the MySQL database. The checkpoint is associated
+        with the provided config. For shallow savers, this method saves ONLY the most recent
+        checkpoint and overwrites a previous checkpoint, if it exists.
+        Args:
+            config (RunnableConfig): The config to associate with the checkpoint.
+            checkpoint (Checkpoint): The checkpoint to save.
+            metadata (CheckpointMetadata): Additional metadata to save with the checkpoint.
+            new_versions (ChannelVersions): New channel versions as of this write.
+        Returns:
+            RunnableConfig: Updated configuration after storing the checkpoint.
+        """
+        return asyncio.run_coroutine_threadsafe(
+            self.aput(config, checkpoint, metadata, new_versions), self.loop
+        ).result()
+
+    def put_writes(
+        self,
+        config: RunnableConfig,
+        writes: Sequence[tuple[str, Any]],
+        task_id: str,
+        task_path: str = "",
+    ) -> None:
+        """Store intermediate writes linked to a checkpoint.
+        This method saves intermediate writes associated with a checkpoint to the database.
+        Args:
+            config (RunnableConfig): Configuration of the related checkpoint.
+            writes (Sequence[Tuple[str, Any]]): List of writes to store, each as (channel, value) pair.
+            task_id (str): Identifier for the task creating the writes.
+            task_path (str): Path of the task creating the writes.
+        """
+        return asyncio.run_coroutine_threadsafe(
+            self.aput_writes(config, writes, task_id, task_path), self.loop
+        ).result()
+
+
+
+================================================
+FILE: langgraph/checkpoint/mysql/utils.py
+================================================
+import base64
+import json
+from typing import NamedTuple, Optional
+
+Base64Blob = str
+
+
+def decode_base64_blob(base64_blob: Base64Blob) -> bytes:
+    # When MySQL returns a blob in a JSON array, it is base64 encoded and a prefix
+    # of "base64:type251:" attached to it.
+    parts = base64_blob.rsplit(":", 1)
+    return base64.b64decode(parts[-1])
+
+
+class MySQLPendingWrite(NamedTuple):
+    """
+    The pending write tuple we receive from our DB query.
+    """
+
+    task_id: str
+    channel: str
+    type_: str
+    blob: Base64Blob
+    idx: int
+
+
+def deserialize_pending_writes(value: str) -> list[tuple[str, str, str, bytes]]:
+    if not value:
+        return []
+
+    values = (MySQLPendingWrite(*write) for write in json.loads(value))
+
+    return [
+        (db.task_id, db.channel, db.type_, decode_base64_blob(db.blob))
+        for db in sorted(values, key=lambda db: (db.task_id, db.idx))
+    ]
+
+
+class MySQLPendingSend(NamedTuple):
+    task_path: str
+    task_id: str
+    type_: str
+    blob: Base64Blob
+    idx: int
+
+
+def deserialize_pending_sends(value: str) -> list[tuple[str, bytes]]:
+    if not value:
+        return []
+
+    values = (MySQLPendingSend(*send) for send in json.loads(value))
+
+    return [
+        (db.type_, decode_base64_blob(db.blob))
+        for db in sorted(values, key=lambda db: (db.task_path, db.task_id, db.idx))
+    ]
+
+
+class MySQLChannelValue(NamedTuple):
+    channel: str
+    type_: str
+    blob: Optional[Base64Blob]
+
+
+def deserialize_channel_values(value: str) -> list[tuple[str, str, Optional[bytes]]]:
+    if not value:
+        return []
+
+    values = (MySQLChannelValue(*channel_value) for channel_value in json.loads(value))
+
+    return [
+        (
+            db.channel,
+            db.type_,
+            decode_base64_blob(db.blob) if db.blob is not None else None,
+        )
+        for db in values
+    ]
+
+
+def mysql_mariadb_branch(mysql_fragment: str, mariadb_fragment: str) -> str:
+    # MariaDB ignores MySQL conditional comments with version numbers between
+    # 500700 and 999999. We can use this to our advantage.
+    return f"/*!50700 {mysql_fragment}*//*M! {mariadb_fragment}*/"
+
+
+
+================================================
+FILE: langgraph/store/mysql/__init__.py
+================================================
+from langgraph.store.mysql.aio import AIOMySQLStore
+from langgraph.store.mysql.asyncmy import AsyncMyStore
+from langgraph.store.mysql.pymysql import PyMySQLStore
+
+__all__ = ["AIOMySQLStore", "AsyncMyStore", "PyMySQLStore"]
+
+
+
+================================================
+FILE: langgraph/store/mysql/aio.py
+================================================
+import logging
+import urllib.parse
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import Any, cast
+
+import aiomysql  # type: ignore
+from typing_extensions import Self, override
+
+from langgraph.store.mysql.aio_base import BaseAsyncMySQLStore
+
+logger = logging.getLogger(__name__)
+
+
+class AIOMySQLStore(BaseAsyncMySQLStore[aiomysql.Connection, aiomysql.DictCursor]):
+    @staticmethod
+    def parse_conn_string(conn_string: str) -> dict[str, Any]:
+        parsed = urllib.parse.urlparse(conn_string)
+
+        # In order to provide additional params via the connection string,
+        # we convert the parsed.query to a dict so we can access the values.
+        # This is necessary when using a unix socket, for example.
+        params_as_dict = dict(urllib.parse.parse_qsl(parsed.query))
+
+        return {
+            "host": parsed.hostname or "localhost",
+            "user": parsed.username,
+            "password": parsed.password or "",
+            "db": parsed.path[1:] or None,
+            "port": parsed.port or 3306,
+            "unix_socket": params_as_dict.get("unix_socket"),
+        }
+
+    @classmethod
+    @asynccontextmanager
+    async def from_conn_string(
+        cls,
+        conn_string: str,
+    ) -> AsyncIterator[Self]:
+        """Create a new AIOMySQLStore instance from a connection string.
+
+        Args:
+            conn_string (str): The MySQL connection info string.
+
+        Returns:
+            AIOMySQLStore: A new AIOMySQLStore instance.
+        """
+        async with aiomysql.connect(
+            **cls.parse_conn_string(conn_string),
+            autocommit=True,
+        ) as conn:
+            yield cls(conn=conn)
+
+    @override
+    @staticmethod
+    def _get_cursor_from_connection(conn: aiomysql.Connection) -> aiomysql.DictCursor:
+        return cast(aiomysql.DictCursor, conn.cursor(aiomysql.DictCursor))
+
+
+
+================================================
+FILE: langgraph/store/mysql/aio_base.py
+================================================
+import asyncio
+import logging
+from collections.abc import AsyncIterator, Iterable, Sequence
+from contextlib import asynccontextmanager
+from typing import Any, Callable, Generic, Optional, Union, cast
+
+import orjson
+
+from langgraph.checkpoint.mysql import _ainternal
+from langgraph.store.base import (
+    GetOp,
+    ListNamespacesOp,
+    Op,
+    PutOp,
+    Result,
+    SearchOp,
+)
+from langgraph.store.base.batch import AsyncBatchedBaseStore
+from langgraph.store.mysql.base import (
+    BaseMySQLStore,
+    Row,
+    _decode_ns_bytes,
+    _group_ops,
+    _row_to_item,
+    _row_to_search_item,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class BaseAsyncMySQLStore(
+    AsyncBatchedBaseStore,
+    BaseMySQLStore[_ainternal.Conn[_ainternal.C]],
+    Generic[_ainternal.C, _ainternal.R],
+):
+    __slots__ = ("_deserializer", "lock")
+
+    def __init__(
+        self,
+        conn: _ainternal.Conn[_ainternal.C],
+        *,
+        deserializer: Optional[
+            Callable[[Union[bytes, orjson.Fragment]], dict[str, Any]]
+        ] = None,
+    ) -> None:
+        super().__init__()
+        self._deserializer = deserializer
+        self.conn = conn
+        self.lock = asyncio.Lock()
+        self.loop = asyncio.get_running_loop()
+
+    @staticmethod
+    def _get_cursor_from_connection(conn: _ainternal.C) -> _ainternal.R:
+        raise NotImplementedError
+
+    async def abatch(self, ops: Iterable[Op]) -> list[Result]:
+        grouped_ops, num_ops = _group_ops(ops)
+        results: list[Result] = [None] * num_ops
+
+        async with _ainternal.get_connection(self.conn) as conn:
+            await self._execute_batch(grouped_ops, results, conn)
+
+        return results
+
+    async def setup(self) -> None:
+        """Set up the store database asynchronously.
+
+        This method creates the necessary tables in the Postgres database if they don't
+        already exist and runs database migrations. It MUST be called directly by the user
+        the first time the store is used.
+        """
+
+        async def _get_version(cur: _ainternal.R, table: str) -> int:
+            await cur.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS {table} (
+                    v INTEGER PRIMARY KEY
+                )
+            """
+            )
+            await cur.execute(f"SELECT v FROM {table} ORDER BY v DESC LIMIT 1")
+            row = await cur.fetchone()
+            if row is None:
+                version = -1
+            else:
+                version = row["v"]
+            return version
+
+        async with _ainternal.get_connection(self.conn) as conn:
+            async with self._cursor(conn) as cur:
+                version = await _get_version(cur, table="store_migrations")
+                for v, sql in enumerate(
+                    self.MIGRATIONS[version + 1 :], start=version + 1
+                ):
+                    await cur.execute(sql)
+                    await cur.execute(
+                        "INSERT INTO store_migrations (v) VALUES (%s)", (v,)
+                    )
+
+    async def _execute_batch(
+        self,
+        grouped_ops: dict,
+        results: list[Result],
+        conn: _ainternal.C,
+    ) -> None:
+        async with self._cursor(conn, pipeline=True) as cur:
+            if GetOp in grouped_ops:
+                await self._batch_get_ops(
+                    cast(Sequence[tuple[int, GetOp]], grouped_ops[GetOp]),
+                    results,
+                    cur,
+                )
+
+            if SearchOp in grouped_ops:
+                await self._batch_search_ops(
+                    cast(Sequence[tuple[int, SearchOp]], grouped_ops[SearchOp]),
+                    results,
+                    cur,
+                )
+
+            if ListNamespacesOp in grouped_ops:
+                await self._batch_list_namespaces_ops(
+                    cast(
+                        Sequence[tuple[int, ListNamespacesOp]],
+                        grouped_ops[ListNamespacesOp],
+                    ),
+                    results,
+                    cur,
+                )
+
+            if PutOp in grouped_ops:
+                await self._batch_put_ops(
+                    cast(Sequence[tuple[int, PutOp]], grouped_ops[PutOp]),
+                    cur,
+                )
+
+    async def _batch_get_ops(
+        self,
+        get_ops: Sequence[tuple[int, GetOp]],
+        results: list[Result],
+        cur: _ainternal.R,
+    ) -> None:
+        for query, params, namespace, items in self._get_batch_GET_ops_queries(get_ops):
+            await cur.execute(query, params)
+            rows = cast(list[Row], await cur.fetchall())
+            key_to_row = {row["key"]: row for row in rows}
+            for idx, key in items:
+                row = key_to_row.get(key)
+                if row:
+                    results[idx] = _row_to_item(
+                        namespace, row, loader=self._deserializer
+                    )
+                else:
+                    results[idx] = None
+
+    async def _batch_put_ops(
+        self,
+        put_ops: Sequence[tuple[int, PutOp]],
+        cur: _ainternal.R,
+    ) -> None:
+        queries = self._prepare_batch_PUT_queries(put_ops)
+        for query, params in queries:
+            await cur.execute(query, params)
+
+    async def _batch_search_ops(
+        self,
+        search_ops: Sequence[tuple[int, SearchOp]],
+        results: list[Result],
+        cur: _ainternal.R,
+    ) -> None:
+        queries = self._prepare_batch_search_queries(search_ops)
+        for (idx, _), (query, params) in zip(search_ops, queries):
+            await cur.execute(query, params)
+            rows = cast(list[Row], await cur.fetchall())
+            items = [
+                _row_to_search_item(
+                    _decode_ns_bytes(row["prefix"]), row, loader=self._deserializer
+                )
+                for row in rows
+            ]
+            results[idx] = items
+
+    async def _batch_list_namespaces_ops(
+        self,
+        list_ops: Sequence[tuple[int, ListNamespacesOp]],
+        results: list[Result],
+        cur: _ainternal.R,
+    ) -> None:
+        queries = self._get_batch_list_namespaces_queries(list_ops)
+        for (query, params), (idx, _) in zip(queries, list_ops):
+            await cur.execute(query, params)
+            rows = cast(list[dict], await cur.fetchall())
+            namespaces = [_decode_ns_bytes(row["truncated_prefix"]) for row in rows]
+            results[idx] = namespaces
+
+    @asynccontextmanager
+    async def _cursor(
+        self, conn: _ainternal.C, *, pipeline: bool = False
+    ) -> AsyncIterator[_ainternal.R]:
+        """Create a database cursor as a context manager.
+        Args:
+            conn: The database connection to use
+            pipeline: whether to use transaction context manager and handle concurrency
+        """
+        if pipeline:
+            # a connection can only be used by one
+            # thread/coroutine at a time, so we acquire a lock
+            async with self.lock:
+                await conn.begin()
+                try:
+                    async with self._get_cursor_from_connection(conn) as cur:
+                        yield cur
+                    await conn.commit()
+                except:
+                    await conn.rollback()
+                    raise
+        else:
+            async with self.lock, self._get_cursor_from_connection(conn) as cur:
+                yield cur
+
+
+
+================================================
+FILE: langgraph/store/mysql/asyncmy.py
+================================================
+import logging
+import urllib.parse
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import Any, cast
+
+from asyncmy import Connection, connect  # type: ignore
+from asyncmy.cursors import DictCursor  # type: ignore
+from typing_extensions import Self, override
+
+from langgraph.store.mysql.aio_base import BaseAsyncMySQLStore
+
+logger = logging.getLogger(__name__)
+
+
+class AsyncMyStore(BaseAsyncMySQLStore[Connection, DictCursor]):
+    @staticmethod
+    def parse_conn_string(conn_string: str) -> dict[str, Any]:
+        parsed = urllib.parse.urlparse(conn_string)
+
+        # In order to provide additional params via the connection string,
+        # we convert the parsed.query to a dict so we can access the values.
+        # This is necessary when using a unix socket, for example.
+        params_as_dict = dict(urllib.parse.parse_qsl(parsed.query))
+
+        return {
+            "host": parsed.hostname or "localhost",
+            "user": parsed.username,
+            "password": parsed.password or "",
+            "db": parsed.path[1:] or None,
+            "port": parsed.port or 3306,
+            "unix_socket": params_as_dict.get("unix_socket"),
+        }
+
+    @classmethod
+    @asynccontextmanager
+    async def from_conn_string(
+        cls,
+        conn_string: str,
+    ) -> AsyncIterator[Self]:
+        """Create a new AsyncMyStore instance from a connection string.
+
+        Args:
+            conn_string (str): The MySQL connection info string.
+
+        Returns:
+            AsyncMyStore: A new AsyncMyStore instance.
+        """
+        async with connect(
+            **cls.parse_conn_string(conn_string),
+            autocommit=True,
+        ) as conn:
+            yield cls(conn=conn)
+
+    @override
+    @staticmethod
+    def _get_cursor_from_connection(conn: Connection) -> DictCursor:
+        return cast(DictCursor, conn.cursor(DictCursor))
+
+
+
+================================================
+FILE: langgraph/store/mysql/base.py
+================================================
+import asyncio
+import json
+import logging
+import threading
+from collections import defaultdict
+from collections.abc import Iterable, Iterator, Sequence
+from contextlib import contextmanager
+from datetime import datetime
+from typing import (
+    Any,
+    Callable,
+    Generic,
+    Optional,
+    TypeVar,
+    Union,
+    cast,
+)
+
+import orjson
+from typing_extensions import TypedDict
+
+from langgraph.checkpoint.mysql import _ainternal as _ainternal
+from langgraph.checkpoint.mysql import _internal as _internal
+from langgraph.checkpoint.mysql.utils import mysql_mariadb_branch
+from langgraph.store.base import (
+    BaseStore,
+    GetOp,
+    Item,
+    ListNamespacesOp,
+    Op,
+    PutOp,
+    Result,
+    SearchItem,
+    SearchOp,
+)
+
+logger = logging.getLogger(__name__)
+
+
+MIGRATIONS: Sequence[str] = [
+    """
+CREATE TABLE IF NOT EXISTS store (
+    -- 'prefix' represents the doc's 'namespace'
+    prefix VARCHAR(500) NOT NULL,
+    `key` VARCHAR(150) NOT NULL,
+    value JSON NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (prefix, `key`)
+);
+""",
+    """
+-- For faster lookups by prefix
+CREATE INDEX store_prefix_idx ON store (prefix) USING btree;
+""",
+]
+
+
+C = TypeVar("C", bound=Union[_internal.Conn, _ainternal.Conn])  # connection type
+
+
+class BaseMySQLStore(Generic[C]):
+    MIGRATIONS = MIGRATIONS
+    conn: C
+    _deserializer: Optional[Callable[[Union[bytes, orjson.Fragment]], dict[str, Any]]]
+
+    def _get_batch_GET_ops_queries(
+        self,
+        get_ops: Sequence[tuple[int, GetOp]],
+    ) -> list[tuple[str, tuple, tuple[str, ...], list]]:
+        namespace_groups = defaultdict(list)
+        for idx, op in get_ops:
+            namespace_groups[op.namespace].append((idx, op.key))
+        results = []
+        for namespace, items in namespace_groups.items():
+            _, keys = zip(*items)
+            keys_to_query = ",".join(["%s"] * len(keys))
+            query = f"""
+                SELECT `key`, value, created_at, updated_at
+                FROM store
+                WHERE prefix = %s AND `key` IN ({keys_to_query})
+            """
+            params = (_namespace_to_text(namespace), *keys)
+            results.append((query, params, namespace, items))
+        return results
+
+    def _prepare_batch_PUT_queries(
+        self,
+        put_ops: Sequence[tuple[int, PutOp]],
+    ) -> list[tuple[str, Sequence]]:
+        # Last-write wins
+        dedupped_ops: dict[tuple[tuple[str, ...], str], PutOp] = {}
+        for _, op in put_ops:
+            dedupped_ops[(op.namespace, op.key)] = op
+
+        inserts: list[PutOp] = []
+        deletes: list[PutOp] = []
+        for op in dedupped_ops.values():
+            if op.value is None:
+                deletes.append(op)
+            else:
+                inserts.append(op)
+
+        queries: list[tuple[str, Sequence]] = []
+
+        if deletes:
+            namespace_groups: dict[tuple[str, ...], list[str]] = defaultdict(list)
+            for op in deletes:
+                namespace_groups[op.namespace].append(op.key)
+            for namespace, keys in namespace_groups.items():
+                placeholders = ",".join(["%s"] * len(keys))
+                query = (
+                    f"DELETE FROM store WHERE prefix = %s AND `key` IN ({placeholders})"
+                )
+                params = (_namespace_to_text(namespace), *keys)
+                queries.append((query, params))
+        if inserts:
+            values = []
+            insertion_params = []
+            for op in inserts:
+                values.append("(%s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)")
+                insertion_params.extend(
+                    [
+                        _namespace_to_text(op.namespace),
+                        op.key,
+                        json.dumps(op.value),
+                    ]
+                )
+            values_str = ",".join(values)
+            query = f"""
+                INSERT INTO store (prefix, `key`, value, created_at, updated_at)
+                VALUES {values_str} {mysql_mariadb_branch("AS new", "")}
+                ON DUPLICATE KEY UPDATE
+                    value = {mysql_mariadb_branch("new.value", "VALUE(value)")},
+                    updated_at = CURRENT_TIMESTAMP
+            """
+            queries.append((query, insertion_params))
+
+        return queries
+
+    def _prepare_batch_search_queries(
+        self,
+        search_ops: Sequence[tuple[int, SearchOp]],
+    ) -> list[tuple[str, Sequence]]:
+        queries: list[tuple[str, Sequence]] = []
+        for _, op in search_ops:
+            # Build filter conditions first
+            filter_params = []
+            filter_conditions = []
+            if op.filter:
+                for key, value in op.filter.items():
+                    if isinstance(value, dict):
+                        for op_name, val in value.items():
+                            condition, filter_params_ = self._get_filter_condition(
+                                key, op_name, val
+                            )
+                            filter_conditions.append(condition)
+                            filter_params.extend(filter_params_)
+                    else:
+                        # The MySQL query fragment is:
+                        #
+                        #  json_extract(value, concat('$.', %s)) = CAST(%s AS JSON)
+                        #
+                        # The MariaDB query fragment is:
+                        #
+                        #  json_equals(json_extract(value, concat('$.', %s)), json_extract(%s, '$'))
+                        #
+                        filter_conditions.append(
+                            mysql_mariadb_branch("", "json_equals(")
+                            + "json_extract(value, concat('$.', %s))"
+                            + mysql_mariadb_branch(" = CAST(", ", json_extract(")
+                            + "%s"
+                            + mysql_mariadb_branch(" AS JSON)", ", '$'))")
+                        )
+                        filter_params.extend([key, json.dumps(value)])
+
+            base_query = """
+                SELECT prefix, `key`, value, created_at, updated_at
+                FROM store
+                WHERE prefix LIKE %s
+            """
+            params: list = [f"{_namespace_to_text(op.namespace_prefix)}%"]
+
+            if filter_conditions:
+                params.extend(filter_params)
+                base_query += " AND " + " AND ".join(filter_conditions)
+
+            base_query += " ORDER BY updated_at DESC"
+            base_query += " LIMIT %s OFFSET %s"
+            params.extend([op.limit, op.offset])
+
+            queries.append((base_query, params))
+
+        return queries
+
+    def _get_batch_list_namespaces_queries(
+        self,
+        list_ops: Sequence[tuple[int, ListNamespacesOp]],
+    ) -> list[tuple[str, Sequence]]:
+        queries: list[tuple[str, Sequence]] = []
+        for _, op in list_ops:
+            query = """
+                SELECT truncated_prefix, MIN(prefix)
+                FROM (
+                    SELECT
+                        prefix,
+                        CASE
+                            WHEN %s IS NOT NULL THEN
+                                SUBSTRING_INDEX(prefix, '.', %s)
+                            ELSE prefix
+                        END AS truncated_prefix
+                    FROM store
+            """
+            params: list[Any] = [op.max_depth, op.max_depth]
+
+            conditions = []
+            if op.match_conditions:
+                for condition in op.match_conditions:
+                    if condition.match_type == "prefix":
+                        conditions.append("prefix LIKE %s")
+                        params.append(
+                            f"{_namespace_to_text(condition.path, handle_wildcards=True)}%"
+                        )
+                    elif condition.match_type == "suffix":
+                        conditions.append("prefix LIKE %s")
+                        params.append(
+                            f"%{_namespace_to_text(condition.path, handle_wildcards=True)}"
+                        )
+                    else:
+                        logger.warning(
+                            f"Unknown match_type in list_namespaces: {condition.match_type}"
+                        )
+
+            if conditions:
+                query += " WHERE " + " AND ".join(conditions)
+            query += ") AS subquery "
+
+            query += " GROUP BY truncated_prefix"
+            query += " ORDER BY truncated_prefix LIMIT %s OFFSET %s"
+            params.extend([op.limit, op.offset])
+            queries.append((query, tuple(params)))
+
+        return queries
+
+    def _get_filter_condition(self, key: str, op: str, value: Any) -> tuple[str, list]:
+        """Helper to generate filter conditions."""
+        if op == "$eq":
+            return "json_extract(value, concat('$.', %s)) = CAST(%s AS JSON)", [
+                key,
+                json.dumps(value),
+            ]
+        elif op == "$gt":
+            return "CAST(json_extract(value, concat('$.', %s)) AS CHAR) > %s", [
+                key,
+                str(value),
+            ]
+        elif op == "$gte":
+            return "CAST(json_extract(value, concat('$.', %s)) AS CHAR) >= %s", [
+                key,
+                str(value),
+            ]
+        elif op == "$lt":
+            return "CAST(json_extract(value, concat('$.', %s)) AS CHAR) < %s", [
+                key,
+                str(value),
+            ]
+        elif op == "$lte":
+            return "CAST(json_extract(value, concat('$.', %s)) AS CHAR) <= %s", [
+                key,
+                str(value),
+            ]
+        elif op == "$ne":
+            return "json_extract(value, concat('$.', %s)) != CAST(%s AS JSON)", [
+                key,
+                json.dumps(value),
+            ]
+        else:
+            raise ValueError(f"Unsupported operator: {op}")
+
+
+class BaseSyncMySQLStore(
+    BaseStore,
+    BaseMySQLStore[_internal.Conn[_internal.C]],
+    Generic[_internal.C, _internal.R],
+):
+    __slots__ = ("_deserializer", "lock")
+
+    def __init__(
+        self,
+        conn: _internal.Conn[_internal.C],
+        *,
+        deserializer: Optional[
+            Callable[[Union[bytes, orjson.Fragment]], dict[str, Any]]
+        ] = None,
+    ) -> None:
+        super().__init__()
+        self._deserializer = deserializer
+        self.conn = conn
+        self.lock = threading.Lock()
+
+    @staticmethod
+    def _get_cursor_from_connection(conn: _internal.C) -> _internal.R:
+        raise NotImplementedError
+
+    @contextmanager
+    def _cursor(self, *, pipeline: bool = False) -> Iterator[_internal.R]:
+        """Create a database cursor as a context manager.
+
+        Args:
+            pipeline (bool): whether to use transaction context manager and handle concurrency
+        """
+        with _internal.get_connection(self.conn) as conn:
+            if pipeline:
+                # a connection can only be used by one
+                # thread/coroutine at a time, so we acquire a lock
+                with self.lock:
+                    conn.begin()
+                    try:
+                        with self._get_cursor_from_connection(conn) as cur:
+                            yield cur
+                        conn.commit()
+                    except:
+                        conn.rollback()
+                        raise
+            else:
+                with self.lock, self._get_cursor_from_connection(conn) as cur:
+                    yield cur
+
+    def batch(self, ops: Iterable[Op]) -> list[Result]:
+        grouped_ops, num_ops = _group_ops(ops)
+        results: list[Result] = [None] * num_ops
+
+        with self._cursor(pipeline=True) as cur:
+            if GetOp in grouped_ops:
+                self._batch_get_ops(
+                    cast(Sequence[tuple[int, GetOp]], grouped_ops[GetOp]), results, cur
+                )
+
+            if SearchOp in grouped_ops:
+                self._batch_search_ops(
+                    cast(Sequence[tuple[int, SearchOp]], grouped_ops[SearchOp]),
+                    results,
+                    cur,
+                )
+
+            if ListNamespacesOp in grouped_ops:
+                self._batch_list_namespaces_ops(
+                    cast(
+                        Sequence[tuple[int, ListNamespacesOp]],
+                        grouped_ops[ListNamespacesOp],
+                    ),
+                    results,
+                    cur,
+                )
+            if PutOp in grouped_ops:
+                self._batch_put_ops(
+                    cast(Sequence[tuple[int, PutOp]], grouped_ops[PutOp]), cur
+                )
+
+        return results
+
+    def _batch_get_ops(
+        self,
+        get_ops: Sequence[tuple[int, GetOp]],
+        results: list[Result],
+        cur: _internal.R,
+    ) -> None:
+        for query, params, namespace, items in self._get_batch_GET_ops_queries(get_ops):
+            cur.execute(query, params)
+            rows = cast(list[Row], cur.fetchall())
+            key_to_row = {row["key"]: row for row in rows}
+            for idx, key in items:
+                row = key_to_row.get(key)
+                if row:
+                    results[idx] = _row_to_item(
+                        namespace, row, loader=self._deserializer
+                    )
+                else:
+                    results[idx] = None
+
+    def _batch_put_ops(
+        self,
+        put_ops: Sequence[tuple[int, PutOp]],
+        cur: _internal.R,
+    ) -> None:
+        queries = self._prepare_batch_PUT_queries(put_ops)
+        for query, params in queries:
+            cur.execute(query, params)
+
+    def _batch_search_ops(
+        self,
+        search_ops: Sequence[tuple[int, SearchOp]],
+        results: list[Result],
+        cur: _internal.R,
+    ) -> None:
+        for (query, params), (idx, _) in zip(
+            self._prepare_batch_search_queries(search_ops), search_ops
+        ):
+            cur.execute(query, params)
+            rows = cast(list[Row], cur.fetchall())
+            results[idx] = [
+                _row_to_search_item(
+                    _decode_ns_bytes(row["prefix"]), row, loader=self._deserializer
+                )
+                for row in rows
+            ]
+
+    def _batch_list_namespaces_ops(
+        self,
+        list_ops: Sequence[tuple[int, ListNamespacesOp]],
+        results: list[Result],
+        cur: _internal.R,
+    ) -> None:
+        for (query, params), (idx, _) in zip(
+            self._get_batch_list_namespaces_queries(list_ops), list_ops
+        ):
+            cur.execute(query, params)
+            rows = cast(list[dict], cur.fetchall())
+            results[idx] = [_decode_ns_bytes(row["truncated_prefix"]) for row in rows]
+
+    async def abatch(self, ops: Iterable[Op]) -> list[Result]:
+        return await asyncio.get_running_loop().run_in_executor(None, self.batch, ops)
+
+    def setup(self) -> None:
+        """Set up the store database.
+
+        This method creates the necessary tables in the MySQL database if they don't
+        already exist and runs database migrations. It MUST be called directly by the user
+        the first time the store is used.
+        """
+
+        def _get_version(cur: _internal.R, table: str) -> int:
+            cur.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS {table} (
+                    v INTEGER PRIMARY KEY
+                )
+            """
+            )
+            cur.execute(f"SELECT v FROM {table} ORDER BY v DESC LIMIT 1")
+            row = cur.fetchone()
+            if row is None:
+                version = -1
+            else:
+                version = row["v"]
+            return version
+
+        with self._cursor() as cur:
+            version = _get_version(cur, table="store_migrations")
+            for v, sql in enumerate(self.MIGRATIONS[version + 1 :], start=version + 1):
+                cur.execute(sql)
+                cur.execute("INSERT INTO store_migrations (v) VALUES (%s)", (v,))
+
+
+class Row(TypedDict):
+    key: str
+    value: Any
+    prefix: str
+    created_at: datetime
+    updated_at: datetime
+
+
+def _namespace_to_text(
+    namespace: tuple[str, ...], handle_wildcards: bool = False
+) -> str:
+    """Convert namespace tuple to text string."""
+    if handle_wildcards:
+        namespace = tuple("%" if val == "*" else val for val in namespace)
+    return ".".join(namespace)
+
+
+def _row_to_item(
+    namespace: tuple[str, ...],
+    row: Row,
+    *,
+    loader: Optional[Callable[[Union[bytes, orjson.Fragment]], dict[str, Any]]] = None,
+) -> Item:
+    """Convert a row from the database into an Item."""
+    loader = loader or _json_loads
+    val = row["value"]
+    return Item(
+        value=val if isinstance(val, dict) else loader(val),
+        key=row["key"],
+        namespace=namespace,
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _row_to_search_item(
+    namespace: tuple[str, ...],
+    row: Row,
+    *,
+    loader: Optional[Callable[[Union[bytes, orjson.Fragment]], dict[str, Any]]] = None,
+) -> SearchItem:
+    """Convert a row from the database into an Item."""
+    loader = loader or _json_loads
+    val = row["value"]
+    score = row.get("score")
+    if score is not None:
+        try:
+            score = float(score)  # type: ignore[arg-type]
+        except ValueError:
+            logger.warning("Invalid score: %s", score)
+            score = None
+    return SearchItem(
+        value=val if isinstance(val, dict) else loader(val),
+        key=row["key"],
+        namespace=namespace,
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+        score=score,
+    )
+
+
+def _group_ops(ops: Iterable[Op]) -> tuple[dict[type, list[tuple[int, Op]]], int]:
+    grouped_ops: dict[type, list[tuple[int, Op]]] = defaultdict(list)
+    tot = 0
+    for idx, op in enumerate(ops):
+        grouped_ops[type(op)].append((idx, op))
+        tot += 1
+    return grouped_ops, tot
+
+
+def _json_loads(content: Union[bytes, orjson.Fragment]) -> Any:
+    if isinstance(content, orjson.Fragment):
+        if hasattr(content, "buf"):
+            content = content.buf
+        else:
+            if isinstance(content.contents, bytes):
+                content = content.contents
+            else:
+                content = content.contents.encode()
+    return orjson.loads(cast(bytes, content))
+
+
+def _decode_ns_bytes(namespace: Union[str, bytes, list]) -> tuple[str, ...]:
+    if isinstance(namespace, list):
+        return tuple(namespace)
+    if isinstance(namespace, bytes):
+        namespace = namespace.decode()[1:]
+    return tuple(namespace.split("."))
+
+
+
+================================================
+FILE: langgraph/store/mysql/py.typed
+================================================
+
+
+
+================================================
+FILE: langgraph/store/mysql/pymysql.py
+================================================
+import urllib.parse
+from contextlib import contextmanager
+from typing import Any, Iterator
+
+import pymysql
+from pymysql.cursors import DictCursor
+from typing_extensions import Self, override
+
+from langgraph.store.mysql.base import BaseSyncMySQLStore
+
+
+class PyMySQLStore(BaseSyncMySQLStore[pymysql.Connection, DictCursor]):
+    @staticmethod
+    def parse_conn_string(conn_string: str) -> dict[str, Any]:
+        parsed = urllib.parse.urlparse(conn_string)
+
+        # In order to provide additional params via the connection string,
+        # we convert the parsed.query to a dict so we can access the values.
+        # This is necessary when using a unix socket, for example.
+        params_as_dict = dict(urllib.parse.parse_qsl(parsed.query))
+
+        return {
+            "host": parsed.hostname,
+            "user": parsed.username,
+            "password": parsed.password or "",
+            "database": parsed.path[1:] or None,
+            "port": parsed.port or 3306,
+            "unix_socket": params_as_dict.get("unix_socket"),
+        }
+
+    @classmethod
+    @contextmanager
+    def from_conn_string(
+        cls,
+        conn_string: str,
+    ) -> Iterator[Self]:
+        """Create a new PyMySQLStore instance from a connection string.
+
+        Args:
+            conn_string (str): The MySQL connection info string.
+
+        Returns:
+            PyMySQLStore: A new PyMySQLStore instance.
+        """
+        with pymysql.connect(
+            **cls.parse_conn_string(conn_string),
+            autocommit=True,
+        ) as conn:
+            yield cls(conn)
+
+    @override
+    @staticmethod
+    def _get_cursor_from_connection(conn: pymysql.Connection) -> DictCursor:
+        return conn.cursor(DictCursor)
+
+

@@ -1,0 +1,5891 @@
+Directory structure:
+└── aws-samples-langgraph-multi-agent/
+    ├── README.md
+    ├── 1a_sample_home_runs.ipynb
+    ├── 1b_sample_home_runs_variant.ipynb
+    ├── 2a_sample_strikeouts.ipynb
+    ├── 2b_sample_strikeouts_variant.ipynb
+    ├── 3a_sample_curveballs.ipynb
+    ├── 3b_sample_curveballs_variant.ipynb
+    ├── CODE_OF_CONDUCT.md
+    ├── CONTRIBUTING.md
+    ├── LICENSE
+    ├── requirements.txt
+    ├── function/
+    │   ├── __init__.py
+    │   └── baseball_lambda.py
+    ├── graphs/
+    │   ├── __init__.py
+    │   ├── execute_graph.py
+    │   └── orchestrate_graph.py
+    ├── images/
+    ├── nodes/
+    │   ├── execute/
+    │   │   ├── __init__.py
+    │   │   ├── execute_node.py
+    │   │   ├── generate_node.py
+    │   │   └── summarize_node.py
+    │   └── orchestrate/
+    │       ├── __init__.py
+    │       ├── execute_graph_node.py
+    │       ├── initialize_node.py
+    │       ├── memorize_node.py
+    │       ├── modify_node.py
+    │       ├── orchestrate_node.py
+    │       ├── retrieve_node.py
+    │       ├── revise_node.py
+    │       └── update_node.py
+    ├── state/
+    │   ├── __init__.py
+    │   ├── create_functions_statsapi.ipynb
+    │   ├── data_dictionary.py
+    │   └── functions.json
+    └── vectordb/
+        ├── __init__.py
+        ├── create_execution_plan_vectordb_entries.ipynb
+        ├── execution_plan.csv
+        └── vectordb.py
+
+================================================
+FILE: README.md
+================================================
+# Multi-Agent Data Analysis Assistant with LangGraph
+
+## Overview
+
+The purpose of this repository is to demonstrate how LangGraph can be used to build a stateless multi-agent workflow to serve as an assistant for data analysis.  This workflow leverages the [pybaseball](https://github.com/jldbc/pybaseball) Python library to extract data which is then used for analysis based on the user's request.
+
+The workflow consists of two agent systems: one for general workflow and planning and another for code generation and execution.  An Agent is fundamentally a language model on a loop until some stopping condition is met, and a Graph is what we use to define the loop. For this reason, "Agent" and "Graph" are used interchangeably in this documentation.
+
+![workflow](images/workflow.drawio.png  "Workflow")
+
+The graphs are organized in a modular manner so that each node serves a specific purpose.
+
+![nodes](images/nodes.drawio.png  "Nodes")
+
+## Sample Usage
+
+The sample notebooks demonstrate three simple use cases as examples of how this system can be used.  
+
+```
+1.  How many home runs did Derek Jeter hit in 2010?
+```
+
+```
+2.  Plot the cumulative sum of strikeouts thrown by Danny Duffy in the 2018 season.
+```
+
+```
+3.  Consider the first week of August 2020 - find 3 pitchers who's curveballs were most similar to Max Scherzer's.
+```
+
+## Getting Started
+1. Clone repository and navigate to the `langgraph-multi-agent` folder 
+2. Update local `env` file with the required environment variables and rename to `.env`
+
+## Running the Jupyter Notebooks
+1. Create and activate a virtual environment
+```
+python3 -m venv venv
+```
+```
+source venv/bin/activate
+```
+2. Install requirements
+```
+pip install -r requirements.txt
+```
+3. Open and execute the sample Jupyter Notebooks in order.  You must ensure that the Jupyter notebook is running a python kernel tied to the virtual environment you have created so that the required libraries will be available.  
+
+The intent of the sample notebooks is to first demonstrate a use case that is unknown to the agent system, and then to demonstrate a slight variation of the same use case after the system has learned the pattern.
+
+## Folder Structure
+
+```
+langgraph-multi-agent
+│   README.md
+│   .gitignore    
+│   requirements.txt   
+│   env  :  Template for creating local .env file  
+│   *_sample_*.ipynb  :  Demonstration of a use case
+│
+└───images
+│   │   workflow.drawio.png  
+│   │   nodes.drawio.png 
+│
+└───graphs
+│   │   __init__.py
+│   │   execute_graph.py : Resposible for generating and executing Python code to execute the plan
+│   │   orchestrate_graph.py : Resposible for general orchestration and plan creation
+│
+└───state
+│   │   __init__.py
+│   │   create_functions_statsapi.ipynb : Helper notebook to persist pybaseball function metadata
+│   │   data_dictionary.py : String representations of the data dictionary for pybaseball functions
+│   │   functions.json : Output from create_functions_statsapi.ipynb that will be read by the agent system
+│
+└───function
+│   │   __init__.py
+│   │   baseball_lambda.py : Entrypoint for the Agent system
+│
+└───nodes
+│   └───execute
+│   │   │   __init__.py
+│   │   │   execute_node.py : Responsible for creating the Execute Node
+│   │   │   generate_node.py : Responsible for creating the Generate Node
+│   │   │   summarize_node.py : Responsible for creating the Summarize Node
+│   │
+│   └───orchestrate
+│   │   │   execute_graph_node.py : Triggers the Execute Graph
+│   │   │   initialize_node.py : Responsible for creating the Initialize Node
+│   │   │   memorize_node.py : Responsible for creating the Memorize Node
+│   │   │   modify_node.py : Responsible for creating the Modify Node
+│   │   │   orchestrate_node.py : Responsible for creating the Orchestrate Node
+│   │   │   retrieve_node.py : Responsible for creating the Retrieve Node
+│   │   │   revise_node.py : Responsible for creating the Revise Node
+│   │   │   update_node.py : Responsible for creating the Update Node
+│
+└───vectordb
+│   │   __init__.py
+│   │   create_execution_plan_vectordb_entries.ipynb : Helper notebook to create or clear execution plans
+│   │   execution_plan.csv : Execution plans are written to disk so that they can be read by vector database
+│   │   vectordb.py : Helper function for creating and retrieving the vector database collection for execution plans
+
+```
+
+
+================================================
+FILE: 1a_sample_home_runs.ipynb
+================================================
+# Jupyter notebook converted to Python script.
+
+# general
+from datetime import datetime
+from dotenv import load_dotenv, find_dotenv
+import os
+
+# custom local libs
+from function import baseball_lambda
+# Output:
+#   /Users/rosclay/Documents/VSCode/langgraph-multi-agent/venv/lib/python3.10/site-packages/langchain_core/_api/beta_decorator.py:87: LangChainBetaWarning: The function `bind_tools` is in beta. It is actively being worked on, so the API may change.
+
+#     warn_beta(
+
+#   Python REPL can execute arbitrary code. Use with caution.
+
+
+# read local .env file
+_ = load_dotenv(find_dotenv())
+
+# set Langsmith project
+today = datetime.now().strftime("%Y%m%d")
+os.environ["LANGCHAIN_PROJECT"] = f"Baseball Homeruns - {today}"
+
+session_id = '2153'
+
+task = 'How many home runs did Derek Jeter hit in 2010?' 
+result = baseball_lambda.execute_workflow(task, session_id)
+print(result)
+# Output:
+#   
+
+#   *** Entered Orchestrate Node ***
+
+#   
+
+#   *** Entered Retrieve Node ***
+
+#   
+
+#   Distance to neareast plan: 0.5264779329299927
+
+#   
+
+#   *** Entered Initialize Node ***
+
+#   
+
+#   Formulating a new plan to solve the task.
+
+#   Collecting documentation for playerid_lookup, statcast_batter
+
+#   
+
+#   *** Entered Update Node ***
+
+#   
+
+#   Updating plan based function documentation
+
+#   Here is a plan to find how many home runs Derek Jeter hit in 2010 using pybaseball:
+
+#   
+
+#   1. Import the required pybaseball libraries:
+
+#   ```python
+
+#   from pybaseball import playerid_lookup, statcast_batter
+
+#   ```
+
+#   
+
+#   2. Look up Derek Jeter's mlbam ID using playerid_lookup:  
+
+#   ```python
+
+#   jeter_id = playerid_lookup('jeter', 'derek')['key_mlbam'].values[0]
+
+#   ```
+
+#   
+
+#   3. Get Derek Jeter's 2010 statcast batting data:
+
+#   ```python 
+
+#   jeter_2010 = statcast_batter('2010-04-01', '2010-10-31', player_id=jeter_id)
+
+#   ```
+
+#   
+
+#   4. Filter the dataframe to only home runs (events == 'home_run'):
+
+#   ```python
+
+#   jeter_2010_hr = jeter_2010[jeter_2010['events'] == 'home_run'] 
+
+#   ```
+
+#   
+
+#   5. Count the number of rows (home runs) in the filtered dataframe:
+
+#   ```python
+
+#   num_hr = len(jeter_2010_hr)
+
+#   print(f"Derek Jeter hit {num_hr} home runs in the 2010 season.")
+
+#   ```
+
+#   
+
+#   Are you satisfied with this plan?
+
+
+task = "use the 2008 season instead"
+result = baseball_lambda.execute_workflow(task, session_id)
+print(result)
+# Output:
+#   
+
+#   *** Entered Orchestrate Node ***
+
+#   
+
+#   *** Entered Revise Node ***
+
+#   
+
+#   Here is the revised plan to find how many home runs Derek Jeter hit in 2008 using pybaseball:
+
+#   
+
+#   1. Import the required pybaseball libraries:
+
+#   ```python
+
+#   from pybaseball import playerid_lookup, statcast_batter
+
+#   ```
+
+#   
+
+#   2. Look up Derek Jeter's mlbam ID using playerid_lookup:
+
+#   ```python
+
+#   jeter_id = playerid_lookup('jeter', 'derek')['key_mlbam'].values[0]
+
+#   ```
+
+#   
+
+#   3. Get Derek Jeter's 2008 statcast batting data:
+
+#   ```python
+
+#   jeter_2008 = statcast_batter('2008-04-01', '2008-10-31', player_id=jeter_id)
+
+#   ```
+
+#   
+
+#   4. Filter the dataframe to only home runs (events == 'home_run'):
+
+#   ```python
+
+#   jeter_2008_hr = jeter_2008[jeter_2008['events'] == 'home_run']
+
+#   ```
+
+#   
+
+#   5. Count the number of rows (home runs) in the filtered dataframe:
+
+#   ```python
+
+#   num_hr = len(jeter_2008_hr)
+
+#   print(f"Derek Jeter hit {num_hr} home runs in the 2008 season.")
+
+#   ```
+
+#   
+
+#   The only changes from the original plan are:
+
+#   - In step 3, changed the start and end dates to cover the 2008 season instead of 2010
+
+#   - In steps 4-5, changed the dataframe name to `jeter_2008` and `jeter_2008_hr` to reflect the 2008 season data
+
+#   - Updated the print statement in step 5 to say "2008 season" instead of "2010 season"
+
+#   
+
+#   Are you satisfied with this plan?
+
+
+task = 'looks good'
+result = baseball_lambda.execute_workflow(task, session_id)
+print(result)
+# Output:
+#   
+
+#   *** Entered Orchestrate Node ***
+
+#   Unknown plan. Executing with Opus
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   # 1. Import the required pybaseball libraries
+
+#   from pybaseball import playerid_lookup, statcast_batter
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   # 2. Look up Derek Jeter's mlbam ID 
+
+#   jeter_id = playerid_lookup('jeter', 'derek')['key_mlbam'].values[0]
+
+#   print(f"Derek Jeter's player ID is: {jeter_id}")
+
+#   
+
+#   Result:
+
+#   Gathering player lookup table. This may take a moment.
+
+#   Derek Jeter's player ID is: 116539
+
+#   
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   # 3. Get Derek Jeter's 2008 statcast batting data
+
+#   jeter_2008 = statcast_batter('2008-04-01', '2008-10-31', player_id=jeter_id)
+
+#   
+
+#   Result:
+
+#   Gathering Player Data
+
+#   
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   # 4. Filter to only home runs
+
+#   jeter_2008_hr = jeter_2008[jeter_2008['events'] == 'home_run']
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   # 5. Count the number of home runs 
+
+#   num_hr = len(jeter_2008_hr)
+
+#   print(f"Derek Jeter hit {num_hr} home runs in the 2008 season.")
+
+#   
+
+#   Result:
+
+#   Derek Jeter hit 11 home runs in the 2008 season.
+
+#   
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Summarize Node ***
+
+#   
+
+#   Derek Jeter hit 11 home runs in the 2008 MLB season.
+
+#   
+
+#   Here is the code that was used to reach this solution:
+
+#   
+
+#   ```python
+
+#   
+
+#   # 1. Import the required pybaseball libraries
+
+#   from pybaseball import playerid_lookup, statcast_batter
+
+#   
+
+#   # 2. Look up Derek Jeter's mlbam ID 
+
+#   jeter_id = playerid_lookup('jeter', 'derek')['key_mlbam'].values[0]
+
+#   print(f"Derek Jeter's player ID is: {jeter_id}")
+
+#   
+
+#   # 3. Get Derek Jeter's 2008 statcast batting data
+
+#   jeter_2008 = statcast_batter('2008-04-01', '2008-10-31', player_id=jeter_id)
+
+#   
+
+#   # 4. Filter to only home runs
+
+#   jeter_2008_hr = jeter_2008[jeter_2008['events'] == 'home_run']
+
+#   
+
+#   # 5. Count the number of home runs 
+
+#   num_hr = len(jeter_2008_hr)
+
+#   print(f"Derek Jeter hit {num_hr} home runs in the 2008 season.")
+
+#   ```
+
+#   
+
+#   Are you satisfied with this result?
+
+
+task = 'yes'
+result = baseball_lambda.execute_workflow(task, session_id)
+print(result)
+# Output:
+#   
+
+#   *** Entered Orchestrate Node ***
+
+#   
+
+#   *** Entered Memorize Node ***
+
+#   
+
+#   Thank you, task has been commited to memory
+
+
+
+
+================================================
+FILE: 1b_sample_home_runs_variant.ipynb
+================================================
+# Jupyter notebook converted to Python script.
+
+# general
+from datetime import datetime
+from dotenv import load_dotenv, find_dotenv
+import os
+
+# custom local libs
+from function import baseball_lambda
+# Output:
+#   /Users/rosclay/Documents/VSCode/langgraph-multi-agent/venv/lib/python3.10/site-packages/langchain_core/_api/beta_decorator.py:87: LangChainBetaWarning: The function `bind_tools` is in beta. It is actively being worked on, so the API may change.
+
+#     warn_beta(
+
+#   Python REPL can execute arbitrary code. Use with caution.
+
+
+# read local .env file
+_ = load_dotenv(find_dotenv()) 
+
+# set Langsmith project
+today = datetime.now().strftime("%Y%m%d")
+os.environ["LANGCHAIN_PROJECT"] = f"Baseball Homeruns - {today}"
+
+session_id = '543108'
+
+task = 'How many doubles did Whit Merrifield hit in 2019?' 
+result = baseball_lambda.execute_workflow(task, session_id)
+print(result)
+# Output:
+#   
+
+#   *** Entered Orchestrate Node ***
+
+#   
+
+#   *** Entered Retrieve Node ***
+
+#   
+
+#   Distance to neareast plan: 0.4730713367462158
+
+#   
+
+#   *** Entered Modify Node ***
+
+#   
+
+#   Modifying nearest plan with User input
+
+#   Here is the updated plan to find how many doubles Whit Merrifield hit in 2019 using pybaseball:
+
+#   
+
+#   1. Import the required pybaseball libraries:
+
+#   ```python
+
+#   from pybaseball import playerid_lookup, statcast_batter
+
+#   ```
+
+#   
+
+#   2. Look up Whit Merrifield's mlbam ID using playerid_lookup:
+
+#   ```python
+
+#   merrifield_id = playerid_lookup('merrifield', 'whit')['key_mlbam'].values[0]
+
+#   ```
+
+#   
+
+#   3. Get Whit Merrifield's 2019 statcast batting data:
+
+#   ```python
+
+#   merrifield_2019 = statcast_batter('2019-03-01', '2019-10-31', player_id=merrifield_id)
+
+#   ```
+
+#   
+
+#   4. Filter the dataframe to only doubles (events == 'double'):
+
+#   ```python
+
+#   merrifield_2019_doubles = merrifield_2019[merrifield_2019['events'] == 'double']
+
+#   ```
+
+#   
+
+#   5. Count the number of rows (doubles) in the filtered dataframe:
+
+#   ```python
+
+#   num_doubles = len(merrifield_2019_doubles)
+
+#   print(f"Whit Merrifield hit {num_doubles} doubles in the 2019 season.")
+
+#   ```
+
+
+task = "looks good"
+result = baseball_lambda.execute_workflow(task, session_id)
+print(result)
+# Output:
+#   
+
+#   *** Entered Orchestrate Node ***
+
+#   Known plan. Executing with Sonnet
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   # Import required libraries
+
+#   from pybaseball import playerid_lookup, statcast_batter
+
+#   
+
+#   # Look up Whit Merrifield's player ID
+
+#   merrifield_id = playerid_lookup('merrifield', 'whit')['key_mlbam'].values[0]
+
+#   print(f"Whit Merrifield's player ID is: {merrifield_id}")
+
+#   
+
+#   Result:
+
+#   Gathering player lookup table. This may take a moment.
+
+#   Whit Merrifield's player ID is: 593160
+
+#   
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   # Get Merrifield's 2019 batting data 
+
+#   merrifield_2019 = statcast_batter('2019-03-01', '2019-10-31', player_id=593160)
+
+#   
+
+#   Result:
+
+#   Gathering Player Data
+
+#   
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   # Filter to only doubles
+
+#   merrifield_2019_doubles = merrifield_2019[merrifield_2019['events'] == 'double']
+
+#   
+
+#   # Count number of doubles
+
+#   num_doubles = len(merrifield_2019_doubles)
+
+#   
+
+#   # Print result
+
+#   print(f"Whit Merrifield hit {num_doubles} doubles in the 2019 season.")
+
+#   
+
+#   Result:
+
+#   Whit Merrifield hit 44 doubles in the 2019 season.
+
+#   
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Summarize Node ***
+
+#   
+
+#   Whit Merrifield hit 44 doubles in the 2019 MLB season.
+
+#   
+
+#   Here is the code that was used to reach this solution:
+
+#   
+
+#   ```python
+
+#   
+
+#   # Import required libraries
+
+#   from pybaseball import playerid_lookup, statcast_batter
+
+#   
+
+#   # Look up Whit Merrifield's player ID
+
+#   merrifield_id = playerid_lookup('merrifield', 'whit')['key_mlbam'].values[0]
+
+#   print(f"Whit Merrifield's player ID is: {merrifield_id}")
+
+#   
+
+#   # Get Merrifield's 2019 batting data 
+
+#   merrifield_2019 = statcast_batter('2019-03-01', '2019-10-31', player_id=593160)
+
+#   
+
+#   # Filter to only doubles
+
+#   merrifield_2019_doubles = merrifield_2019[merrifield_2019['events'] == 'double']
+
+#   
+
+#   # Count number of doubles
+
+#   num_doubles = len(merrifield_2019_doubles)
+
+#   
+
+#   # Print result
+
+#   print(f"Whit Merrifield hit {num_doubles} doubles in the 2019 season.")
+
+#   ```
+
+#   
+
+#   Are you satisfied with this result?
+
+
+task = "yes"
+result = baseball_lambda.execute_workflow(task, session_id)
+print(result)
+# Output:
+#   
+
+#   *** Entered Orchestrate Node ***
+
+#   
+
+#   *** Entered Memorize Node ***
+
+#   
+
+#   Thank you, task has been commited to memory
+
+
+
+
+================================================
+FILE: 2a_sample_strikeouts.ipynb
+================================================
+# Jupyter notebook converted to Python script.
+
+# general
+from datetime import datetime
+from dotenv import load_dotenv, find_dotenv
+import os
+
+# custom local libs
+from function import baseball_lambda
+# Output:
+#   /Users/rosclay/Documents/VSCode/langgraph-multi-agent/venv/lib/python3.10/site-packages/langchain_core/_api/beta_decorator.py:87: LangChainBetaWarning: The function `bind_tools` is in beta. It is actively being worked on, so the API may change.
+
+#     warn_beta(
+
+#   Python REPL can execute arbitrary code. Use with caution.
+
+
+# read local .env file
+_ = load_dotenv(find_dotenv()) 
+
+# set Langsmith project
+today = datetime.now().strftime("%Y%m%d")
+os.environ["LANGCHAIN_PROJECT"] = f"Baseball Strikeouts - {today}"
+
+session_id = '00792'
+
+task = '''Plot the cumulative sum of strikeouts thrown by Danny Duffy in the 2018 season.'''
+result = baseball_lambda.execute_workflow(task, session_id)
+print(result)
+# Output:
+#   
+
+#   *** Entered Orchestrate Node ***
+
+#   
+
+#   *** Entered Retrieve Node ***
+
+#   
+
+#   Distance to neareast plan: 0.5461114645004272
+
+#   
+
+#   *** Entered Initialize Node ***
+
+#   
+
+#   Formulating a new plan to solve the task.
+
+#   Collecting documentation for playerid_lookup, statcast_pitcher
+
+#   
+
+#   *** Entered Update Node ***
+
+#   
+
+#   Updating plan based function documentation
+
+#   The updated plan to plot Danny Duffy's cumulative strikeouts in 2018 is as follows:
+
+#   
+
+#   1. Import the required pybaseball and matplotlib libraries.
+
+#   2. Look up Danny Duffy's mlbam ID using the playerid_lookup function, passing 'duffy' for the last name and 'danny' for the first name.
+
+#   3. Get Danny Duffy's 2018 statcast pitching data using the statcast_pitcher function, passing '2018-01-01' for start_dt, '2018-12-31' for end_dt, and the player ID from step 2.
+
+#   4. Filter the dataframe to only include strikeouts (where the 'events' column is 'strikeout').
+
+#   5. Group the data by game date and calculate the cumulative sum of strikeouts.
+
+#   6. Create a plot of the cumulative strikeouts by game date using matplotlib.
+
+#   
+
+#   Are you satisfied with this plan?
+
+
+task = "First sum strikeouts by date and then calculate a cumulative sum across dates"
+result = baseball_lambda.execute_workflow(task, session_id)
+print(result)
+# Output:
+#   
+
+#   *** Entered Orchestrate Node ***
+
+#   
+
+#   *** Entered Revise Node ***
+
+#   
+
+#   The revised plan looks good. Here is a summary:
+
+#   
+
+#   1. Import the required pybaseball and matplotlib libraries.
+
+#   2. Look up Danny Duffy's MLBAM ID using the playerid_lookup function.
+
+#   3. Get Danny Duffy's 2018 statcast pitching data using the statcast_pitcher function.
+
+#   4. Filter the dataframe to only include strikeouts.
+
+#   5. Group the filtered data by 'game_date' and sum the number of strikeouts for each game.
+
+#   6. Sort the summed strikeouts by 'game_date' in ascending order.
+
+#   7. Calculate the cumulative sum of strikeouts across the sorted game dates.
+
+#   8. Create a line plot of the cumulative strikeouts by game date using matplotlib.
+
+#   9. Add titles and labels to the plot and display it.
+
+#   
+
+#   This revised plan addresses the issue of summing the strikeouts per game date before calculating the cumulative sum, which will provide a more accurate visualization of Duffy's strikeout performance over the 2018 season. Let me know if you have any other feedback or if you would like me to expand on any of the steps further.
+
+#   
+
+#   Are you satisfied with this plan?
+
+
+task = "approved"
+result = baseball_lambda.execute_workflow(task, session_id)
+print(result)
+# Output:
+#   
+
+#   *** Entered Orchestrate Node ***
+
+#   Unknown plan. Executing with Opus
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   import matplotlib.pyplot as plt
+
+#   from pybaseball import playerid_lookup, statcast_pitcher
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   # Look up Danny Duffy's MLBAM ID
+
+#   duffy_id = playerid_lookup('duffy', 'danny')['key_mlbam'].values[0]
+
+#   print(f"Danny Duffy's player ID is: {duffy_id}")
+
+#   
+
+#   Result:
+
+#   Gathering player lookup table. This may take a moment.
+
+#   Danny Duffy's player ID is: 518633
+
+#   
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   # Get Danny Duffy's 2018 statcast pitching data  
+
+#   duffy_2018 = statcast_pitcher('2018-01-01', '2018-12-31', player_id=duffy_id)
+
+#   
+
+#   Result:
+
+#   Gathering Player Data
+
+#   
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   # Filter to only strikeouts
+
+#   duffy_2018_so = duffy_2018[(duffy_2018['events']=='strikeout') | 
+
+#                              (duffy_2018['events']=='strikeout_double_play') |
+
+#                              ((duffy_2018['description']=='called_strike') & (duffy_2018['strike_count']==3))]
+
+#   
+
+#   Result:
+
+#   KeyError('strike_count')
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   print(duffy_2018.columns)
+
+#   
+
+#   Result:
+
+#   Index(['pitch_type', 'game_date', 'release_speed', 'release_pos_x',
+
+#          'release_pos_z', 'player_name', 'batter', 'pitcher', 'events',
+
+#          'description', 'spin_dir', 'spin_rate_deprecated',
+
+#          'break_angle_deprecated', 'break_length_deprecated', 'zone', 'des',
+
+#          'game_type', 'stand', 'p_throws', 'home_team', 'away_team', 'type',
+
+#          'hit_location', 'bb_type', 'balls', 'strikes', 'game_year', 'pfx_x',
+
+#          'pfx_z', 'plate_x', 'plate_z', 'on_3b', 'on_2b', 'on_1b',
+
+#          'outs_when_up', 'inning', 'inning_topbot', 'hc_x', 'hc_y',
+
+#          'tfs_deprecated', 'tfs_zulu_deprecated', 'fielder_2', 'umpire', 'sv_id',
+
+#          'vx0', 'vy0', 'vz0', 'ax', 'ay', 'az', 'sz_top', 'sz_bot',
+
+#          'hit_distance_sc', 'launch_speed', 'launch_angle', 'effective_speed',
+
+#          'release_spin_rate', 'release_extension', 'game_pk', 'pitcher.1',
+
+#          'fielder_2.1', 'fielder_3', 'fielder_4', 'fielder_5', 'fielder_6',
+
+#          'fielder_7', 'fielder_8', 'fielder_9', 'release_pos_y',
+
+#          'estimated_ba_using_speedangle', 'estimated_woba_using_speedangle',
+
+#          'woba_value', 'woba_denom', 'babip_value', 'iso_value',
+
+#          'launch_speed_angle', 'at_bat_number', 'pitch_number', 'pitch_name',
+
+#          'home_score', 'away_score', 'bat_score', 'fld_score', 'post_away_score',
+
+#          'post_home_score', 'post_bat_score', 'post_fld_score',
+
+#          'if_fielding_alignment', 'of_fielding_alignment', 'spin_axis',
+
+#          'delta_home_win_exp', 'delta_run_exp'],
+
+#         dtype='object')
+
+#   
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   # Filter to only strikeouts
+
+#   duffy_2018_so = duffy_2018[(duffy_2018['events']=='strikeout') | 
+
+#                              (duffy_2018['events']=='strikeout_double_play') |
+
+#                              (duffy_2018['description'].str.contains('strikes out'))]
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   # Group by game date and sum strikeouts
+
+#   duffy_2018_so_by_game = duffy_2018_so.groupby('game_date').size().reset_index(name='strikeouts')
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   # Sort by game date  
+
+#   duffy_2018_so_by_game = duffy_2018_so_by_game.sort_values('game_date', ascending=True)
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   # Calculate cumulative sum of strikeouts  
+
+#   duffy_2018_so_by_game['strikeouts_cumsum'] = duffy_2018_so_by_game['strikeouts'].cumsum()
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   # Create plot
+
+#   plt.figure(figsize=(12,6))
+
+#   plt.plot(duffy_2018_so_by_game['game_date'], duffy_2018_so_by_game['strikeouts_cumsum'])
+
+#   plt.title('Danny Duffy Cumulative Strikeouts in 2018') 
+
+#   plt.xlabel('Game Date')
+
+#   plt.ylabel('Cumulative Strikeouts')
+
+#   plt.show()
+
+#   
+
+#   print("The plot shows Danny Duffy's cumulative strikeout total over the course of the 2018 season. Each point represents a game, and the y-value is the total number of strikeouts Duffy had recorded up to that point in the season. You can see his strikeout total increasing from 0 at the start of the season up to his season-ending total.")
+
+#   <Figure size 1200x600 with 1 Axes>
+#   
+
+#   Result:
+
+#   The plot shows Danny Duffy's cumulative strikeout total over the course of the 2018 season. Each point represents a game, and the y-value is the total number of strikeouts Duffy had recorded up to that point in the season. You can see his strikeout total increasing from 0 at the start of the season up to his season-ending total.
+
+#   
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Summarize Node ***
+
+#   
+
+#   The plot shows Danny Duffy's cumulative strikeout total over the course of the 2018 season. Each point represents a game, and the y-value is the total number of strikeouts Duffy had recorded up to that point in the season. You can see his strikeout total increasing from 0 at the start of the season up to his season-ending total.
+
+#   
+
+#   Here is the code that was used to reach this solution:
+
+#   
+
+#   ```python
+
+#   
+
+#   import matplotlib.pyplot as plt
+
+#   from pybaseball import playerid_lookup, statcast_pitcher
+
+#   
+
+#   # Look up Danny Duffy's MLBAM ID
+
+#   duffy_id = playerid_lookup('duffy', 'danny')['key_mlbam'].values[0]
+
+#   print(f"Danny Duffy's player ID is: {duffy_id}")
+
+#   
+
+#   # Get Danny Duffy's 2018 statcast pitching data  
+
+#   duffy_2018 = statcast_pitcher('2018-01-01', '2018-12-31', player_id=duffy_id)
+
+#   
+
+#   print(duffy_2018.columns)
+
+#   
+
+#   # Filter to only strikeouts
+
+#   duffy_2018_so = duffy_2018[(duffy_2018['events']=='strikeout') | 
+
+#                              (duffy_2018['events']=='strikeout_double_play') |
+
+#                              (duffy_2018['description'].str.contains('strikes out'))]
+
+#   
+
+#   # Group by game date and sum strikeouts
+
+#   duffy_2018_so_by_game = duffy_2018_so.groupby('game_date').size().reset_index(name='strikeouts')
+
+#   
+
+#   # Sort by game date  
+
+#   duffy_2018_so_by_game = duffy_2018_so_by_game.sort_values('game_date', ascending=True)
+
+#   
+
+#   # Calculate cumulative sum of strikeouts  
+
+#   duffy_2018_so_by_game['strikeouts_cumsum'] = duffy_2018_so_by_game['strikeouts'].cumsum()
+
+#   
+
+#   # Create plot
+
+#   plt.figure(figsize=(12,6))
+
+#   plt.plot(duffy_2018_so_by_game['game_date'], duffy_2018_so_by_game['strikeouts_cumsum'])
+
+#   plt.title('Danny Duffy Cumulative Strikeouts in 2018') 
+
+#   plt.xlabel('Game Date')
+
+#   plt.ylabel('Cumulative Strikeouts')
+
+#   plt.show()
+
+#   
+
+#   print("The plot shows Danny Duffy's cumulative strikeout total over the course of the 2018 season. Each point represents a game, and the y-value is the total number of strikeouts Duffy had recorded up to that point in the season. You can see his strikeout total increasing from 0 at the start of the season up to his season-ending total.")
+
+#   ```
+
+#   
+
+#   Are you satisfied with this result?
+
+
+task = "yes"
+result = baseball_lambda.execute_workflow(task, session_id)
+print(result)
+# Output:
+#   
+
+#   *** Entered Orchestrate Node ***
+
+#   
+
+#   *** Entered Memorize Node ***
+
+#   
+
+#   Thank you, task has been commited to memory
+
+
+
+
+================================================
+FILE: 2b_sample_strikeouts_variant.ipynb
+================================================
+# Jupyter notebook converted to Python script.
+
+# general
+from datetime import datetime
+from dotenv import load_dotenv, find_dotenv
+import os
+
+# custom local libs
+from function import baseball_lambda
+# Output:
+#   /Users/rosclay/Documents/VSCode/langgraph-multi-agent/venv/lib/python3.10/site-packages/langchain_core/_api/beta_decorator.py:87: LangChainBetaWarning: The function `bind_tools` is in beta. It is actively being worked on, so the API may change.
+
+#     warn_beta(
+
+#   Python REPL can execute arbitrary code. Use with caution.
+
+
+# read local .env file
+_ = load_dotenv(find_dotenv()) 
+
+# set Langsmith project
+today = datetime.now().strftime("%Y%m%d")
+os.environ["LANGCHAIN_PROJECT"] = f"Baseball Walks - {today}"
+
+session_id = '17330'
+
+task = "plot the cumulative sum of total walks thrown by Shane Bieber in the 2020 season."
+result = baseball_lambda.execute_workflow(task, session_id)
+print(result)
+# Output:
+#   
+
+#   *** Entered Orchestrate Node ***
+
+#   
+
+#   *** Entered Retrieve Node ***
+
+#   
+
+#   Distance to neareast plan: 0.47105205059051514
+
+#   
+
+#   *** Entered Modify Node ***
+
+#   
+
+#   Modifying nearest plan with User input
+
+#   1. Import the required pybaseball and matplotlib libraries.
+
+#   2. Look up Shane Bieber's MLBAM ID using the playerid_lookup function.
+
+#   3. Get Shane Bieber's 2020 statcast pitching data using the statcast_pitcher function. 
+
+#   4. Filter the dataframe to only include walks.
+
+#   5. Group the filtered data by 'game_date' and sum the number of walks for each game.
+
+#   6. Sort the summed walks by 'game_date' in ascending order.
+
+#   7. Calculate the cumulative sum of walks across the sorted game dates.
+
+#   8. Create a line plot of the cumulative walks by game date using matplotlib.
+
+#   9. Add titles and labels to the plot and display it.
+
+
+task = "looks good"
+result = baseball_lambda.execute_workflow(task, session_id)
+print(result)
+# Output:
+#   
+
+#   *** Entered Orchestrate Node ***
+
+#   Known plan. Executing with Sonnet
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   # Step 1: Import required libraries
+
+#   import matplotlib.pyplot as plt
+
+#   from pybaseball import playerid_lookup, statcast_pitcher
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   # Step 2: Look up Shane Bieber's player ID
+
+#   bieber_id = playerid_lookup('bieber', 'shane')['key_mlbam'].values[0]
+
+#   print(f"Shane Bieber's player ID is: {bieber_id}")
+
+#   
+
+#   Result:
+
+#   Gathering player lookup table. This may take a moment.
+
+#   Shane Bieber's player ID is: 669456
+
+#   
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   # Step 3: Get Bieber's 2020 statcast data
+
+#   bieber_2020 = statcast_pitcher('2020-01-01', '2020-12-31', player_id=669456)
+
+#   
+
+#   Result:
+
+#   Gathering Player Data
+
+#   
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   # Step 4: Filter to only walks 
+
+#   bieber_2020_walks = bieber_2020[bieber_2020['events']=='walk']
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   # Step 5: Group by game date and sum walks
+
+#   bieber_walks_by_game = bieber_2020_walks.groupby('game_date').size().reset_index(name='walks')
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   # Step 6: Sort walks by game date
+
+#   bieber_walks_by_game = bieber_walks_by_game.sort_values('game_date')
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   # Step 7: Calculate cumulative sum of walks
+
+#   bieber_walks_by_game['walks_cumsum'] = bieber_walks_by_game['walks'].cumsum()
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   # Step 8: Create plot 
+
+#   plt.figure(figsize=(12,6))
+
+#   plt.plot(bieber_walks_by_game['game_date'], bieber_walks_by_game['walks_cumsum'])
+
+#   plt.title('Shane Bieber Cumulative Walks in 2020')
+
+#   plt.xlabel('Game Date') 
+
+#   plt.ylabel('Cumulative Walks')
+
+#   plt.show()
+
+#   <Figure size 1200x600 with 1 Axes>
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   # Step 9: Describe results
+
+#   print("The plot shows Shane Bieber's cumulative walk total over the course of the 2020 season. Each point represents a game, and the y-value is the total number of walks Bieber had issued up to that point in the season. You can see his walk total increasing from 0 at the start of the season up to his season-ending total.")
+
+#   
+
+#   Result:
+
+#   The plot shows Shane Bieber's cumulative walk total over the course of the 2020 season. Each point represents a game, and the y-value is the total number of walks Bieber had issued up to that point in the season. You can see his walk total increasing from 0 at the start of the season up to his season-ending total.
+
+#   
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Summarize Node ***
+
+#   
+
+#   The plot shows Shane Bieber's cumulative walk total over the course of the 2020 season. Each point represents a game, and the y-value is the total number of walks Bieber had issued up to that point in the season. The plot shows his walk total increasing from 0 at the start of the season up to his season-ending total.
+
+#   
+
+#   Here is the code that was used to reach this solution:
+
+#   
+
+#   ```python
+
+#   
+
+#   # Step 1: Import required libraries
+
+#   import matplotlib.pyplot as plt
+
+#   from pybaseball import playerid_lookup, statcast_pitcher
+
+#   
+
+#   # Step 2: Look up Shane Bieber's player ID
+
+#   bieber_id = playerid_lookup('bieber', 'shane')['key_mlbam'].values[0]
+
+#   print(f"Shane Bieber's player ID is: {bieber_id}")
+
+#   
+
+#   # Step 3: Get Bieber's 2020 statcast data
+
+#   bieber_2020 = statcast_pitcher('2020-01-01', '2020-12-31', player_id=669456)
+
+#   
+
+#   # Step 4: Filter to only walks 
+
+#   bieber_2020_walks = bieber_2020[bieber_2020['events']=='walk']
+
+#   
+
+#   # Step 5: Group by game date and sum walks
+
+#   bieber_walks_by_game = bieber_2020_walks.groupby('game_date').size().reset_index(name='walks')
+
+#   
+
+#   # Step 6: Sort walks by game date
+
+#   bieber_walks_by_game = bieber_walks_by_game.sort_values('game_date')
+
+#   
+
+#   # Step 7: Calculate cumulative sum of walks
+
+#   bieber_walks_by_game['walks_cumsum'] = bieber_walks_by_game['walks'].cumsum()
+
+#   
+
+#   # Step 8: Create plot 
+
+#   plt.figure(figsize=(12,6))
+
+#   plt.plot(bieber_walks_by_game['game_date'], bieber_walks_by_game['walks_cumsum'])
+
+#   plt.title('Shane Bieber Cumulative Walks in 2020')
+
+#   plt.xlabel('Game Date') 
+
+#   plt.ylabel('Cumulative Walks')
+
+#   plt.show()
+
+#   
+
+#   # Step 9: Describe results
+
+#   print("The plot shows Shane Bieber's cumulative walk total over the course of the 2020 season. Each point represents a game, and the y-value is the total number of walks Bieber had issued up to that point in the season. You can see his walk total increasing from 0 at the start of the season up to his season-ending total.")
+
+#   ```
+
+#   
+
+#   Are you satisfied with this result?
+
+
+task = "yes, thanks"
+result = baseball_lambda.execute_workflow(task, session_id)
+print(result)
+# Output:
+#   
+
+#   *** Entered Orchestrate Node ***
+
+#   
+
+#   *** Entered Memorize Node ***
+
+#   
+
+#   Thank you, task has been commited to memory
+
+
+
+
+================================================
+FILE: 3a_sample_curveballs.ipynb
+================================================
+# Jupyter notebook converted to Python script.
+
+# general
+from datetime import datetime
+from dotenv import load_dotenv, find_dotenv
+import os
+
+# custom local libs
+from function import baseball_lambda
+# Output:
+#   /Users/rosclay/Documents/VSCode/langgraph-multi-agent/venv/lib/python3.10/site-packages/langchain_core/_api/beta_decorator.py:87: LangChainBetaWarning: The function `bind_tools` is in beta. It is actively being worked on, so the API may change.
+
+#     warn_beta(
+
+#   Python REPL can execute arbitrary code. Use with caution.
+
+
+# read local .env file
+_ = load_dotenv(find_dotenv()) 
+
+# set Langsmith project
+today = datetime.now().strftime("%Y%m%d")
+os.environ["LANGCHAIN_PROJECT"] = f"Baseball Curveballs - {today}"
+
+session_id = '2110956'
+
+task =  "Consider the first week of August 2020 - find the names of 3 pitchers who's curveballs were most similar to Max Scherzer's."
+result = baseball_lambda.execute_workflow(task, session_id)
+print(result)
+# Output:
+#   
+
+#   *** Entered Orchestrate Node ***
+
+#   
+
+#   *** Entered Retrieve Node ***
+
+#   
+
+#   Distance to neareast plan: 0.6246547698974609
+
+#   
+
+#   *** Entered Initialize Node ***
+
+#   
+
+#   Formulating a new plan to solve the task.
+
+#   Collecting documentation for statcast, statcast_pitcher, playerid_lookup, playerid_reverse_lookup
+
+#   
+
+#   *** Entered Update Node ***
+
+#   
+
+#   Updating plan based function documentation
+
+#   1. Use playerid_lookup to find Max Scherzer's MLBAM player ID 
+
+#   2. Use statcast_pitcher with Scherzer's player ID to get his curveball data for the first week of August 2020
+
+#   3. Calculate the average velocity, spin rate, and movement for Scherzer's curveballs 
+
+#   4. Use statcast to get pitching data for all other pitchers in that same time period
+
+#   5. Filter the results to only curveballs
+
+#   6. For each pitcher, calculate the average velocity, spin rate, and movement of their curveballs
+
+#   7. Calculate the difference between each pitcher's averages and Scherzer's averages
+
+#   8. Sum the absolute differences to get a "similarity score" - the lower the score, the more similar to Scherzer
+
+#   9. Find the 3 pitchers with the lowest similarity scores 
+
+#   10. Use playerid_reverse_lookup to get the names of those 3 pitchers from their player IDs
+
+#   
+
+#   Are you satisfied with this plan?
+
+
+task = """
+make sure the plan follows this general flow:
+1) create an average vector for each pitcher's curveball.
+2) Train a knn model on this data
+3) Use this model to find the 3 pitchers with the most similar curveball to Max Scherzer
+"""
+result = baseball_lambda.execute_workflow(task, session_id)
+print(result)
+# Output:
+#   
+
+#   *** Entered Orchestrate Node ***
+
+#   
+
+#   *** Entered Revise Node ***
+
+#   
+
+#   The revised plan to find the 3 pitchers most similar to Max Scherzer's curveball in the first week of August 2020 is as follows:
+
+#   
+
+#   1. Use playerid_lookup to find Max Scherzer's MLBAM player ID.
+
+#   
+
+#   2. Use statcast_pitcher with the following parameters to get Scherzer's curveball data for the first week of August 2020:
+
+#      - start_dt = '2020-08-01'
+
+#      - end_dt = '2020-08-07'
+
+#      - player_id = Max Scherzer's MLBAM ID
+
+#   
+
+#   3. From the returned data, calculate the average release_speed, release_spin_rate, pfx_x, and pfx_z for Scherzer's curveballs. Store these 4 values in a "Scherzer curveball average vector".
+
+#   
+
+#   4. Use statcast with the following parameters to get pitching data for all pitchers in the first week of August 2020:
+
+#      - start_dt = '2020-08-01'
+
+#      - end_dt = '2020-08-07'
+
+#   
+
+#   5. Filter the results to only pitches where pitch_type is 'CU' for curveball.
+
+#   
+
+#   6. Group the data by pitcher (using their MLBAM ID). For each pitcher, calculate their average release_speed, release_spin_rate, pfx_x, and pfx_z on curveballs. Store these in "pitcher curveball average vectors".
+
+#   
+
+#   7. Combine the "pitcher curveball average vectors" with the "Scherzer curveball average vector" into one dataset.
+
+#   
+
+#   8. Scale the data.
+
+#   
+
+#   9. Fit a KNN model on the data with k=4 (to find the 3 most similar pitchers plus Scherzer himself).
+
+#   
+
+#   10. Use the trained model to find the 3 nearest neighbors to the "Scherzer curveball average vector".
+
+#   
+
+#   11. Use playerid_reverse_lookup with the following parameters to get the names of those 3 most similar pitchers:
+
+#       - player_ids = the MLBAM IDs of the 3 most similar pitchers
+
+#       - key_type = 'mlbam'
+
+#   
+
+#   Are you satisfied with this plan?
+
+
+task = 'approved'
+result = baseball_lambda.execute_workflow(task, session_id)
+print(result)
+# Output:
+#   
+
+#   *** Entered Orchestrate Node ***
+
+#   Unknown plan. Executing with Opus
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   from pybaseball import playerid_lookup, statcast_pitcher, statcast
+
+#   import pandas as pd
+
+#   from sklearn.preprocessing import StandardScaler
+
+#   from sklearn.neighbors import NearestNeighbors
+
+#   
+
+#   # Step 1: Find Max Scherzer's player ID
+
+#   scherzer_id = playerid_lookup('scherzer', 'max')['key_mlbam'].values[0]
+
+#   print(f"Max Scherzer's player ID is: {scherzer_id}")
+
+#   
+
+#   Result:
+
+#   Gathering player lookup table. This may take a moment.
+
+#   Max Scherzer's player ID is: 453286
+
+#   
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   # Step 2: Get Scherzer's curveball data for first week of August 2020
+
+#   scherzer_data = statcast_pitcher('2020-08-01', '2020-08-07', player_id=scherzer_id)
+
+#   
+
+#   # Filter to only curveballs
+
+#   scherzer_curves = scherzer_data[scherzer_data['pitch_type'] == 'CU']
+
+#   print(f"Retrieved {len(scherzer_curves)} Scherzer curveballs from 2020-08-01 to 2020-08-07")
+
+#   
+
+#   Result:
+
+#   Gathering Player Data
+
+#   Retrieved 3 Scherzer curveballs from 2020-08-01 to 2020-08-07
+
+#   
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   # Step 3: Calculate Scherzer's average curveball metrics
+
+#   scherzer_avg_speed = scherzer_curves['release_speed'].mean()
+
+#   scherzer_avg_spin = scherzer_curves['release_spin_rate'].mean()
+
+#   scherzer_avg_pfx_x = scherzer_curves['pfx_x'].mean()
+
+#   scherzer_avg_pfx_z = scherzer_curves['pfx_z'].mean()
+
+#   
+
+#   print(f"Scherzer's average curveball metrics:")
+
+#   print(f"Speed: {scherzer_avg_speed:.2f} mph") 
+
+#   print(f"Spin Rate: {scherzer_avg_spin:.2f} rpm")
+
+#   print(f"Horizontal Break: {scherzer_avg_pfx_x:.2f} inches")
+
+#   print(f"Vertical Break: {scherzer_avg_pfx_z:.2f} inches")
+
+#   
+
+#   Result:
+
+#   Scherzer's average curveball metrics:
+
+#   Speed: 75.43 mph
+
+#   Spin Rate: 2861.67 rpm
+
+#   Horizontal Break: 1.46 inches
+
+#   Vertical Break: -0.76 inches
+
+#   
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#     0%|          | 0/7 [00:00<?, ?it/s]
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   # Step 4: Get pitching data for all pitchers in first week of August 2020
+
+#   data = statcast('2020-08-01', '2020-08-07')
+
+#   print(f"Retrieved {len(data)} pitches from 2020-08-01 to 2020-08-07")
+
+#   100%|██████████| 7/7 [00:13<00:00,  1.92s/it]
+
+#   
+
+#   Result:
+
+#   This is a large query, it may take a moment to complete
+
+#   Retrieved 24877 pitches from 2020-08-01 to 2020-08-07
+
+#   
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   # Step 5: Filter to only curveballs 
+
+#   curves = data[data['pitch_type'] == 'CU']
+
+#   
+
+#   # Step 6: Group by pitcher and calculate average metrics
+
+#   avg_curves = curves.groupby('pitcher').agg({'release_speed': 'mean',
+
+#                                               'release_spin_rate': 'mean',
+
+#                                               'pfx_x': 'mean',
+
+#                                               'pfx_z': 'mean'}).reset_index()
+
+#   
+
+#   print(f"Calculated average curveball metrics for {len(avg_curves)} pitchers")
+
+#   
+
+#   Result:
+
+#   Calculated average curveball metrics for 215 pitchers
+
+#   
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   # Step 7: Combine Scherzer's metrics with all pitcher metrics  
+
+#   scherzer_avg_df = pd.DataFrame({'pitcher': scherzer_id,
+
+#                                   'release_speed': scherzer_avg_speed,
+
+#                                   'release_spin_rate': scherzer_avg_spin,
+
+#                                   'pfx_x': scherzer_avg_pfx_x,
+
+#                                   'pfx_z': scherzer_avg_pfx_z}, index=[0])
+
+#   
+
+#   combined_data = pd.concat([avg_curves, scherzer_avg_df])
+
+#   print(f"Combined data has {len(combined_data)} rows")
+
+#   
+
+#   Result:
+
+#   Combined data has 216 rows
+
+#   
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   # Step 8: Scale the data
+
+#   scaler = StandardScaler()
+
+#   scaled_data = scaler.fit_transform(combined_data.drop('pitcher', axis=1)) 
+
+#   print("Data scaled successfully")
+
+#   
+
+#   Result:
+
+#   Data scaled successfully
+
+#   
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   # Step 9: Fit KNN model
+
+#   knn = NearestNeighbors(n_neighbors=4)
+
+#   knn.fit(scaled_data)
+
+#   print("KNN model fit successfully")
+
+#   
+
+#   Result:
+
+#   KNN model fit successfully
+
+#   
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   from pybaseball import playerid_reverse_lookup
+
+#   
+
+#   # Get Scherzer's scaled metrics
+
+#   scherzer_scaled = scaler.transform(scherzer_avg_df.drop('pitcher', axis=1))
+
+#   
+
+#   # Step 10: Find 3 nearest neighbors to Scherzer
+
+#   _, indices = knn.kneighbors(scherzer_scaled)
+
+#   
+
+#   # Get player IDs of 3 most similar excluding Scherzer
+
+#   similar_ids = combined_data['pitcher'].iloc[indices[0][1:]]
+
+#   
+
+#   # Step 11: Look up names of those players
+
+#   similar_names = playerid_reverse_lookup(similar_ids, key_type='mlbam')
+
+#   
+
+#   print("The 3 pitchers with the most similar curveballs to Max Scherzer in early August 2020 were:")
+
+#   for _, row in similar_names.iterrows():
+
+#       print(f"{row['name_first']} {row['name_last']}")
+
+#   
+
+#   Result:
+
+#   The 3 pitchers with the most similar curveballs to Max Scherzer in early August 2020 were:
+
+#   adam plutko
+
+#   jonathan holder
+
+#   max scherzer
+
+#   
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   from pybaseball import playerid_reverse_lookup
+
+#   
+
+#   # Get Scherzer's scaled metrics
+
+#   scherzer_scaled = scaler.transform(scherzer_avg_df.drop('pitcher', axis=1))
+
+#   
+
+#   # Step 10: Find 3 nearest neighbors to Scherzer
+
+#   _, indices = knn.kneighbors(scherzer_scaled)
+
+#   
+
+#   # Get player IDs of 3 most similar excluding Scherzer
+
+#   similar_ids = combined_data['pitcher'].iloc[indices[0][1:]]
+
+#   
+
+#   # Step 11: Look up names of those players
+
+#   similar_names = playerid_reverse_lookup(similar_ids, key_type='mlbam')
+
+#   
+
+#   print("The 3 pitchers with the most similar curveballs to Max Scherzer in early August 2020 were:")
+
+#   for _, row in similar_names.iterrows():
+
+#       print(f"{row.name_first} {row.name_last}")
+
+#   
+
+#   Result:
+
+#   The 3 pitchers with the most similar curveballs to Max Scherzer in early August 2020 were:
+
+#   adam plutko
+
+#   jonathan holder
+
+#   max scherzer
+
+#   
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   from pybaseball import playerid_reverse_lookup
+
+#   
+
+#   # Get Scherzer's scaled metrics
+
+#   scherzer_scaled = scaler.transform(scherzer_avg_df.drop('pitcher', axis=1))
+
+#   
+
+#   # Step 10: Find 3 nearest neighbors to Scherzer 
+
+#   _, indices = knn.kneighbors(scherzer_scaled)
+
+#   
+
+#   # Get player IDs of 3 most similar excluding Scherzer
+
+#   similar_ids = combined_data['pitcher'].iloc[indices[0][1:]]
+
+#   
+
+#   # Step 11: Look up names of those players
+
+#   similar_names = playerid_reverse_lookup(similar_ids, key_type='mlbam')
+
+#   
+
+#   print("The 3 pitchers with the most similar curveballs to Max Scherzer in early August 2020 were:")
+
+#   for _, row in similar_names.iterrows():
+
+#       print(f"{row['name_first']} {row['name_last']}")
+
+#   
+
+#   Result:
+
+#   The 3 pitchers with the most similar curveballs to Max Scherzer in early August 2020 were:
+
+#   adam plutko
+
+#   jonathan holder
+
+#   max scherzer
+
+#   
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Summarize Node ***
+
+#   
+
+#   The 3 pitchers with the most similar curveballs to Max Scherzer in the first week of August 2020 were Adam Plutko, Jonathan Holder, and Max Scherzer himself.
+
+#   
+
+#   Here is the code that was used to reach this solution:
+
+#   
+
+#   ```python
+
+#   
+
+#   from pybaseball import playerid_lookup, statcast_pitcher, statcast
+
+#   import pandas as pd
+
+#   from sklearn.preprocessing import StandardScaler
+
+#   from sklearn.neighbors import NearestNeighbors
+
+#   
+
+#   # Step 1: Find Max Scherzer's player ID
+
+#   scherzer_id = playerid_lookup('scherzer', 'max')['key_mlbam'].values[0]
+
+#   print(f"Max Scherzer's player ID is: {scherzer_id}")
+
+#   
+
+#   # Step 2: Get Scherzer's curveball data for first week of August 2020
+
+#   scherzer_data = statcast_pitcher('2020-08-01', '2020-08-07', player_id=scherzer_id)
+
+#   
+
+#   # Filter to only curveballs
+
+#   scherzer_curves = scherzer_data[scherzer_data['pitch_type'] == 'CU']
+
+#   print(f"Retrieved {len(scherzer_curves)} Scherzer curveballs from 2020-08-01 to 2020-08-07")
+
+#   
+
+#   # Step 3: Calculate Scherzer's average curveball metrics
+
+#   scherzer_avg_speed = scherzer_curves['release_speed'].mean()
+
+#   scherzer_avg_spin = scherzer_curves['release_spin_rate'].mean()
+
+#   scherzer_avg_pfx_x = scherzer_curves['pfx_x'].mean()
+
+#   scherzer_avg_pfx_z = scherzer_curves['pfx_z'].mean()
+
+#   
+
+#   print(f"Scherzer's average curveball metrics:")
+
+#   print(f"Speed: {scherzer_avg_speed:.2f} mph") 
+
+#   print(f"Spin Rate: {scherzer_avg_spin:.2f} rpm")
+
+#   print(f"Horizontal Break: {scherzer_avg_pfx_x:.2f} inches")
+
+#   print(f"Vertical Break: {scherzer_avg_pfx_z:.2f} inches")
+
+#   
+
+#   # Step 4: Get pitching data for all pitchers in first week of August 2020
+
+#   data = statcast('2020-08-01', '2020-08-07')
+
+#   print(f"Retrieved {len(data)} pitches from 2020-08-01 to 2020-08-07")
+
+#   
+
+#   # Step 5: Filter to only curveballs 
+
+#   curves = data[data['pitch_type'] == 'CU']
+
+#   
+
+#   # Step 6: Group by pitcher and calculate average metrics
+
+#   avg_curves = curves.groupby('pitcher').agg({'release_speed': 'mean',
+
+#                                               'release_spin_rate': 'mean',
+
+#                                               'pfx_x': 'mean',
+
+#                                               'pfx_z': 'mean'}).reset_index()
+
+#   
+
+#   print(f"Calculated average curveball metrics for {len(avg_curves)} pitchers")
+
+#   
+
+#   # Step 7: Combine Scherzer's metrics with all pitcher metrics  
+
+#   scherzer_avg_df = pd.DataFrame({'pitcher': scherzer_id,
+
+#                                   'release_speed': scherzer_avg_speed,
+
+#                                   'release_spin_rate': scherzer_avg_spin,
+
+#                                   'pfx_x': scherzer_avg_pfx_x,
+
+#                                   'pfx_z': scherzer_avg_pfx_z}, index=[0])
+
+#   
+
+#   combined_data = pd.concat([avg_curves, scherzer_avg_df])
+
+#   print(f"Combined data has {len(combined_data)} rows")
+
+#   
+
+#   # Step 8: Scale the data
+
+#   scaler = StandardScaler()
+
+#   scaled_data = scaler.fit_transform(combined_data.drop('pitcher', axis=1)) 
+
+#   print("Data scaled successfully")
+
+#   
+
+#   # Step 9: Fit KNN model
+
+#   knn = NearestNeighbors(n_neighbors=4)
+
+#   knn.fit(scaled_data)
+
+#   print("KNN model fit successfully")
+
+#   
+
+#   from pybaseball import playerid_reverse_lookup
+
+#   
+
+#   # Get Scherzer's scaled metrics
+
+#   scherzer_scaled = scaler.transform(scherzer_avg_df.drop('pitcher', axis=1))
+
+#   
+
+#   # Step 10: Find 3 nearest neighbors to Scherzer
+
+#   _, indices = knn.kneighbors(scherzer_scaled)
+
+#   
+
+#   # Get player IDs of 3 most similar excluding Scherzer
+
+#   similar_ids = combined_data['pitcher'].iloc[indices[0][1:]]
+
+#   
+
+#   # Step 11: Look up names of those players
+
+#   similar_names = playerid_reverse_lookup(similar_ids, key_type='mlbam')
+
+#   
+
+#   print("The 3 pitchers with the most similar curveballs to Max Scherzer in early August 2020 were:")
+
+#   for _, row in similar_names.iterrows():
+
+#       print(f"{row['name_first']} {row['name_last']}")
+
+#   
+
+#   from pybaseball import playerid_reverse_lookup
+
+#   
+
+#   # Get Scherzer's scaled metrics
+
+#   scherzer_scaled = scaler.transform(scherzer_avg_df.drop('pitcher', axis=1))
+
+#   
+
+#   # Step 10: Find 3 nearest neighbors to Scherzer
+
+#   _, indices = knn.kneighbors(scherzer_scaled)
+
+#   
+
+#   # Get player IDs of 3 most similar excluding Scherzer
+
+#   similar_ids = combined_data['pitcher'].iloc[indices[0][1:]]
+
+#   
+
+#   # Step 11: Look up names of those players
+
+#   similar_names = playerid_reverse_lookup(similar_ids, key_type='mlbam')
+
+#   
+
+#   print("The 3 pitchers with the most similar curveballs to Max Scherzer in early August 2020 were:")
+
+#   for _, row in similar_names.iterrows():
+
+#       print(f"{row.name_first} {row.name_last}")
+
+#   
+
+#   from pybaseball import playerid_reverse_lookup
+
+#   
+
+#   # Get Scherzer's scaled metrics
+
+#   scherzer_scaled = scaler.transform(scherzer_avg_df.drop('pitcher', axis=1))
+
+#   
+
+#   # Step 10: Find 3 nearest neighbors to Scherzer 
+
+#   _, indices = knn.kneighbors(scherzer_scaled)
+
+#   
+
+#   # Get player IDs of 3 most similar excluding Scherzer
+
+#   similar_ids = combined_data['pitcher'].iloc[indices[0][1:]]
+
+#   
+
+#   # Step 11: Look up names of those players
+
+#   similar_names = playerid_reverse_lookup(similar_ids, key_type='mlbam')
+
+#   
+
+#   print("The 3 pitchers with the most similar curveballs to Max Scherzer in early August 2020 were:")
+
+#   for _, row in similar_names.iterrows():
+
+#       print(f"{row['name_first']} {row['name_last']}")
+
+#   ```
+
+#   
+
+#   Are you satisfied with this result?
+
+
+task = 'yes'
+result = baseball_lambda.execute_workflow(task, session_id)
+print(result)
+# Output:
+#   
+
+#   *** Entered Orchestrate Node ***
+
+#   
+
+#   *** Entered Memorize Node ***
+
+#   
+
+#   Thank you, task has been commited to memory
+
+
+
+
+================================================
+FILE: 3b_sample_curveballs_variant.ipynb
+================================================
+# Jupyter notebook converted to Python script.
+
+# general
+from datetime import datetime
+from dotenv import load_dotenv, find_dotenv
+import os
+
+# custom local libs
+from function import baseball_lambda
+# Output:
+#   /Users/rosclay/Documents/VSCode/langgraph-multi-agent/venv/lib/python3.10/site-packages/langchain_core/_api/beta_decorator.py:87: LangChainBetaWarning: The function `bind_tools` is in beta. It is actively being worked on, so the API may change.
+
+#     warn_beta(
+
+#   Python REPL can execute arbitrary code. Use with caution.
+
+
+# read local .env file
+_ = load_dotenv(find_dotenv()) 
+
+# set Langsmith project
+today = datetime.now().strftime("%Y%m%d")
+os.environ["LANGCHAIN_PROJECT"] = f"Baseball Curveballs - {today}"
+
+session_id = '88241'
+
+task = "Consider the first week of June 2019 - find 3 pitchers who's changeups were most similar to Justin Verlander's"
+result = baseball_lambda.execute_workflow(task, session_id)
+print(result)
+# Output:
+#   
+
+#   *** Entered Orchestrate Node ***
+
+#   
+
+#   *** Entered Retrieve Node ***
+
+#   
+
+#   Distance to neareast plan: 0.4059051275253296
+
+#   
+
+#   *** Entered Modify Node ***
+
+#   
+
+#   Modifying nearest plan with User input
+
+#   The revised plan to find the 3 pitchers with changeups most similar to Justin Verlander's in the first week of June 2019 is as follows:
+
+#   
+
+#   1. Use playerid_lookup to find Justin Verlander's MLBAM player ID.
+
+#   
+
+#   2. Use statcast_pitcher with the following parameters to get Verlander's changeup data for the first week of June 2019:
+
+#      - start_dt = '2019-06-01'
+
+#      - end_dt = '2019-06-07'
+
+#      - player_id = Justin Verlander's MLBAM ID
+
+#   
+
+#   3. From the returned data, calculate the average release_speed, release_spin_rate, pfx_x, and pfx_z for Verlander's changeups. Store these 4 values in a "Verlander changeup average vector".
+
+#   
+
+#   4. Use statcast with the following parameters to get pitching data for all pitchers in the first week of June 2019:
+
+#      - start_dt = '2019-06-01'
+
+#      - end_dt = '2019-06-07'
+
+#   
+
+#   5. Filter the results to only pitches where pitch_type is 'CH' for changeup.
+
+#   
+
+#   6. Group the data by pitcher (using their MLBAM ID). For each pitcher, calculate their average release_speed, release_spin_rate, pfx_x, and pfx_z on changeups. Store these in "pitcher changeup average vectors".
+
+#   
+
+#   7. Combine the "pitcher changeup average vectors" with the "Verlander changeup average vector" into one dataset.
+
+#   
+
+#   8. Scale the data.
+
+#   
+
+#   9. Fit a KNN model on the data with k=4 (to find the 3 most similar pitchers plus Verlander himself).
+
+#   
+
+#   10. Use the trained model to find the 3 nearest neighbors to the "Verlander changeup average vector".
+
+#   
+
+#   11. Use playerid_reverse_lookup with the following parameters to get the names of those 3 most similar pitchers:
+
+#       - player_ids = the MLBAM IDs of the 3 most similar pitchers
+
+#       - key_type = 'mlbam'
+
+
+task = "looks good"
+result = baseball_lambda.execute_workflow(task, session_id)
+print(result)
+# Output:
+#   
+
+#   *** Entered Orchestrate Node ***
+
+#   Known plan. Executing with Sonnet
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   import pandas as pd
+
+#   from pybaseball import playerid_lookup, statcast, statcast_pitcher, playerid_reverse_lookup
+
+#   from sklearn.preprocessing import StandardScaler
+
+#   from sklearn.neighbors import NearestNeighbors
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   verlander_id = playerid_lookup('verlander', 'justin')['key_mlbam'].values[0]
+
+#   print(f"Justin Verlander's MLBAM player ID is: {verlander_id}")
+
+#   
+
+#   Result:
+
+#   Gathering player lookup table. This may take a moment.
+
+#   Justin Verlander's MLBAM player ID is: 434378
+
+#   
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   verlander_changeups = statcast_pitcher('2019-06-01', '2019-06-07', player_id=verlander_id)
+
+#   
+
+#   Result:
+
+#   Gathering Player Data
+
+#   
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   verlander_changeups = verlander_changeups[verlander_changeups['pitch_type'] == 'CH']
+
+#   print(f"Retrieved {len(verlander_changeups)} Verlander changeups from 2019-06-01 to 2019-06-07")
+
+#   
+
+#   Result:
+
+#   Retrieved 4 Verlander changeups from 2019-06-01 to 2019-06-07
+
+#   
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   verlander_avg_speed = verlander_changeups['release_speed'].mean()
+
+#   verlander_avg_spin = verlander_changeups['release_spin_rate'].mean()  
+
+#   verlander_avg_pfx_x = verlander_changeups['pfx_x'].mean()
+
+#   verlander_avg_pfx_z = verlander_changeups['pfx_z'].mean()
+
+#   
+
+#   verlander_avg_vector = [verlander_avg_speed, verlander_avg_spin, verlander_avg_pfx_x, verlander_avg_pfx_z]
+
+#   
+
+#   print("Verlander's average changeup metrics:")
+
+#   print(f"Speed: {verlander_avg_speed:.2f} mph")
+
+#   print(f"Spin Rate: {verlander_avg_spin:.2f} rpm") 
+
+#   print(f"Horizontal Break: {verlander_avg_pfx_x:.2f} inches")
+
+#   print(f"Vertical Break: {verlander_avg_pfx_z:.2f} inches")
+
+#   
+
+#   Result:
+
+#   Verlander's average changeup metrics:
+
+#   Speed: 87.95 mph
+
+#   Spin Rate: 1762.75 rpm
+
+#   Horizontal Break: -1.28 inches
+
+#   Vertical Break: 0.72 inches
+
+#   
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#     0%|          | 0/7 [00:00<?, ?it/s]
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   all_pitches = statcast('2019-06-01', '2019-06-07')
+
+#   100%|██████████| 7/7 [00:12<00:00,  1.78s/it]
+
+#   
+
+#   Result:
+
+#   This is a large query, it may take a moment to complete
+
+#   
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   print(f"Retrieved {len(all_pitches)} pitches from 2019-06-01 to 2019-06-07")
+
+#   
+
+#   Result:
+
+#   Retrieved 27211 pitches from 2019-06-01 to 2019-06-07
+
+#   
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   changeups = all_pitches[all_pitches['pitch_type'] == 'CH']
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   pitcher_averages = changeups.groupby('pitcher').agg({'release_speed': 'mean',
+
+#                                                        'release_spin_rate': 'mean', 
+
+#                                                        'pfx_x': 'mean',
+
+#                                                        'pfx_z': 'mean'}).reset_index()
+
+#   
+
+#   print(f"Calculated average changeup metrics for {len(pitcher_averages)} pitchers")
+
+#   
+
+#   Result:
+
+#   Calculated average changeup metrics for 253 pitchers
+
+#   
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   verlander_df = pd.DataFrame({'pitcher': [verlander_id],
+
+#                                  'release_speed': [verlander_avg_speed],
+
+#                                  'release_spin_rate': [verlander_avg_spin],
+
+#                                  'pfx_x': [verlander_avg_pfx_x],
+
+#                                  'pfx_z': [verlander_avg_pfx_z]})
+
+#   
+
+#   combined_data = pd.concat([pitcher_averages, verlander_df], ignore_index=True)
+
+#   
+
+#   print(f"Combined data has {len(combined_data)} rows")
+
+#   
+
+#   Result:
+
+#   Combined data has 254 rows
+
+#   
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   scaler = StandardScaler()
+
+#   scaled_data = scaler.fit_transform(combined_data.drop('pitcher', axis=1))
+
+#   
+
+#   print("Data scaled successfully")
+
+#   
+
+#   Result:
+
+#   Data scaled successfully
+
+#   
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   knn = NearestNeighbors(n_neighbors=4)
+
+#   knn.fit(scaled_data)
+
+#   
+
+#   print("KNN model fit successfully")
+
+#   
+
+#   Result:
+
+#   KNN model fit successfully
+
+#   
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   verlander_scaled = scaler.transform(verlander_df.drop('pitcher', axis=1))
+
+#   _, indices = knn.kneighbors(verlander_scaled)
+
+#   
+
+#   similar_indices = indices[0][1:4] # Exclude first index which is Verlander
+
+#   similar_ids = combined_data['pitcher'].iloc[similar_indices].values
+
+#   
+
+#   print(f"The MLBAM IDs of the 3 most similar changeups are: {similar_ids}")
+
+#   
+
+#   Result:
+
+#   The MLBAM IDs of the 3 most similar changeups are: <IntegerArray>
+
+#   [434378, 623184, 605540]
+
+#   Length: 3, dtype: Int64
+
+#   
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Execute Node ***
+
+#   
+
+#   
+
+#   Executing:
+
+#   similar_names = playerid_reverse_lookup(similar_ids, key_type='mlbam')
+
+#   
+
+#   print("The 3 pitchers with changeups most similar to Justin Verlander in early June 2019 were:")
+
+#   for _, row in similar_names.iterrows():
+
+#       print(f"{row['name_first']} {row['name_last']}")
+
+#   
+
+#   Result:
+
+#   The 3 pitchers with changeups most similar to Justin Verlander in early June 2019 were:
+
+#   justin verlander
+
+#   scott oberg
+
+#   brandon woodruff
+
+#   
+
+#   
+
+#   *** Entered Generate Node ***
+
+#   
+
+#   
+
+#   *** Entered Summarize Node ***
+
+#   
+
+#   The 3 pitchers with changeups most similar to Justin Verlander in early June 2019 were Justin Verlander, Scott Oberg, and Brandon Woodruff.
+
+#   
+
+#   Here is the code that was used to reach this solution:
+
+#   
+
+#   ```python
+
+#   
+
+#   import pandas as pd
+
+#   from pybaseball import playerid_lookup, statcast, statcast_pitcher, playerid_reverse_lookup
+
+#   from sklearn.preprocessing import StandardScaler
+
+#   from sklearn.neighbors import NearestNeighbors
+
+#   
+
+#   verlander_id = playerid_lookup('verlander', 'justin')['key_mlbam'].values[0]
+
+#   print(f"Justin Verlander's MLBAM player ID is: {verlander_id}")
+
+#   
+
+#   verlander_changeups = statcast_pitcher('2019-06-01', '2019-06-07', player_id=verlander_id)
+
+#   
+
+#   verlander_changeups = verlander_changeups[verlander_changeups['pitch_type'] == 'CH']
+
+#   print(f"Retrieved {len(verlander_changeups)} Verlander changeups from 2019-06-01 to 2019-06-07")
+
+#   
+
+#   verlander_avg_speed = verlander_changeups['release_speed'].mean()
+
+#   verlander_avg_spin = verlander_changeups['release_spin_rate'].mean()  
+
+#   verlander_avg_pfx_x = verlander_changeups['pfx_x'].mean()
+
+#   verlander_avg_pfx_z = verlander_changeups['pfx_z'].mean()
+
+#   
+
+#   verlander_avg_vector = [verlander_avg_speed, verlander_avg_spin, verlander_avg_pfx_x, verlander_avg_pfx_z]
+
+#   
+
+#   print("Verlander's average changeup metrics:")
+
+#   print(f"Speed: {verlander_avg_speed:.2f} mph")
+
+#   print(f"Spin Rate: {verlander_avg_spin:.2f} rpm") 
+
+#   print(f"Horizontal Break: {verlander_avg_pfx_x:.2f} inches")
+
+#   print(f"Vertical Break: {verlander_avg_pfx_z:.2f} inches")
+
+#   
+
+#   all_pitches = statcast('2019-06-01', '2019-06-07')
+
+#   
+
+#   print(f"Retrieved {len(all_pitches)} pitches from 2019-06-01 to 2019-06-07")
+
+#   
+
+#   changeups = all_pitches[all_pitches['pitch_type'] == 'CH']
+
+#   
+
+#   pitcher_averages = changeups.groupby('pitcher').agg({'release_speed': 'mean',
+
+#                                                        'release_spin_rate': 'mean', 
+
+#                                                        'pfx_x': 'mean',
+
+#                                                        'pfx_z': 'mean'}).reset_index()
+
+#   
+
+#   print(f"Calculated average changeup metrics for {len(pitcher_averages)} pitchers")
+
+#   
+
+#   verlander_df = pd.DataFrame({'pitcher': [verlander_id],
+
+#                                  'release_speed': [verlander_avg_speed],
+
+#                                  'release_spin_rate': [verlander_avg_spin],
+
+#                                  'pfx_x': [verlander_avg_pfx_x],
+
+#                                  'pfx_z': [verlander_avg_pfx_z]})
+
+#   
+
+#   combined_data = pd.concat([pitcher_averages, verlander_df], ignore_index=True)
+
+#   
+
+#   print(f"Combined data has {len(combined_data)} rows")
+
+#   
+
+#   scaler = StandardScaler()
+
+#   scaled_data = scaler.fit_transform(combined_data.drop('pitcher', axis=1))
+
+#   
+
+#   print("Data scaled successfully")
+
+#   
+
+#   knn = NearestNeighbors(n_neighbors=4)
+
+#   knn.fit(scaled_data)
+
+#   
+
+#   print("KNN model fit successfully")
+
+#   
+
+#   verlander_scaled = scaler.transform(verlander_df.drop('pitcher', axis=1))
+
+#   _, indices = knn.kneighbors(verlander_scaled)
+
+#   
+
+#   similar_indices = indices[0][1:4] # Exclude first index which is Verlander
+
+#   similar_ids = combined_data['pitcher'].iloc[similar_indices].values
+
+#   
+
+#   print(f"The MLBAM IDs of the 3 most similar changeups are: {similar_ids}")
+
+#   
+
+#   similar_names = playerid_reverse_lookup(similar_ids, key_type='mlbam')
+
+#   
+
+#   print("The 3 pitchers with changeups most similar to Justin Verlander in early June 2019 were:")
+
+#   for _, row in similar_names.iterrows():
+
+#       print(f"{row['name_first']} {row['name_last']}")
+
+#   ```
+
+#   
+
+#   Are you satisfied with this result?
+
+
+task = "yes"
+result = baseball_lambda.execute_workflow(task, session_id)
+print(result)
+# Output:
+#   
+
+#   *** Entered Orchestrate Node ***
+
+#   
+
+#   *** Entered Memorize Node ***
+
+#   
+
+#   Thank you, task has been commited to memory
+
+
+
+
+================================================
+FILE: CODE_OF_CONDUCT.md
+================================================
+## Code of Conduct
+This project has adopted the [Amazon Open Source Code of Conduct](https://aws.github.io/code-of-conduct).
+For more information see the [Code of Conduct FAQ](https://aws.github.io/code-of-conduct-faq) or contact
+opensource-codeofconduct@amazon.com with any additional questions or comments.
+
+
+
+================================================
+FILE: CONTRIBUTING.md
+================================================
+# Contributing Guidelines
+
+Thank you for your interest in contributing to our project. Whether it's a bug report, new feature, correction, or additional
+documentation, we greatly value feedback and contributions from our community.
+
+Please read through this document before submitting any issues or pull requests to ensure we have all the necessary
+information to effectively respond to your bug report or contribution.
+
+
+## Reporting Bugs/Feature Requests
+
+We welcome you to use the GitHub issue tracker to report bugs or suggest features.
+
+When filing an issue, please check existing open, or recently closed, issues to make sure somebody else hasn't already
+reported the issue. Please try to include as much information as you can. Details like these are incredibly useful:
+
+* A reproducible test case or series of steps
+* The version of our code being used
+* Any modifications you've made relevant to the bug
+* Anything unusual about your environment or deployment
+
+
+## Contributing via Pull Requests
+Contributions via pull requests are much appreciated. Before sending us a pull request, please ensure that:
+
+1. You are working against the latest source on the *main* branch.
+2. You check existing open, and recently merged, pull requests to make sure someone else hasn't addressed the problem already.
+3. You open an issue to discuss any significant work - we would hate for your time to be wasted.
+
+To send us a pull request, please:
+
+1. Fork the repository.
+2. Modify the source; please focus on the specific change you are contributing. If you also reformat all the code, it will be hard for us to focus on your change.
+3. Ensure local tests pass.
+4. Commit to your fork using clear commit messages.
+5. Send us a pull request, answering any default questions in the pull request interface.
+6. Pay attention to any automated CI failures reported in the pull request, and stay involved in the conversation.
+
+GitHub provides additional document on [forking a repository](https://help.github.com/articles/fork-a-repo/) and
+[creating a pull request](https://help.github.com/articles/creating-a-pull-request/).
+
+
+## Finding contributions to work on
+Looking at the existing issues is a great way to find something to contribute on. As our projects, by default, use the default GitHub issue labels (enhancement/bug/duplicate/help wanted/invalid/question/wontfix), looking at any 'help wanted' issues is a great place to start.
+
+
+## Code of Conduct
+This project has adopted the [Amazon Open Source Code of Conduct](https://aws.github.io/code-of-conduct).
+For more information see the [Code of Conduct FAQ](https://aws.github.io/code-of-conduct-faq) or contact
+opensource-codeofconduct@amazon.com with any additional questions or comments.
+
+
+## Security issue notifications
+If you discover a potential security issue in this project we ask that you notify AWS/Amazon Security via our [vulnerability reporting page](http://aws.amazon.com/security/vulnerability-reporting/). Please do **not** create a public github issue.
+
+
+## Licensing
+
+See the [LICENSE](LICENSE) file for our project's licensing. We will ask you to confirm the licensing of your contribution.
+
+
+
+================================================
+FILE: LICENSE
+================================================
+MIT No Attribution
+
+Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software is furnished to do so.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+
+
+
+================================================
+FILE: requirements.txt
+================================================
+boto3==1.34.54
+chromadb==0.4.24
+ipywidgets==8.1.1
+langchain==0.1.16
+langchain-anthropic==0.1.8
+langchain-experimental==0.0.57
+langgraph==0.0.34
+pybaseball==2.2.7
+pydantic==1.10.13
+python-dotenv==1.0.0
+sentence-transformers==2.2.2
+
+
+================================================
+FILE: function/__init__.py
+================================================
+
+
+
+================================================
+FILE: function/baseball_lambda.py
+================================================
+# core libraries
+import pickle
+
+# langchain
+from langchain_core.messages import HumanMessage
+
+# custom local libraries
+from graphs import orchestrate_graph
+
+# read function metadata from disk
+state_dict_path = 'state/state.pkl'
+    
+def execute_workflow(task, session_id):
+    # convert input to HumanMessage
+    human_message = HumanMessage(content=task, name='User')
+    
+    # load previous state
+    try:
+        with open(state_dict_path, 'rb') as file:
+            state_dict = pickle.load(file)
+    except:
+        state_dict = {}
+    
+    # check for previous state
+    if session_id in state_dict:
+        state_dict[session_id]['messages'].append(human_message)
+    else:
+        state_dict[session_id] = {}
+        state_dict[session_id]['session_id'] = session_id
+        state_dict[session_id]['messages'] = [human_message]
+        
+    # execute
+    for s in orchestrate_graph.graph.stream(state_dict[session_id]):
+        for key, value in s.items():
+            pass
+            
+    # update state
+    state_dict[session_id] = s[key] 
+
+    
+    # write to disk
+    with open(state_dict_path, 'wb') as file:
+        pickle.dump(state_dict, file)
+    
+    # collect response
+    last_message = s[key]['messages'][-1].content
+    
+    return last_message
+
+
+================================================
+FILE: graphs/__init__.py
+================================================
+
+
+
+================================================
+FILE: graphs/execute_graph.py
+================================================
+# core libraries
+from typing import TypedDict
+
+# langchain
+from langchain_core.messages import BaseMessage
+from langgraph.graph import END, StateGraph
+
+# custom libraries
+from nodes.execute import generate_node, execute_node, summarize_node
+
+class ExecuteState(TypedDict):
+    """
+    Represents the state of our graph.
+
+    Attributes:
+        keys: A dictionary where each key is a string.
+    """
+    # The 'messages' attribute keeps track of the conversation history for the execution
+    messages: list[BaseMessage]
+    # the 'session_id' keeps track of the conversation and is used for Langsmith Threads
+    session_id: str
+    # The 'plan' field collects the execution plan
+    plan: str
+    # The 'task' field collects the task to be executed
+    task: str
+    # The 'function_detail' field collects details on the pybaseball functions in use
+    function_detail: str
+    # The 'successful_code' field collects the successfully executed code
+    successful_code: list
+    # The 'nearest_code' field collect the code for the most semantically similar task
+    nearest_code: str
+    # The 'known_plan' field is a boolean that indicates whether a similar plan has been conducted
+    known_plan: bool
+    
+    
+### Edges
+def decide_to_finish(state):
+    """
+    Determines whether to finish (re-try code 3 times)
+
+    Args:
+        state (dict): The current graph state
+
+    Returns:
+        str: Next node to call
+    """
+    # Determine whether there is a tool use call
+    if state['messages'][-1].tool_calls:
+        return "Execute"
+    else:
+        return "Summarize"
+    
+workflow = StateGraph(ExecuteState)
+
+# Define the nodes
+workflow.add_node("Generate", generate_node.node)  # generation solution
+workflow.add_node("Execute", execute_node.node)  # executed code
+workflow.add_node("Summarize", summarize_node.node)  # executed code
+
+# Build graph
+workflow.set_entry_point("Generate")
+
+# add edges
+workflow.add_edge("Execute", "Generate")
+workflow.add_edge("Summarize", END)
+
+# add conditional edges
+workflow.add_conditional_edges(
+    "Generate",
+    decide_to_finish,
+    {
+        "Execute": "Execute",
+        "Summarize": "Summarize"
+    },
+)
+
+# Compile
+graph = workflow.compile()
+
+
+================================================
+FILE: graphs/orchestrate_graph.py
+================================================
+# core libraries
+from typing import TypedDict
+
+# langchain
+from langchain_core.messages import BaseMessage
+from langgraph.graph import StateGraph, END
+
+# custom local libraries
+from nodes.orchestrate import (orchestrate_node,
+                               retrieve_node,
+                               modify_node,
+                               execute_graph_node,
+                               revise_node,
+                               memorize_node,
+                               initialize_node,
+                               update_node
+                                )
+
+# construct graph
+# The agent state is the input to each node in the graph
+class OrchestrateState(TypedDict):
+    # The messages attribute tracks the conversation history
+    messages: list[BaseMessage]
+    # the session_id keep track of the conversation and is used for Langsmith Threads
+    session_id: str
+    # The 'previous_node' field indicates what has just completed
+    previous_node: str
+    # The 'next' field indicates where the workflow should go
+    next: str
+    # The 'plan' field collects the execution plan
+    plan: str
+    # The 'task' field collects the task to be executed
+    task: str
+    # The 'code' field collects the Python code
+    code: str
+    # The 'function_detail' field collects details on the pybaseball functions in use
+    function_detail: str
+    # The 'nearest_task' field collect the most semantically similar task
+    nearest_task: str
+    # The 'nearest_plan' field collect the plan for the most semantically similar task
+    nearest_plan: str
+    # The 'nearest_code' field collect the code for the most semantically similar task
+    nearest_code: str
+    # The 'known_plan' field is a boolean that indicates whether a similar plan has been conducted
+    known_plan: bool
+
+
+# define the nodes
+workflow = StateGraph(OrchestrateState)
+workflow.add_node("Orchestrate", orchestrate_node.node)
+workflow.add_node("Retrieve", retrieve_node.node)
+workflow.add_node("Modify", modify_node.node)
+workflow.add_node("Execute", execute_graph_node.node)
+workflow.add_node("Revise", revise_node.node)
+workflow.add_node("Memorize", memorize_node.node)
+workflow.add_node("Initialize", initialize_node.node)
+workflow.add_node("Update", update_node.node)
+
+# add the edges
+
+# conditional edge from Retrieve
+retrieve_map = {k: k for k in ['Modify','Initialize']}
+workflow.add_conditional_edges("Retrieve", lambda x: x["next"], retrieve_map)
+
+workflow.add_edge("Initialize", "Update")
+
+end_nodes = ['Modify', 'Update', 'Execute', 'Revise', 'Memorize']
+for node in end_nodes:
+    workflow.add_edge(node, END)
+
+# conditionally advance from Orchestrate
+orchestration_nodes = ['Retrieve', 'Revise', 'Execute', 'Memorize']
+orchestration_map = {k: k for k in orchestration_nodes}
+
+# add conditional edges
+workflow.add_conditional_edges("Orchestrate", lambda x: x["next"], orchestration_map)
+
+# add entrypoint
+workflow.set_entry_point("Orchestrate")
+
+graph = workflow.compile()
+
+
+
+================================================
+FILE: nodes/execute/__init__.py
+================================================
+
+
+
+================================================
+FILE: nodes/execute/execute_node.py
+================================================
+# core libraries
+import re
+
+# langchain libraries
+from langchain_core.messages import ToolMessage
+from langchain_experimental.tools import PythonREPLTool
+
+# define python repl
+python_repl = PythonREPLTool()
+
+# initiate python_repl to ignore warnings
+python_repl.invoke('import warnings\nwarnings.simplefilter("ignore")')
+
+def node(state):
+    """
+    Execute line of code
+
+    Args:
+        state (dict): The current graph state
+
+    Returns:
+        state (dict): New key added to state, error
+    """
+    print(f'\n*** Entered Execute Node ***\n')
+    # State
+    session_id = state['session_id']
+    messages = state['messages']
+    successful_code = state['successful_code']
+    
+    # collect tool call args
+    tool_calls = messages[-1].tool_calls
+    code = [t['args']['code'] for t in tool_calls if t['name'] == 'PythonREPL'][0]
+    tool_call_id = [t['id'] for t in tool_calls if t['name'] == 'PythonREPL'][0]
+    
+    # create langchain config
+    langchain_config = {"metadata": {"conversation_id": session_id}}
+    
+    print(f"\nExecuting:\n{code}")
+
+    # Attempt to execute code block
+    result = python_repl.invoke(code, config=langchain_config)
+    
+    if result != '':
+        print(f'\nResult:\n{result}')
+    
+    if 'error' in result.lower():
+        messages.append(ToolMessage(content=f'The previous code reached an error.  Here was the error: {result}', tool_call_id=tool_call_id))
+    else:
+        successful_code.append(code)
+        if result != '':
+            messages.append(ToolMessage(content=f'The previous step completed successfully.  Here was the result: {result}', tool_call_id=tool_call_id))
+        else:
+            messages.append(ToolMessage(content=f'The previous step completed successfully.', tool_call_id=tool_call_id))
+        
+    # update state
+    state['messages'] = messages
+    state['successful_code'] = successful_code
+    
+    return state
+
+
+
+================================================
+FILE: nodes/execute/generate_node.py
+================================================
+#from langchain_community.chat_models import BedrockChat
+from langchain_anthropic import ChatAnthropic
+from langchain_core.messages import HumanMessage
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.pydantic_v1 import BaseModel, Field
+
+
+opus_model_id = 'claude-3-opus-20240229'
+sonnet_model_id = 'claude-3-sonnet-20240229'
+haiku_model_id = 'claude-3-haiku-20240307'
+
+llm_opus = ChatAnthropic(model=opus_model_id, temperature=0)
+llm_sonnet = ChatAnthropic(model=sonnet_model_id, temperature=0)
+
+# define tools
+class PythonREPL(BaseModel):
+    """A Python REPL that can be used to execute Python code"""
+    code: str = Field(description="Code block to be executed in a Python REPL")
+    
+# Prompt
+GENERATE_SYSTEM_PROMPT = '''<instructions>You are a highly skilled Python programmer.  Your goal is to help a user execute a plan by writing code for the PythonREPL tool.</instructions>
+
+As a reference, text between the <nearest_code></nearest_code> tags is the code that was used to solve a similar plan.
+<nearest_code>
+{nearest_code}
+</nearest_code>
+
+Text between the <function_detail></function_detail> tags is documentation on the functions in use.  Do not attempt to use any feature that is not explicitly listed in the data dictionary for that function.
+<function_detail> 
+{function_detail}
+</function_detail>
+
+Text between the <task></task> tags is the goal of the plan.
+<task>
+{task}
+</task>
+
+Text between the <plan></plan> tags is the entire plan that will be executed.
+<plan>
+{plan}
+</plan>
+
+Text between the <rules></rules> tags are rules that must be followed.
+<rules>
+1. Import all necessary libraries at the start of your code.
+2. Always assign the result of a pybaseball function call to a variable.
+3. When executing the last step of the plan, use a print() statement to describe the results.
+4. Comment your code liberally to be clear about what is happening and why.
+</rules>
+
+Execute the entire plan, one step at a time, by writing code with the PythonREPL tool.  Troubleshoot any errors you encounter along the way.
+You must complete each step successfully before moving on to the next step.  Before generating any code, do some thinking between <thinking></thinking> tags.
+'''
+
+def node(state):
+    """
+    Generate a code solution based on LCEL docs and the input question 
+    with optional feedback from code execution tests 
+
+    Args:
+        state (dict): The current graph state
+
+    Returns:
+        state (dict): New key added to state, documents, that contains retrieved documents
+    """
+    print(f'\n*** Entered Generate Node ***\n')
+    # State
+    plan = state['plan']
+    task = state['task']
+    messages = state['messages']
+    session_id = state['session_id']
+    function_detail = state['function_detail']
+    nearest_code = state['nearest_code']
+    known_plan = state['known_plan']
+    
+    # create langchain config
+    langchain_config = {"metadata": {"conversation_id": session_id}}
+    
+    # kick off the conversation of necessary   
+    if len(messages) == 0:
+        messages.append(HumanMessage(content='Begin!'))
+    
+    # define prompt template
+    generate_prompt_template = ChatPromptTemplate.from_messages([
+        ("system", GENERATE_SYSTEM_PROMPT),
+        MessagesPlaceholder(variable_name="messages"), 
+    ]).partial(function_detail=function_detail, task=task, plan=plan, nearest_code=nearest_code) 
+
+    # define model
+    if known_plan:
+        llm_with_tools = llm_sonnet.bind_tools([PythonREPL])
+    else:
+        llm_with_tools = llm_opus.bind_tools([PythonREPL])
+        
+    # define chain
+    generate_chain = generate_prompt_template | llm_with_tools
+    
+    result = generate_chain.invoke({"messages": messages}, config=langchain_config)
+    
+    messages.append(result) # AIMessage type
+    
+    # update state
+    state['messages'] = messages
+
+    return state
+
+
+================================================
+FILE: nodes/execute/summarize_node.py
+================================================
+# core libraries
+from typing import List
+
+# langchain libraries
+from langchain_anthropic import ChatAnthropic
+#from langchain_community.chat_models import BedrockChat
+from langchain_core.messages import AIMessage
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.pydantic_v1 import BaseModel, Field
+
+# Define data models
+class Result(BaseModel):
+    """A succinct answer to the user's request"""
+    result: str = Field(description="A succinct answer to the user's request")
+
+# define language models
+llm_haiku = ChatAnthropic(model='claude-3-haiku-20240307', temperature=0)
+
+llm_summarize = llm_haiku.bind_tools([Result])
+
+
+SUMMARIZE_SYSTEM_PROMPT = '''
+Use the context provided by the user to respond to this request:
+
+<request>
+{task}
+</request>
+
+Do not mention the context in your response.  Provide the minimum response necessary in order to address the request.  
+Do not mention that you are summarizing the results.
+'''
+
+def summarize_results(task, code_result, assistant_result, langchain_config): 
+    '''Used to to summarize the result after the plan has been executed successfully'''
+    summarize_prompt = ChatPromptTemplate.from_messages([
+        ("system", SUMMARIZE_SYSTEM_PROMPT),
+        ("user", "Here is the most recent output from the python repl tool:\n<python_repl_output>\n{code_result}\n</python_repl_output>\nHere is the most recent output from the AI Assistant\n<ai_assistant_output>\n{assistant_result}\n</ai_assistant_output>\n\nUse the Result tool to describe the result.")
+    ])
+
+    summarize_chain = summarize_prompt | llm_summarize 
+    
+    result = summarize_chain.invoke({'task':task, 'code_result':code_result, 'assistant_result':assistant_result}, config=langchain_config)
+    
+    # parse tool response
+    tool_calls = result.tool_calls
+    result_summary = [t['args']['result'] for t in tool_calls if t['name'] == 'Result'][0]
+    
+    return result_summary
+
+# main function
+def node(state):
+    print(f'\n*** Entered Summarize Node ***\n')
+    # collect the User's task from the state
+    task = state['task']
+    session_id = state['session_id']
+    messages = state['messages']
+    assistant_result = messages[-1].content
+    code_result = messages[-2].content
+    
+    # create langchain config
+    langchain_config = {"metadata": {"conversation_id": session_id}}
+
+    summary = summarize_results(task, code_result, assistant_result, langchain_config)
+    
+    messages.append(AIMessage(content=summary))
+    
+    # update state
+    state['messages'] = messages
+
+    return state
+
+            
+
+
+================================================
+FILE: nodes/orchestrate/__init__.py
+================================================
+
+
+
+================================================
+FILE: nodes/orchestrate/execute_graph_node.py
+================================================
+from graphs import execute_graph
+from langchain_core.messages import AIMessage
+
+
+def node(state):
+    # collect metadata from state
+    plan = state['plan']
+    task = state['task']
+    function_detail = state['function_detail']
+    session_id = state['session_id']
+    nearest_code = state['nearest_code']
+    messages = state['messages']
+    known_plan = state['known_plan']
+
+    inputs = {"plan": plan, 
+              "task": task, 
+              "function_detail": function_detail, 
+              "session_id": session_id, 
+              'messages':[], 
+              'successful_code': [], 
+              'known_plan': known_plan,
+              'nearest_code': nearest_code}
+    
+        # define model
+    if known_plan:
+        print('Known plan. Executing with Sonnet')
+    else:
+        print('Unknown plan. Executing with Opus')
+
+    for s in execute_graph.graph.stream(inputs, {"recursion_limit": 100}):
+        for key, value in s.items():
+            if key == 'Summarize':
+                successful_code = s[key]['successful_code']
+                final_result = s[key]['messages'][-1].content
+                
+                successful_code_string = '\n\n'.join(successful_code)
+                final_answer = f"{final_result}\n\nHere is the code that was used to reach this solution:\n\n```python\n\n{successful_code_string}\n```"
+                final_answer += '\n\nAre you satisfied with this result?'
+                
+                messages.append(AIMessage(content=final_answer))
+                
+    # update state
+    state['messages'] = messages
+    state['previous_node'] = 'Execute'
+    state['code'] = successful_code_string
+
+    return state
+
+
+
+================================================
+FILE: nodes/orchestrate/initialize_node.py
+================================================
+# core libraries=
+import json
+
+# langchain libraries
+from langchain_anthropic import ChatAnthropic
+#from langchain_community.chat_models import BedrockChat
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.pydantic_v1 import BaseModel, Field
+from langchain_core.runnables.base import RunnableParallel
+
+with open('state/functions.json', 'r') as file:
+    library_dict = json.load(file)
+    
+libraries_string = ''
+for key in library_dict:
+    docs = library_dict[key]['docs']
+    libraries_string += f'<{key}>\n{docs}\n</{key}>\n'
+    
+libraries_lst = ', '.join(library_dict.keys())
+    
+# Define data models
+class FormattedPlan(BaseModel):
+    """Use this tool to describe the plan created to solve a user's task."""
+    plan: str = Field(description="The exact plan that was generated to solve the user's task.")
+
+class PybaseballLibraries(BaseModel):
+    """Use this tool to describe the plan created to solve a user's task."""
+    libraries: str = Field(description=f"A comma-separated list of pybaseball libraries that are used in the plan.  You may only include libraries from this list: {libraries_lst}.")
+
+# define language models
+llm_haiku = ChatAnthropic(model='claude-3-haiku-20240307', temperature=0)
+llm_sonnet = ChatAnthropic(model='claude-3-sonnet-20240229', temperature=0)
+llm_opus = ChatAnthropic(model='claude-3-opus-20240229', temperature=0)
+
+llm_initial_plan = llm_opus
+llm_formatted_plan = llm_haiku.bind_tools([FormattedPlan])
+llm_libraries = llm_sonnet.bind_tools([PybaseballLibraries])
+
+def collect_library_helpers(libraries):
+    '''
+    Collect pybaseball library documentation
+    '''
+    
+    print(f'Collecting documentation for {libraries}')
+    lib_list =[i.strip() for i in libraries.split(',')]
+    
+    helper_string = ''
+    for lib in lib_list:
+        lib_detail = library_dict[lib]
+        docs = lib_detail['docs']
+        #data_dictionary = lib_detail['data_dictionary']
+        helper_string += f'Text between the <{lib}_documentation></{lib}_documentation> tags is documentation for the {lib} library.  Consult this section to confirm which attributes to pass into the {lib} library.\n<{lib}_documentation>\n{docs}\n</{lib}_documentation>\n'
+        #helper_string += f'Text between the <{lib}_dictionary></{lib}_dictionary> tags is the data dictionary for the {lib} library.  Consult this section to confirm which columns are present in the response from the {lib} library.\n<{lib}_dictionary>\n{data_dictionary}\n</{lib}_dictionary>'
+
+    return helper_string
+
+#   formulate
+INITIAL_PLAN_SYSTEM_PROMPT = '''
+<instructions>You are a world-class Python programmer and an expert on baseball, with a specialization in data analysis using the pybaseball Python library. 
+Your expertise is in formulating plans to complete tasks related to baseball data analysis.  You provide detailed steps that can be executed sequentially to solve the user's task.
+ 
+Before creating the plan, do some analysis within <thinking></thinking> tags.
+</instructions>
+
+Text between the <libraries></libraries> tags is the list of pybaseball libraries you may use, along with their documentation.
+<libraries>
+{libraries_string}
+</libraries>
+
+Text between the <similar_task></similar_task> tags is an example of a similar task to what you are being asked to evaluate.
+<similar_task>
+{similar_task}
+</similar_task>
+
+Text between the <similar_plan></similar_plan> tags is the plan that was executed for the similar task.
+<similar_plan>
+{existing_plan}
+</similar_plan>
+
+Text between the <rules></rules> tags are rules that must be followed.
+<rules> 
+1. 'mlbam' is the ID that should be used to link players across tables.  Use the playerid_reverse_lookup pybaseball library to convert an mlbam to a player name.
+2. Every step that includes a pybaseball function call should include the specific inputs required for that function call.
+3. The last step of the plan should always include a print() statement to describe the results.
+4. Explicitly state all pybaseball libraries in use
+</rules>
+'''
+
+
+def formulate_initial_plan(task, existing_plan, similar_task, langchain_config):
+    """
+    Formulate an initial plan to solve the user's task. 
+
+    Arguments:
+        - task (str): task from the user to be solved
+        - existing_plan (str): plan associated with the nearest task
+        - similar_task (str): nearest plan from the semanitic search
+        - langchain_config (dict): configuration for the language model
+
+    Returns:
+        - initial_plan (str): Plan generated to solve the task
+        - pybaseball_libraries (list): List of pybaseball libraries used in the plan
+    """
+    
+    initial_prompt = ChatPromptTemplate.from_messages([
+        ("system", INITIAL_PLAN_SYSTEM_PROMPT),
+        ("user", "{task}"), 
+    ])
+    
+    format_prompt = ChatPromptTemplate.from_messages([
+        ("system", 'Use the FormattedPlan tool to describe the plan.'),
+        ("user", "{plan}"), 
+    ])
+    
+    libraries_prompt = ChatPromptTemplate.from_messages([
+        ("system", 'Use the PybaseballLibraries tool to describe the pybaseball libraries used in the plan.'),
+        ("user", "{plan}"), 
+    ])
+    
+    # define individual cain to parse the plan and the libraries
+    plan_chain = format_prompt | llm_formatted_plan
+    libraries_chain = libraries_prompt | llm_libraries
+    
+    # combine into a parallel chain
+    parallel_formatting_chain = RunnableParallel(plan=plan_chain, libraries=libraries_chain)
+
+    # combine all into a single chain
+    initial_plan_chain = initial_prompt | llm_initial_plan | parallel_formatting_chain
+
+    result = initial_plan_chain.invoke({'task':task, 'existing_plan':existing_plan, 'similar_task':similar_task, 'libraries_string': libraries_string}, config=langchain_config)
+
+    # parse the tool responses
+    plan_tools = result['plan'].tool_calls
+    initial_plan = [t['args']['plan'] for t in plan_tools if t['name'] == 'FormattedPlan'][0]
+
+    libraries_tools = result['libraries'].tool_calls
+    pybaseball_libraries = [t['args']['libraries'] for t in libraries_tools if t['name'] == 'PybaseballLibraries'][0]
+
+    return initial_plan, pybaseball_libraries
+
+
+# main function
+def node(state):
+    print(f'\n*** Entered Initialize Node ***\n')
+    # collect the User's task from the state
+    task = state['task']
+    session_id = state['session_id']
+    nearest_task = state['nearest_task']
+    nearest_plan = state['nearest_plan']
+    
+    # create langchain config
+    langchain_config = {"metadata": {"conversation_id": session_id}}
+
+    # no close plan - formulate a one
+    print('Formulating a new plan to solve the task.')
+    
+    # forumalte an initial plan
+    initial_plan, pybaseball_libraries = formulate_initial_plan(task, nearest_plan, nearest_task, langchain_config)
+    
+    # collect documentation on functions
+    helper_string = collect_library_helpers(pybaseball_libraries)
+    
+    # update state
+    state['plan'] = initial_plan
+    state['previous_node'] = 'Initialize'
+    state['function_detail'] = helper_string
+    
+    return state
+            
+
+
+================================================
+FILE: nodes/orchestrate/memorize_node.py
+================================================
+import chromadb
+import pandas as pd
+
+from langchain_core.messages import AIMessage
+
+
+def commit_to_memory(task: str, updated_plan: str, code: str, function_detail: str) -> dict:
+    "Use this tool when you need to commit a task to memory"
+
+    execution_plan_path = 'vectordb/execution_plan.csv'
+
+    steps_df = pd.read_csv(execution_plan_path)
+    # collect distance
+    chroma_client = chromadb.Client()
+    plan_collection = chroma_client.get_collection(name='execution_plan')
+    result = plan_collection.query(query_texts=task, n_results=1)
+    distance = result['distances'][0][0]
+
+    if distance > .01: # add new task
+        steps_df.loc[len(steps_df.index)] = [task, updated_plan, code, function_detail]
+        response = 'Thank you, task has been commited to memory'
+    else: # update existing task
+        same_task = result['documents'][0][0]
+        same_task_index = steps_df.index[steps_df['task'] == same_task].tolist()[0]
+        steps_df.loc[same_task_index] = [task, updated_plan, code, function_detail]
+        response = 'Thank you, task has been updated in memory'
+
+    steps_df.to_csv(execution_plan_path, index=False)
+
+    return response
+
+
+def node(state):
+    '''Used to submit a successful execution to long term memory'''
+    print(f'\n*** Entered Memorize Node ***\n')
+    # collect task and plan from state
+    task = state['task']
+    updated_plan = state['plan']
+    code = state['code']
+    function_detail = state['function_detail']
+    messages = state['messages']
+
+    # commit
+    response = commit_to_memory(task=task, updated_plan=updated_plan, code=code, function_detail=function_detail)
+    
+    messages.append(AIMessage(content=response))
+    
+    # update state
+    state['messages'] = messages
+
+    return state
+
+
+================================================
+FILE: nodes/orchestrate/modify_node.py
+================================================
+# core libraries
+from typing import List
+
+# langchain libraries
+from langchain_anthropic import ChatAnthropic
+#from langchain_community.chat_models import BedrockChat
+from langchain_core.messages import AIMessage
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.pydantic_v1 import BaseModel, Field
+    
+# Define data models
+class ModifiedPlan(BaseModel):
+    """Use this tool to modify a plan based on feedback from the user"""
+    plan: str = Field(description="The modified plan after making changes requested by the user.")
+
+# define language models
+llm_haiku = ChatAnthropic(model='claude-3-haiku-20240307', temperature=0)
+llm_sonnet = ChatAnthropic(model='claude-3-sonnet-20240229', temperature=0)
+llm_opus = ChatAnthropic(model='claude-3-opus-20240229', temperature=0)
+
+llm_modify = llm_sonnet
+llm_format = llm_haiku.bind_tools([ModifiedPlan])
+
+
+MODIFY_SYSTEM_PROMPT = '''
+<instructions>Review the original plan and make the minimum updates necessary to meet the new request while maintaining the original format.
+If the original plan already aligns with the new request, return it without any modifications.
+
+Before updating the plan, do some analysis within <thinking></thinking> tags. 
+</instructions>
+
+Text bewteen the <original_task></original_task> tags is the goal of the original plan.
+<original_task>
+{original_task}
+</original_task>
+
+Text bewteen the <original_plan></original_plan> tags is the original plan to be modified.
+<original_plan>
+{existing_plan}
+</original_plan>
+'''
+
+def modify_existing_plan(task, nearest_task, nearest_plan, langchain_config): 
+    '''Used to revise the propsed plan based on User feedback'''
+    modify_prompt = ChatPromptTemplate.from_messages([
+        ("system", MODIFY_SYSTEM_PROMPT),
+        ("user", "{updates}") 
+    ])
+    
+    format_prompt = ChatPromptTemplate.from_messages([
+        ("system", 'Use the ModifiedPlan tool to describe the plan.'),
+        ("user", "{plan}"), 
+    ])
+
+    modify_chain = modify_prompt | llm_modify | format_prompt | llm_format
+
+    result = modify_chain.invoke({'existing_plan':nearest_plan, 'original_task': nearest_task, 'updates':task}, config=langchain_config)
+
+    # parse tool response
+    tool_calls = result.tool_calls
+    modified_plan = [t['args']['plan'] for t in tool_calls if t['name'] == 'ModifiedPlan'][0]
+    
+    return modified_plan
+
+
+# main function
+def node(state):
+    print(f'\n*** Entered Modify Node ***\n')
+    # collect the User's task from the state
+    task = state['task']
+    session_id = state['session_id']
+    messages = state['messages']
+    nearest_task = state['nearest_task']
+    nearest_plan = state['nearest_plan']
+    
+    # create langchain config
+    langchain_config = {"metadata": {"conversation_id": session_id}}
+
+    print('Modifying nearest plan with User input')
+    new_plan = modify_existing_plan(task, nearest_task, nearest_plan, langchain_config)
+    
+    messages.append(AIMessage(content=new_plan))
+    
+    # update state
+    state['messages'] = messages
+    state['plan'] = new_plan
+    state['previous_node'] = 'Modify'
+
+    return state
+
+            
+
+
+================================================
+FILE: nodes/orchestrate/orchestrate_node.py
+================================================
+from langchain_core.messages import AIMessage
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_community.chat_models import BedrockChat
+
+
+# define language model
+#model_id = 'anthropic.claude-3-sonnet-20240229-v1:0'
+model_id = 'anthropic.claude-3-haiku-20240307-v1:0'
+llm = BedrockChat(model_id=model_id, model_kwargs={'temperature': 0})
+
+POS_FEEDBACK_SYSTEM_PROMPT = '''
+If the user's message can be understood as positive affirmation with no additional information or clarifications, respond Y.
+If there is any additional information in the user's message beyond a single positive affirmation, respond N.
+
+Examples of positive affirmation may include but are not limited to "yes", "yep", "looks good", "great", "perfect"
+
+Respond ONLY with either Y or N
+'''
+
+pos_feedback_prompt_template = ChatPromptTemplate.from_messages([
+    ("system", POS_FEEDBACK_SYSTEM_PROMPT),
+    ("user", "{message}")
+])
+
+pos_feedback_chain = pos_feedback_prompt_template | llm
+
+def get_pos_feedback_indicator(state):
+    # parse state metadata
+    last_message = [state['messages'][-1]]
+    session_id = state['session_id']
+    
+    # create langchain config
+    langchain_config = {"metadata": {"conversation_id": session_id}}
+    
+    response = pos_feedback_chain.invoke({'message':last_message}, config=langchain_config)
+    response = response.content.lower().strip()
+
+    if response in ['y', 'n']:
+        return response
+    else:
+        raise ValueError
+
+
+def node(state):
+    '''Used to revise the propsed plan based on User feedback'''
+    print(f'\n*** Entered Orchestrate Node ***')
+    
+    previous_node = state['previous_node']
+
+    if previous_node == None:
+        return {'next': 'Retrieve'}
+    elif previous_node in ['Update', 'Revise', 'Modify']:
+        pos_feedback_indicator = get_pos_feedback_indicator(state)
+
+        if pos_feedback_indicator == 'n':
+            return {'next': 'Revise'}
+        else:
+            return {'next': 'Execute'}
+    elif previous_node == 'Execute':
+        pos_feedback_indicator = get_pos_feedback_indicator(state)
+
+        if pos_feedback_indicator == 'n':
+            return {'next': 'Revise'}
+        else:
+            return {'next': 'Memorize'}
+    elif previous_node == 'Memorize':
+        return {"messages": [AIMessage(content="Please initialize a new session for a new task")], 
+                "next": "END"
+               }
+
+
+================================================
+FILE: nodes/orchestrate/retrieve_node.py
+================================================
+# core libraries
+import pandas as pd
+from typing import List
+
+# langchain libraries
+from langchain_anthropic import ChatAnthropic
+from langchain_community.chat_models import BedrockChat
+from langchain_core.messages import AIMessage
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.pydantic_v1 import BaseModel, Field
+
+# custom local libraries
+from vectordb import vectordb
+
+# set a distance threshold for when to create a new plan vs modify an existing plan
+threshold = .5
+
+# main function
+def node(state):
+    print(f'\n*** Entered Retrieve Node ***\n')
+    # collect the User's task from the state
+    task = state['messages'][-1].content
+
+    # retrieve a collection on plans from vectordb
+    plan_collection = vectordb.get_execution_plan_collection()
+
+    # collect the closest plan for the task
+    closest_plan = plan_collection.query(query_texts=[task], n_results=1, include=['distances','metadatas','documents'])
+
+    distance = closest_plan['distances'][0][0]
+    nearest_plan = closest_plan['metadatas'][0][0]['plan']
+    nearest_code = closest_plan['metadatas'][0][0]['code']
+    function_detail = closest_plan['metadatas'][0][0]['function_detail']
+    nearest_task = closest_plan['documents'][0][0]
+    
+    print(f'Distance to neareast plan: {distance}')
+
+    # write task and distance to disk
+    task_output_path = 'task_and_distance.csv'
+    try:
+        task_df = pd.read_csv(task_output_path)
+    except:
+        task_df = pd.DataFrame(columns=['task', 'distance'])
+
+    task_df.loc[len(task_df.index)] = [task, distance]
+    task_df.to_csv(task_output_path, index=False)
+    
+    # determine path based on whether we have a similar "enough" plan
+    if distance <= threshold:
+        next_step = 'Modify'
+        known_plan = True
+    else:
+        next_step = 'Initialize'
+        known_plan = False
+        
+    # update state
+    state['next'] = next_step
+    state['nearest_plan'] = nearest_plan
+    state['nearest_task'] = nearest_task
+    state['nearest_code'] = nearest_code
+    state['function_detail'] = function_detail
+    state['task'] = task
+    state['previous_node'] = 'Retrieve'
+    state['known_plan'] = known_plan
+    
+    return state
+            
+
+
+================================================
+FILE: nodes/orchestrate/revise_node.py
+================================================
+#from langchain_community.chat_models import BedrockChat
+from langchain_anthropic import ChatAnthropic
+from langchain_core.messages import AIMessage
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.pydantic_v1 import BaseModel, Field
+from langchain_core.runnables.base import RunnableParallel
+
+
+# Define data models
+class RevisedPlan(BaseModel):
+    """Use this tool to describe the plan created to solve a user's task."""
+    plan: str = Field(description="The revised plan after making changes requested by the user.")
+
+class RevisedTask(BaseModel):
+    """Use this tool to describe the task after updates from the user"""
+    task: str = Field(description="The revised task after making changes requested by the user.  If there are no changes to the task, this will be the same as the original task")
+
+# define language models
+llm_haiku = ChatAnthropic(model='claude-3-haiku-20240307', temperature=0)
+llm_sonnet = ChatAnthropic(model='claude-3-sonnet-20240229', temperature=0)
+llm_opus = ChatAnthropic(model='claude-3-opus-20240229', temperature=0)
+
+llm_revise = llm_opus
+llm_formatted_plan = llm_haiku.bind_tools([RevisedPlan])
+llm_formatted_task = llm_haiku.bind_tools([RevisedTask])
+
+REVISE_SYSTEM_PROMPT = '''
+<instructions>You are world class Data Analyst and an expert on baseball and analyzing data through the pybaseball Python library.  
+Your goal is to help a user create a plan that can be used to complete a task.
+
+Review the original plan and the details related to the pybaseball functions in the plan.  Then revise the plan based on feedback from the user.
+</instructions>
+
+Text between the <task></task> tags is the original task of the plan to be revised.
+<task>
+{task}
+</task>
+
+Text between the <original_plan></original_plan> tags is the original plan to be revised.
+<original_plan>
+{plan}
+</original_plan>
+
+Text bewteen the <function_detail></function_detail> tags is information about the pybaseball functions in use.  
+<function_detail> 
+{function_detail}
+<function_detail>
+
+Text between the <rules></rules> tags are rules that must be followed.
+<rules>
+1. Do not attempt to use any feature that is not explicitly listed in the data dictionary for that function.
+2. Every step that includes a pybaseball function call should include the specific input required for that function call
+</rules>
+'''
+
+revise_prompt_template = ChatPromptTemplate.from_messages([
+    ("system", REVISE_SYSTEM_PROMPT),
+    MessagesPlaceholder(variable_name="messages"), 
+])
+
+format_prompt = ChatPromptTemplate.from_messages([
+    ("system", 'Use the RevisedPlan tool to describe the plan.'),
+    ("user", "{plan}"), 
+])
+
+task_prompt = ChatPromptTemplate.from_messages([
+    ("system", 'Use the RevisedTask tool to describe the any necssary updates to the original task.\n\n<original_task>{task}</original_task>'),
+    ("user", "{revision}"), 
+])
+
+# create individual chain to revise the plan and the task
+plan_chain = revise_prompt_template | llm_revise | format_prompt | llm_formatted_plan
+task_chain = task_prompt | llm_formatted_task
+
+# combine into a parallel chain
+parallel_formatting_chain = RunnableParallel(plan=plan_chain, task=task_chain)
+
+
+def node(state):
+    '''Used to revise the propsed plan based on User feedback'''
+    print(f'\n*** Entered Revise Node ***\n')
+    
+    # collect metadata from state
+    plan = state['plan']
+    function_detail = state['function_detail']
+    messages = state['messages']
+    session_id = state['session_id']
+    task = state['task']
+    
+    revision = state['messages'][-1].content
+    
+    # create langchain config
+    langchain_config = {"metadata": {"conversation_id": session_id}}
+
+    # invoke revise chain
+    result = parallel_formatting_chain.invoke({'plan': plan, 'revision':revision, 'function_detail': function_detail, 'task': task, 'messages': messages}, config=langchain_config)
+    
+    # parse the tool response
+    plan_tools = result['plan'].tool_calls
+    revised_plan = [t['args']['plan'] for t in plan_tools if t['name'] == 'RevisedPlan'][0]
+
+    task_tools = result['task'].tool_calls
+    task = [t['args']['task'] for t in task_tools if t['name'] == 'RevisedTask'][0]
+    
+    revised_plan += '\n\nAre you satisfied with this plan?'
+    
+    messages.append(AIMessage(content=revised_plan))
+    
+    # update state
+    state['plan'] = revised_plan
+    state['previous_node'] = 'Revise'
+    state['task'] = task
+    state['messages'] = messages
+    
+    return state
+
+
+================================================
+FILE: nodes/orchestrate/update_node.py
+================================================
+# core libraries
+from dotenv import load_dotenv, find_dotenv
+import json
+
+# langchain libraries
+from langchain_anthropic import ChatAnthropic
+#from langchain_community.chat_models import BedrockChat
+from langchain_core.messages import AIMessage
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.pydantic_v1 import BaseModel, Field
+
+with open('state/functions.json', 'r') as file:
+    library_dict = json.load(file)
+
+
+class UpdatedPlan(BaseModel):
+    """Use this tool to describe the plan created to solve a user's task.  You must always use this tool to describe the plan."""
+    plan: str = Field(description="The updated plan after making any updates necessary to ensure the correct attributes are passed to each of the pybasell functions.")
+
+# define language models
+#llm_haiku = ChatAnthropic(model='claude-3-haiku-20240307', temperature=0)
+#llm_sonnet = ChatAnthropic(model='claude-3-sonnet-20240229', temperature=0)
+llm_opus = ChatAnthropic(model='claude-3-opus-20240229', temperature=0)
+
+llm_update = llm_opus.bind_tools([UpdatedPlan])
+
+#   update
+UPDATE_SYSTEM_PROMPT = '''
+<instructions>You are world class Data Analyst and an expert on baseball and analyzing data through the pybaseball Python library.  
+Your goal is to review a plan and ensure that all of the pybaseball functions are being used correctly.
+You always use the UpdatedPlan tool to describe the plan.
+
+Before updating the plan, do some analysis within <thinking></thinking> tags. Are the correct attributes with the correct data types being passed to each call to a pybaseball library?
+</instructions>
+
+Text between the <task></task> tags is the goal of the plan.
+<task>
+{task}
+</task>
+
+Text between the <current_plan></current_plan> tags is the current plan to be modified.
+<current_plan>
+{current_plan}
+</current_plan>
+
+Text bewteen the <function_detail></function_detail> tags documentation on the pybaseball functions in use
+<function_detail>
+{function_detail}
+</function_detail>
+
+Make any updates necessary to ensure the correct attributes are being passed to each of the pybaseball functions.  You must use the UpdatedPlan tool to describe the plan.
+'''
+
+
+def update_plan(task, current_plan, function_detail, langchain_config):
+    '''Used to revise the propsed plan based on function documentation'''
+    
+    update_prompt = ChatPromptTemplate.from_messages([
+        ("system", UPDATE_SYSTEM_PROMPT),
+        ("user", "Review the current plan and make any updates necessary to ensure the correct attributes are being passed to the pybaseball functinons.  You must use the UpdatedPlan tool to describe the plan."), 
+    ])
+
+    update_chain = update_prompt | llm_update 
+    
+    result = update_chain.invoke({'task':task, 'current_plan':current_plan, 'function_detail':function_detail}, config=langchain_config)
+    
+    # parse tool response
+    tool_calls = result.tool_calls
+    updated_plan = [t['args']['plan'] for t in tool_calls if t['name'] == 'UpdatedPlan'][0]
+    
+    return updated_plan + '\n\nAre you satisfied with this plan?'
+
+
+# main function
+def node(state):
+    print(f'\n*** Entered Update Node ***\n')
+    # collect the User's task from the state
+    task = state['task']
+    session_id = state['session_id']
+    messages = state['messages']
+    plan = state['plan']
+    function_detail = state['function_detail']
+    
+    # create langchain config
+    langchain_config = {"metadata": {"conversation_id": session_id}}
+        
+    # update plan based on helper string detail
+    print('Updating plan based function documentation')
+    updated_plan = update_plan(task, plan, function_detail, langchain_config)
+    
+    messages.append(AIMessage(content=updated_plan))
+    
+    # update state
+    state['messages'] = messages
+    state['plan' ] = updated_plan
+    state['previous_node'] = 'Update'
+    
+    return state
+            
+
+
+================================================
+FILE: state/__init__.py
+================================================
+
+
+
+================================================
+FILE: state/create_functions_statsapi.ipynb
+================================================
+# Jupyter notebook converted to Python script.
+
+import json
+
+import data_dictionary as dd
+
+# initiate empty dictionary
+functions_dict = {}
+
+function = 'statcast'
+docs = '''# Statcast
+`statcast(start_dt=[yesterday's date], end_dt=None, team=None, verbose=True, parallel=True)`
+
+The `statcast` function retrieves pitch-level statcast data for a given date or range or dates. 
+
+## Returned data
+This function returns a pandas `DataFrame` with one entry for each pitch in the
+query. The data returned for each pitch is explained on
+[Baseball Savant](https://baseballsavant.mlb.com/csv-docs).
+
+## Arguments
+`start_dt:` first day for which you want to retrieve data. Defaults to yesterday's date if nothing is entered. If you only want data for one date, supply a `start_dt` value but not an `end_dt` value. Format: YYYY-MM-DD. 
+
+`end_dt:` last day for which you want to retrieve data. Defaults to None. If you want to retrieve data for more than one day, both a `start_dt` and `end_dt` value must be given. Format: YYYY-MM-DD. 
+
+`team:` optional. If you only want statcast data for one team, supply that team's abbreviation here (i.e. BOS, SEA, NYY, etc).
+
+`verbose:` Boolean, default=True. If set to True this will provide updates on query progress, if set to False it will not. 
+
+`parallel:` Boolean, default=True. Whether to parallelize HTTP requests in large queries.
+
+### A note on data availability 
+The earliest available statcast data comes from the 2008 season when the system was first introduced to Major League Baseball. Queries before this year will not work. Further, some features were introduced after the 2008 season. Launch speed angle, for example, is only available from the 2015 season forward. 
+
+### A note on query time
+Baseball savant limits queries to 30000 rows each. For this reason, if your request is for a period of greater than 5 days, it will be broken into two or more smaller requests. The data will still be returned to you in a single dataframe, but it will take slightly longer. 
+
+### A note on parallelization
+Large queries with requests made in parallel complete substantially faster. This option exists to accommodate compute environments where multiprocessing is disabled (e.g. some AWS Lambda environments).
+
+## Examples of valid queries
+
+```python
+from pybaseball import statcast
+
+# get all statcast data for July 4th, 2017
+data = statcast('2017-07-04')
+
+#get data for the first seven days of August in 2016
+data = statcast('2016-08-01', '2016-08-07')
+
+#get all data for the Texas Rangers in the 2016 season
+data = statcast('2016-04-01', '2016-10-30', team='TEX')
+
+# get data for yesterday
+data = statcast()```
+'''
+
+data_dictionary = dd.statcast
+
+functions_dict[function] = {'docs':docs, 'data_dictionary':data_dictionary}
+
+
+function = 'statcast_pitcher'
+docs = '''# Statcast Pitcher
+`statcast_pitcher(start_dt=[yesterday's date], end_dt=None, player_id)`
+
+The statcast function retrieves pitch-level statcast data for a given date or range or dates. 
+
+## Arguments
+`start_dt:` first day for which you want to retrieve data. Defaults to yesterday's date if nothing is entered. If you only want data for one date, supply a `start_dt` value but not an `end_dt` value. Format: YYYY-MM-DD. 
+
+`end_dt:` last day for which you want to retrieve data. Defaults to None. If you want to retrieve data for more than one day, both a `start_dt` and `end_dt` value must be given. Format: YYYY-MM-DD. 
+
+`player_id:` MLBAM player ID for the pitcher you want to retrieve data for. To find a player's MLBAM ID, see the function [playerid_lookup](http://github.com/jldbc/pybaseball/docs/playerid_lookup.md) or the examples below. 
+
+### A note on data availability 
+The earliest available statcast data comes from the 2008 season when the system was first introduced to Major League Baseball. Queries before this year will not work. Further, some features were introduced after the 2008 season. Launch speed angle, for example, is only available from the 2015 season forward. 
+
+### Known issue
+In rare cases where a player has seen greater than 30,000 pitches over the time period specified in your query, only the first 30,000 of these plays will be returned. There is a fix in the works for this
+
+## Examples of valid queries
+
+```python
+from pybaseball import statcast_pitcher
+from pybaseball import playerid_lookup
+
+# find Chris Sale's player id (mlbam_key)
+playerid_lookup('sale','chris')
+
+# get all available data
+data = statcast_pitcher('2008-04-01', '2017-07-15', player_id = 519242)
+
+# get data for July 15th, 2017
+data = statcast_pitcher('2017-07-15','2017-07-15', player_id = 519242)
+```'''
+
+data_dictionary = dd.statcast
+
+functions_dict[function] = {'docs':docs, 'data_dictionary':data_dictionary}
+
+function = 'statcast_batter'
+docs = '''# Statcast Batter
+`statcast_batter(start_dt=[yesterday's date], end_dt=None, player_id)`
+
+The statcast function retrieves pitch-level statcast data for a given date or range or dates. 
+
+## Arguments
+`start_dt:` first day for which you want to retrieve data. Defaults to yesterday's date if nothing is entered. If you only want data for one date, supply a `start_dt` value but not an `end_dt` value. Format: YYYY-MM-DD. 
+
+`end_dt:` last day for which you want to retrieve data. Defaults to None. If you want to retrieve data for more than one day, both a `start_dt` and `end_dt` value must be given. Format: YYYY-MM-DD. 
+
+`player_id:` MLBAM player ID for the player you want to retrieve data for. To find a player's MLBAM ID, see the function [playerid_lookup](http://github.com/jldbc/pybaseball/docs/playerid_lookup.md) or the examples below. 
+
+### A note on data availability 
+The earliest available statcast data comes from the 2008 season when the system was first introduced to Major League Baseball. Queries before this year will not work. Further, some features were introduced after the 2008 season. Launch speed angle, for example, is only available from the 2015 season forward. 
+
+## Examples of valid queries
+
+```python
+from pybaseball import statcast_batter
+from pybaseball import playerid_lookup
+
+# find David Ortiz's player id (mlbam_key)
+playerid_lookup('ortiz','david')
+
+# get all available data
+data = statcast_batter('2008-04-01', '2017-07-15', player_id = 120074)
+
+# get data for August 16th, 2014
+data = statcast_batter('2014-08-16', player_id = 120074)
+```
+'''
+
+data_dictionary = dd.statcast
+
+functions_dict[function] = {'docs':docs, 'data_dictionary':data_dictionary}
+
+function = 'playerid_lookup'
+docs = '''# Player ID Lookup
+
+## Single Player Lookup
+
+`playerid_lookup(last, first=None, fuzzy=False)`
+
+Look up a player's MLBAM, Retrosheet, FanGraphs, and Baseball Reference ID by name.
+
+## Arguments
+`last:` String. The player's last name. Case insensitive.
+
+`first:` String. Optional. The player's first name. Case insensitive.
+
+`fuzzy:` Boolean. Optional. Search for inexact name matches, the 5 closest will be returned.
+
+Providing last name only will return all available id data for players with that last name (this will return several rows for a common last name like Jones, for example.) If multiple players exist for a (last name, first name) pair, you can figure out who's who by seeing their first and last years of play in the fields `mlb_played_first` and `mlb_played_last`.
+
+This data comes from Chadwick Bureau, meaning that there are several people in this data who are not MLB players. For this reason, supplying both last and first name is recommended to narrow your search. 
+
+## Examples of valid queries
+
+```python
+from pybaseball import playerid_lookup
+
+# find the ids of all players with last name Jones (returns 1,314 rows)
+data = playerid_lookup('jones')
+
+# only return the ids of chipper jones (returns one row)
+data = playerid_lookup('jones','chipper')
+
+# Will return all players named Pedro Martinez (returns *2* rows)
+data = playerid_lookup("martinez", "pedro", fuzzy=True)
+
+# Will return the 5 closest names to "yadi molina" (returns 5 rows)
+# First row will be Yadier Molina
+data = playerid_lookup("molina", "yadi", fuzzy=True)
+```
+
+## List Lookup
+
+`player_search_list(player_list)`
+
+Look up a list of player ID's by name, return a data frame of all players
+
+`player_list:` List. A list of tuples, of the form `(last, first)`. Case Insensitive.
+
+Sources are the same as those used in the above `playerid_lookup` function. Queries for this function must be exact name matches.
+
+## Examples of valid queries
+
+```python
+
+from pybaseball import player_search_list
+
+# Will return the ids for both Lou Brock and Chipper Jones (returns 2 rows)
+data = player_search_list([("brock","lou"), ("jones","chipper")])
+
+```'''
+
+data_dictionary = dd.player_id_lookup
+
+functions_dict[function] = {'docs':docs, 'data_dictionary':data_dictionary}
+
+function = 'schedule_and_record'
+docs = '''# Schedule and Record
+
+`schedule_and_record(season, team)`
+
+The schedule_and_record function returns a dataframe of a team's game-level results for a given season, including win/loss/tie result, score, attendance, and winning/losing/saving pitcher. If the season is incomplete, it will provide scheduling information for future games. 
+
+## Arguments
+`season:` Integer. The season for which you want a team's record data. 
+
+`team:` String. The abbreviation of the team for which you are requesting data (e.g. "PHI", "BOS", "LAD"). 
+
+Note that if a team did not exist during the year you are requesting data for, the query will be unsuccessful. Historical name and city changes for teams in older seasons can cause some problems as well. The Los Angeles Dodgers ("LAD"), for example, are abbreviated "BRO" in older seasons, due to their origins as the Brooklyn Dodgers. This may at times require some detective work in certain cases.   
+
+## Examples of valid queries
+
+```python
+from pybaseball import schedule_and_record
+
+# Game-by-game results from the Yankees' 1927 season
+data = schedule_and_record(1927, "NYY")
+
+# Results and upcoming schedule for the Phillies' current season (2017 at the time of writing)
+data = schedule_and_record(2017, "PHI")
+```
+'''
+
+data_dictionary = dd.schedule_and_record
+
+functions_dict[function] = {'docs':docs, 'data_dictionary':data_dictionary}
+
+function = 'standings'
+docs = '''# Standings
+
+`standings(season)`
+
+he standings(season) function gives division standings for a given season. If the current season is chosen, 
+it will give the most current set of standings. Otherwise, it will give the end-of-season standings for each 
+division for the chosen season. This function returns a list of dataframes. Each dataframe is the standings for one of MLB's six divisions.
+
+## Arguments
+`season:` Integer. Defaults to the current calendar year if no value is provided. 
+
+## Examples of valid queries
+
+```python
+from pybaseball import standings
+
+# get the current season's up-to-date standings
+data = standings()
+
+# get the end-of-season division standings for the 1980 season
+data = standings(1980)
+```
+'''
+
+data_dictionary = dd.standings
+
+functions_dict[function] = {'docs':docs, 'data_dictionary':data_dictionary}
+
+function = 'playerid_reverse_lookup'
+docs = '''# Player ID Reverse Lookup
+
+`playerid_reverse_lookup(player_ids, key_type='mlbam')`
+
+Find the names and ids of one or several players given a list of MLBAM, FanGraphs, Baseball Reference, or Retrosheet ids. 
+
+## Arguments
+`player_ids:` List. A list of player ids.
+
+`key_type:` String. The type of id you're passing in the `player_ids` field. Valid inputs are 'mlbam', 'retro', 'bbref', and 'fangraphs'. Defaults to 'mlbam' if no value is passed. 
+ 
+This function is useful for connecting data sets from various sources or for finding player names when only an id is provided. Data for this function comes from the Chadwick Bureau. 
+
+## Examples of valid queries
+
+```python
+from pybaseball import playerid_reverse_lookup
+
+# a list of mlbam ids
+player_ids = [116539, 116541, 641728, 116540]
+
+# find the names of the players in player_ids, along with their ids from other data sources
+data = playerid_reverse_lookup(player_ids, key_type='mlbam')
+
+# a list of fangraphs ids
+fg_ids = [826, 5417, 210, 1101]
+
+# find their names and ids from other data sources
+data = playerid_reverse_lookup(fg_ids, key_type='fangraphs')
+'''
+
+data_dictionary = dd.playerid_reverse_lookup
+
+functions_dict[function] = {'docs':docs, 'data_dictionary':data_dictionary}
+
+functions_dict[function]
+# Output:
+#   {'docs': "# Player ID Reverse Lookup\n\n`playerid_reverse_lookup(player_ids, key_type='mlbam')`\n\nFind the names and ids of one or several players given a list of MLBAM, FanGraphs, Baseball Reference, or Retrosheet ids. \n\n## Arguments\n`player_ids:` List. A list of player ids.\n\n`key_type:` String. The type of id you're passing in the `player_ids` field. Valid inputs are 'mlbam', 'retro', 'bbref', and 'fangraphs'. Defaults to 'mlbam' if no value is passed. \n \nThis function is useful for connecting data sets from various sources or for finding player names when only an id is provided. Data for this function comes from the Chadwick Bureau. \n\n## Examples of valid queries\n\n```python\nfrom pybaseball import playerid_reverse_lookup\n\n# a list of mlbam ids\nplayer_ids = [116539, 116541, 641728, 116540]\n\n# find the names of the players in player_ids, along with their ids from other data sources\ndata = playerid_reverse_lookup(player_ids, key_type='mlbam')\n\n# a list of fangraphs ids\nfg_ids = [826, 5417, 210, 1101]\n\n# find their names and ids from other data sources\ndata = playerid_reverse_lookup(fg_ids, key_type='fangraphs')\n",
+
+#    'data_dictionary': 'name_last\nname_first\nkey_mlbam\nkey_retro\nkey_bbref\nkey_fangraphs\nmlb_played_first\nmlb_played_last'}
+
+# write to disk
+file_path = 'functions.json'
+with open(file_path, 'w') as file:
+    json.dump(functions_dict, file)
+
+# read from disk
+with open(file_path, 'r') as file:
+    loaded_dict = json.load(file)
+
+functions_dict[function]
+# Output:
+#   {'docs': "# Player ID Reverse Lookup\n\n`playerid_reverse_lookup(player_ids, key_type='mlbam')`\n\nFind the names and ids of one or several players given a list of MLBAM, FanGraphs, Baseball Reference, or Retrosheet ids. \n\n## Arguments\n`player_ids:` List. A list of player ids.\n\n`key_type:` String. The type of id you're passing in the `player_ids` field. Valid inputs are 'mlbam', 'retro', 'bbref', and 'fangraphs'. Defaults to 'mlbam' if no value is passed. \n \nThis function is useful for connecting data sets from various sources or for finding player names when only an id is provided. Data for this function comes from the Chadwick Bureau. \n\n## Examples of valid queries\n\n```python\nfrom pybaseball import playerid_reverse_lookup\n\n# a list of mlbam ids\nplayer_ids = [116539, 116541, 641728, 116540]\n\n# find the names of the players in player_ids, along with their ids from other data sources\ndata = playerid_reverse_lookup(player_ids, key_type='mlbam')\n\n# a list of fangraphs ids\nfg_ids = [826, 5417, 210, 1101]\n\n# find their names and ids from other data sources\ndata = playerid_reverse_lookup(fg_ids, key_type='fangraphs')\n",
+
+#    'data_dictionary': 'name_last\nname_first\nkey_mlbam\nkey_retro\nkey_bbref\nkey_fangraphs\nmlb_played_first\nmlb_played_last'}
+
+
+
+================================================
+FILE: state/data_dictionary.py
+================================================
+statcast = '''
+pitch_type
+The type of pitch derived from Statcast.
+
+game_date
+Date of the Game.
+
+release_speed
+Pitch velocities from 2008-16 are via Pitch F/X, and adjusted to roughly out-of-hand release point. All velocities from 2017 and beyond are Statcast, which are reported out-of-hand.
+
+release_pos_x
+Horizontal Release Position of the ball measured in feet from the catcher's perspective.
+
+release_pos_z
+Vertical Release Position of the ball measured in feet from the catcher's perspective.
+
+player_name
+Player's name tied to the event of the search formatted as "Last Name, First Name"
+
+batter
+MLB Player Id tied to the play event.
+
+pitcher
+MLB Player Id tied to the play event.
+
+events
+Event of the resulting Plate Appearance.
+
+description
+Description of the resulting pitch.
+
+zone
+Zone location of the ball when it crosses the plate from the catcher's perspective.
+
+des
+Plate appearance description from game day.
+
+game_type
+Type of Game. E = Exhibition, S = Spring Training, R = Regular Season, F = Wild Card, D = Divisional Series, L = League Championship Series, W = World Series
+
+stand
+Side of the plate batter is standing.
+
+p_throws
+Hand pitcher throws with.
+
+home_team
+Abbreviation of home team.
+
+away_team
+Abbreviation of away team.
+
+type
+Short hand of pitch result. B = ball, S = strike, X = in play.
+
+hit_location
+Position of first fielder to touch the ball.
+
+bb_type
+Batted ball type, ground_ball, line_drive, fly_ball, popup.
+
+balls
+Pre-pitch number of balls in count.
+
+strikes
+Pre-pitch number of strikes in count.
+
+game_year
+Year game took place.
+
+pfx_x
+Horizontal movement in feet from the catcher's perspective.
+
+pfx_z
+Vertical movement in feet from the catcher's perpsective.
+
+plate_x
+Horizontal position of the ball when it crosses home plate from the catcher's perspective.
+
+plate_z
+Vertical position of the ball when it crosses home plate from the catcher's perspective.
+
+on_3b
+Pre-pitch MLB Player Id of Runner on 3B.
+
+on_2b
+Pre-pitch MLB Player Id of Runner on 2B.
+
+on_1b
+Pre-pitch MLB Player Id of Runner on 1B.
+
+outs_when_up
+Pre-pitch number of outs.
+
+inning
+Pre-pitch inning number.
+
+inning_topbot
+Pre-pitch top or bottom of inning.
+
+hc_x
+Hit coordinate X of batted ball.
+
+hc_y
+Hit coordinate Y of batted ball.
+
+sv_id
+Non-unique Id of play event per game.
+
+vx0
+The velocity of the pitch, in feet per second, in x-dimension, determined at y=50 feet.
+
+vy0
+The velocity of the pitch, in feet per second, in y-dimension, determined at y=50 feet.
+
+vy0
+The velocity of the pitch, in feet per second, in z-dimension, determined at y=50 feet.
+
+ax
+The acceleration of the pitch, in feet per second per second, in x-dimension, determined at y=50 feet.
+
+ay
+The acceleration of the pitch, in feet per second per second, in y-dimension, determined at y=50 feet.
+
+az
+The acceleration of the pitch, in feet per second per second, in z-dimension, determined at y=50 feet.
+
+sz_top
+Top of the batter's strike zone set by the operator when the ball is halfway to the plate.
+
+sz_bot
+Bottom of the batter's strike zone set by the operator when the ball is halfway to the plate.
+
+hit_distance
+Projected hit distance of the batted ball.
+
+launch_speed
+Exit velocity of the batted ball as tracked by Statcast. For the limited subset of batted balls not tracked directly, estimates are included based on the process described here.
+
+launch_angle
+Launch angle of the batted ball as tracked by Statcast. For the limited subset of batted balls not tracked directly, estimates are included based on the process described here.
+
+effective_speed
+Derived speed based on the the extension of the pitcher's release.
+
+release_spin
+Spin rate of pitch tracked by Statcast.
+
+release_extension
+Release extension of pitch in feet as tracked by Statcast.
+
+game_pk
+Unique Id for Game.
+
+pitcher
+MLB Player Id tied to the play event.
+
+fielder_2
+MLB Player Id for catcher.
+
+fielder_3
+MLB Player Id for 1B.
+
+fielder_4
+MLB Player Id for 2B.
+
+fielder_5
+MLB Player Id for 3B.
+
+fielder_6
+MLB Player Id for SS.
+
+fielder_7
+MLB Player Id for LF.
+
+fielder_8
+MLB Player Id for CF.
+
+fielder_9
+MLB Player Id for RF.
+
+release_pos_y
+Release position of pitch measured in feet from the catcher's perspective.
+
+estimated_ba_using_speedangle
+Estimated Batting Avg based on launch angle and exit velocity.
+
+estimated_woba_using_speedangle
+Estimated wOBA based on launch angle and exit velocity.
+
+woba_value
+wOBA value based on result of play.
+
+woba_denom
+wOBA denominator based on result of play.
+
+babip_value
+BABIP value based on result of play.
+
+iso_value
+ISO value based on result of play.
+
+launch_speed_angle
+Launch speed/angle zone based on launch angle and exit velocity.
+1: Weak
+2: Topped
+3: Under
+4: Flare/Burner
+5: Solid Contact
+6: Barrel
+
+
+at_bat_number
+Plate appearance number of the game.
+
+pitch_number
+Total pitch number of the plate appearance.
+
+pitch_name
+The name of the pitch derived from the Statcast Data.
+
+home_score
+Pre-pitch home score
+
+away_score
+Pre-pitch away score
+
+bat_score
+Pre-pitch bat team score
+
+fld_score
+Pre-pitch field team score
+
+post_home_score
+Post-pitch home score
+
+post_away_score
+Post-pitch away score
+
+post_bat_score
+Post-pitch bat team score
+
+if_fielding_alignment
+Infield fielding alignment at the time of the pitch.
+
+of_fielding_alignment
+Outfield fielding alignment at the time of the pitch.
+
+spin_axis
+The Spin Axis in the 2D X-Z plane in degrees from 0 to 360, such that 180 represents a pure backspin fastball and 0 degrees represents a pure topspin (12-6) curveball
+
+delta_home_win_exp
+The change in Win Expectancy before the Plate Appearance and after the Plate Appearance
+
+delta_run_exp
+The change in Run Expectancy before the Pitch and after the Pitch
+'''
+
+player_id_lookup = '''
+name_last: player's last name
+name_first: player's first name
+key_mlbam: MLB Advanced Media ID
+key_retro: MLB Retrosheet ID
+key_bbref: MLB Baseball Reference ID
+key_fangraphs: MLB FanGraphs ID
+mlb_played_first: first season played by the player
+mlb_played_last: last season played by the player'''
+
+pitching_stats = '''ERA: Earned Run Average
+WHIP: Walks and Hits per Innings Pitched
+FIP: Fielding Independent Pitching
+xFIP: Expected Fielding Independent Pitching
+SIERA: Skill-Interactive ERA
+tERA: True Runs Allowed
+K/9: Strikeout rate
+BB/9: Walk rate
+K%: Strikeout percentage
+BB%: Walk percentage
+K/BB: Strikeout-to-Walk ratio
+LD%: Line drive rate
+GB%: Ground ball rate
+FB%: Fly ball rate
+HR/FB: Home runs per fly ball rate
+BABIP: Batting Average on Balls In Play
+LOB%: Left On Base percentage
+ERA-: ERA Minus
+FIP-: FIP Minus
+xFIP-: xFIP Minus
+SD: Shutdowns
+MD: Meltdowns
+O-Swing%: Outside-the-zone swing rate
+Z-Swing%: Inside-the-zone swing rate
+Swing%: Swing rate
+O-Contact%: Outside-the-zone contact percentage
+Z-Contact%: Inside-the-zone contact percentage
+Contact%: Contact percentage
+Zone%: Percentage of pitches within the zone
+F-Strike%: First-pitch strike percentage
+SwStr%: Swinging Stike percentage
+wFB: Fastball runs above average
+wSL: Slider runs above average
+wCT: Cutter runs above average
+wCB: Curveball runs above average
+wCH: Change-up runs above average
+wSF: Split-finger fastball runs above average
+wKN: Knuckleball runs above average
+wFB/C: Fastball runs above average per 100 pitches
+wSL/C: Slider runs above average per 100 pitches
+wCT/C: Cutter runs above average per 100 pitches
+wCB/C: Curveball runs above average per 100 pitches
+wCH/C: Change-up runs above average per 100 pitches
+wSF/C: Slit-fingered fastball runs above average per 100 pitches
+wKN/C: Knuckleball runs above average per 100 pitches'''
+
+batting_stats = '''
+OBP: On-Base Percentage
+OPS: On-base Plus Slugging
+OPS+: On-base Plus Slugging Plus
+wOBA: Weighted On-Base Average
+wRAA: Weighted Runs Above Average
+UBR: Ultimate Base Running
+wRC: Weighted Runs Created
+wRC+: Weighted Runs Created Plus
+BABIP: Batting Average on Ball In Play
+ISO: Isolated Power
+HR/FB: Home Runs per Fly Ball rate
+Spd: Speed Score
+GB%: Ground ball percentage
+FB%: Fly ball percentage
+LD%: Line drive percentate
+K%: Stikeout rate
+BB%: Walk rate
+O-Swing%: Outside-the-zone swing rate
+Z-Swing%: Inside-the-zone swing rate
+Swing%: Swing rate
+O-Contact%: Outside-the-zone contact percentage
+Z-Contact%: Inside-the-zone contact percentage
+Contact%: Contact percentage
+Zone%: Percentage of pitches within the zone
+F-Strike%: First-pitch strike percentage
+SwStr%: Swinging Stike percentage
+wFB: Fastball runs above average
+wSL: Slider runs above average
+wCT: Cutter runs above average
+wCB: Curveball runs above average
+wCH: Change-up runs above average
+wSF: Split-finger fastball runs above average
+wKN: Knuckleball runs above average
+wFB/C: Fastball runs above average per 100 pitches
+wSL/C: Slider runs above average per 100 pitches
+wCT/C: Cutter runs above average per 100 pitches
+wCB/C: Curveball runs above average per 100 pitches
+wCH/C: Change-up runs above average per 100 pitches
+wSF/C: Slit-fingered fastball runs above average per 100 pitches
+wKN/C: Knuckleball runs above average per 100 pitches'''
+
+schedule_and_record = '''Date: date the game was played
+Tm: team
+Home_Away: indicator of Home (Home) or Away (@) game
+Opp: opponenet
+W/L: Win or Loss indicator
+R: runs scored
+RA: runs allowed
+Inn: innings played
+W-L: team's win-loss record after the game end
+Rank: team's ranking in the division
+GB: how many games back (or up) the team is in the divion
+Win: winning pitcher
+Loss: losing pitcher
+Save: saving pitcher
+Time: game duration
+D/N: day or night game indicator
+Attendance: game attendance
+cLI: Championship Leverage Index. This is a statistic that measures the importance of winning a game to a team's chances of winning the World Series.
+Streak: how many consecutive wins or losses for the team.  Consecutive wins are represented with positive values while consecutive losses are represented with negative values
+Orig. Scheduled: date the game was originally scheduled (if applicable)'''
+
+standings = '''Tm: team
+W: wins
+L: losses
+W-L%: win-loss percentage
+GB: games back in the division'''
+
+playerid_reverse_lookup = '''name_last
+name_first
+key_mlbam
+key_retro
+key_bbref
+key_fangraphs
+mlb_played_first
+mlb_played_last'''
+
+
+================================================
+FILE: state/functions.json
+================================================
+{"statcast": {"docs": "# Statcast\n`statcast(start_dt=[yesterday's date], end_dt=None, team=None, verbose=True, parallel=True)`\n\nThe `statcast` function retrieves pitch-level statcast data for a given date or range or dates. \n\n## Returned data\nThis function returns a pandas `DataFrame` with one entry for each pitch in the\nquery. The data returned for each pitch is explained on\n[Baseball Savant](https://baseballsavant.mlb.com/csv-docs).\n\n## Arguments\n`start_dt:` first day for which you want to retrieve data. Defaults to yesterday's date if nothing is entered. If you only want data for one date, supply a `start_dt` value but not an `end_dt` value. Format: YYYY-MM-DD. \n\n`end_dt:` last day for which you want to retrieve data. Defaults to None. If you want to retrieve data for more than one day, both a `start_dt` and `end_dt` value must be given. Format: YYYY-MM-DD. \n\n`team:` optional. If you only want statcast data for one team, supply that team's abbreviation here (i.e. BOS, SEA, NYY, etc).\n\n`verbose:` Boolean, default=True. If set to True this will provide updates on query progress, if set to False it will not. \n\n`parallel:` Boolean, default=True. Whether to parallelize HTTP requests in large queries.\n\n### A note on data availability \nThe earliest available statcast data comes from the 2008 season when the system was first introduced to Major League Baseball. Queries before this year will not work. Further, some features were introduced after the 2008 season. Launch speed angle, for example, is only available from the 2015 season forward. \n\n### A note on query time\nBaseball savant limits queries to 30000 rows each. For this reason, if your request is for a period of greater than 5 days, it will be broken into two or more smaller requests. The data will still be returned to you in a single dataframe, but it will take slightly longer. \n\n### A note on parallelization\nLarge queries with requests made in parallel complete substantially faster. This option exists to accommodate compute environments where multiprocessing is disabled (e.g. some AWS Lambda environments).\n\n## Examples of valid queries\n\n```python\nfrom pybaseball import statcast\n\n# get all statcast data for July 4th, 2017\ndata = statcast('2017-07-04')\n\n#get data for the first seven days of August in 2016\ndata = statcast('2016-08-01', '2016-08-07')\n\n#get all data for the Texas Rangers in the 2016 season\ndata = statcast('2016-04-01', '2016-10-30', team='TEX')\n\n# get data for yesterday\ndata = statcast()```\n", "data_dictionary": "\npitch_type\nThe type of pitch derived from Statcast.\n\ngame_date\nDate of the Game.\n\nrelease_speed\nPitch velocities from 2008-16 are via Pitch F/X, and adjusted to roughly out-of-hand release point. All velocities from 2017 and beyond are Statcast, which are reported out-of-hand.\n\nrelease_pos_x\nHorizontal Release Position of the ball measured in feet from the catcher's perspective.\n\nrelease_pos_z\nVertical Release Position of the ball measured in feet from the catcher's perspective.\n\nplayer_name\nPlayer's name tied to the event of the search formatted as \"Last Name, First Name\"\n\nbatter\nMLB Player Id tied to the play event.\n\npitcher\nMLB Player Id tied to the play event.\n\nevents\nEvent of the resulting Plate Appearance.\n\ndescription\nDescription of the resulting pitch.\n\nzone\nZone location of the ball when it crosses the plate from the catcher's perspective.\n\ndes\nPlate appearance description from game day.\n\ngame_type\nType of Game. E = Exhibition, S = Spring Training, R = Regular Season, F = Wild Card, D = Divisional Series, L = League Championship Series, W = World Series\n\nstand\nSide of the plate batter is standing.\n\np_throws\nHand pitcher throws with.\n\nhome_team\nAbbreviation of home team.\n\naway_team\nAbbreviation of away team.\n\ntype\nShort hand of pitch result. B = ball, S = strike, X = in play.\n\nhit_location\nPosition of first fielder to touch the ball.\n\nbb_type\nBatted ball type, ground_ball, line_drive, fly_ball, popup.\n\nballs\nPre-pitch number of balls in count.\n\nstrikes\nPre-pitch number of strikes in count.\n\ngame_year\nYear game took place.\n\npfx_x\nHorizontal movement in feet from the catcher's perspective.\n\npfx_z\nVertical movement in feet from the catcher's perpsective.\n\nplate_x\nHorizontal position of the ball when it crosses home plate from the catcher's perspective.\n\nplate_z\nVertical position of the ball when it crosses home plate from the catcher's perspective.\n\non_3b\nPre-pitch MLB Player Id of Runner on 3B.\n\non_2b\nPre-pitch MLB Player Id of Runner on 2B.\n\non_1b\nPre-pitch MLB Player Id of Runner on 1B.\n\nouts_when_up\nPre-pitch number of outs.\n\ninning\nPre-pitch inning number.\n\ninning_topbot\nPre-pitch top or bottom of inning.\n\nhc_x\nHit coordinate X of batted ball.\n\nhc_y\nHit coordinate Y of batted ball.\n\nsv_id\nNon-unique Id of play event per game.\n\nvx0\nThe velocity of the pitch, in feet per second, in x-dimension, determined at y=50 feet.\n\nvy0\nThe velocity of the pitch, in feet per second, in y-dimension, determined at y=50 feet.\n\nvy0\nThe velocity of the pitch, in feet per second, in z-dimension, determined at y=50 feet.\n\nax\nThe acceleration of the pitch, in feet per second per second, in x-dimension, determined at y=50 feet.\n\nay\nThe acceleration of the pitch, in feet per second per second, in y-dimension, determined at y=50 feet.\n\naz\nThe acceleration of the pitch, in feet per second per second, in z-dimension, determined at y=50 feet.\n\nsz_top\nTop of the batter's strike zone set by the operator when the ball is halfway to the plate.\n\nsz_bot\nBottom of the batter's strike zone set by the operator when the ball is halfway to the plate.\n\nhit_distance\nProjected hit distance of the batted ball.\n\nlaunch_speed\nExit velocity of the batted ball as tracked by Statcast. For the limited subset of batted balls not tracked directly, estimates are included based on the process described here.\n\nlaunch_angle\nLaunch angle of the batted ball as tracked by Statcast. For the limited subset of batted balls not tracked directly, estimates are included based on the process described here.\n\neffective_speed\nDerived speed based on the the extension of the pitcher's release.\n\nrelease_spin\nSpin rate of pitch tracked by Statcast.\n\nrelease_extension\nRelease extension of pitch in feet as tracked by Statcast.\n\ngame_pk\nUnique Id for Game.\n\npitcher\nMLB Player Id tied to the play event.\n\nfielder_2\nMLB Player Id for catcher.\n\nfielder_3\nMLB Player Id for 1B.\n\nfielder_4\nMLB Player Id for 2B.\n\nfielder_5\nMLB Player Id for 3B.\n\nfielder_6\nMLB Player Id for SS.\n\nfielder_7\nMLB Player Id for LF.\n\nfielder_8\nMLB Player Id for CF.\n\nfielder_9\nMLB Player Id for RF.\n\nrelease_pos_y\nRelease position of pitch measured in feet from the catcher's perspective.\n\nestimated_ba_using_speedangle\nEstimated Batting Avg based on launch angle and exit velocity.\n\nestimated_woba_using_speedangle\nEstimated wOBA based on launch angle and exit velocity.\n\nwoba_value\nwOBA value based on result of play.\n\nwoba_denom\nwOBA denominator based on result of play.\n\nbabip_value\nBABIP value based on result of play.\n\niso_value\nISO value based on result of play.\n\nlaunch_speed_angle\nLaunch speed/angle zone based on launch angle and exit velocity.\n1: Weak\n2: Topped\n3: Under\n4: Flare/Burner\n5: Solid Contact\n6: Barrel\n\n\nat_bat_number\nPlate appearance number of the game.\n\npitch_number\nTotal pitch number of the plate appearance.\n\npitch_name\nThe name of the pitch derived from the Statcast Data.\n\nhome_score\nPre-pitch home score\n\naway_score\nPre-pitch away score\n\nbat_score\nPre-pitch bat team score\n\nfld_score\nPre-pitch field team score\n\npost_home_score\nPost-pitch home score\n\npost_away_score\nPost-pitch away score\n\npost_bat_score\nPost-pitch bat team score\n\nif_fielding_alignment\nInfield fielding alignment at the time of the pitch.\n\nof_fielding_alignment\nOutfield fielding alignment at the time of the pitch.\n\nspin_axis\nThe Spin Axis in the 2D X-Z plane in degrees from 0 to 360, such that 180 represents a pure backspin fastball and 0 degrees represents a pure topspin (12-6) curveball\n\ndelta_home_win_exp\nThe change in Win Expectancy before the Plate Appearance and after the Plate Appearance\n\ndelta_run_exp\nThe change in Run Expectancy before the Pitch and after the Pitch\n"}, "statcast_pitcher": {"docs": "# Statcast Pitcher\n`statcast_pitcher(start_dt=[yesterday's date], end_dt=None, player_id)`\n\nThe statcast function retrieves pitch-level statcast data for a given date or range or dates. \n\n## Arguments\n`start_dt:` first day for which you want to retrieve data. Defaults to yesterday's date if nothing is entered. If you only want data for one date, supply a `start_dt` value but not an `end_dt` value. Format: YYYY-MM-DD. \n\n`end_dt:` last day for which you want to retrieve data. Defaults to None. If you want to retrieve data for more than one day, both a `start_dt` and `end_dt` value must be given. Format: YYYY-MM-DD. \n\n`player_id:` MLBAM player ID for the pitcher you want to retrieve data for. To find a player's MLBAM ID, see the function [playerid_lookup](http://github.com/jldbc/pybaseball/docs/playerid_lookup.md) or the examples below. \n\n### A note on data availability \nThe earliest available statcast data comes from the 2008 season when the system was first introduced to Major League Baseball. Queries before this year will not work. Further, some features were introduced after the 2008 season. Launch speed angle, for example, is only available from the 2015 season forward. \n\n### Known issue\nIn rare cases where a player has seen greater than 30,000 pitches over the time period specified in your query, only the first 30,000 of these plays will be returned. There is a fix in the works for this\n\n## Examples of valid queries\n\n```python\nfrom pybaseball import statcast_pitcher\nfrom pybaseball import playerid_lookup\n\n# find Chris Sale's player id (mlbam_key)\nplayerid_lookup('sale','chris')\n\n# get all available data\ndata = statcast_pitcher('2008-04-01', '2017-07-15', player_id = 519242)\n\n# get data for July 15th, 2017\ndata = statcast_pitcher('2017-07-15','2017-07-15', player_id = 519242)\n```", "data_dictionary": "\npitch_type\nThe type of pitch derived from Statcast.\n\ngame_date\nDate of the Game.\n\nrelease_speed\nPitch velocities from 2008-16 are via Pitch F/X, and adjusted to roughly out-of-hand release point. All velocities from 2017 and beyond are Statcast, which are reported out-of-hand.\n\nrelease_pos_x\nHorizontal Release Position of the ball measured in feet from the catcher's perspective.\n\nrelease_pos_z\nVertical Release Position of the ball measured in feet from the catcher's perspective.\n\nplayer_name\nPlayer's name tied to the event of the search formatted as \"Last Name, First Name\"\n\nbatter\nMLB Player Id tied to the play event.\n\npitcher\nMLB Player Id tied to the play event.\n\nevents\nEvent of the resulting Plate Appearance.\n\ndescription\nDescription of the resulting pitch.\n\nzone\nZone location of the ball when it crosses the plate from the catcher's perspective.\n\ndes\nPlate appearance description from game day.\n\ngame_type\nType of Game. E = Exhibition, S = Spring Training, R = Regular Season, F = Wild Card, D = Divisional Series, L = League Championship Series, W = World Series\n\nstand\nSide of the plate batter is standing.\n\np_throws\nHand pitcher throws with.\n\nhome_team\nAbbreviation of home team.\n\naway_team\nAbbreviation of away team.\n\ntype\nShort hand of pitch result. B = ball, S = strike, X = in play.\n\nhit_location\nPosition of first fielder to touch the ball.\n\nbb_type\nBatted ball type, ground_ball, line_drive, fly_ball, popup.\n\nballs\nPre-pitch number of balls in count.\n\nstrikes\nPre-pitch number of strikes in count.\n\ngame_year\nYear game took place.\n\npfx_x\nHorizontal movement in feet from the catcher's perspective.\n\npfx_z\nVertical movement in feet from the catcher's perpsective.\n\nplate_x\nHorizontal position of the ball when it crosses home plate from the catcher's perspective.\n\nplate_z\nVertical position of the ball when it crosses home plate from the catcher's perspective.\n\non_3b\nPre-pitch MLB Player Id of Runner on 3B.\n\non_2b\nPre-pitch MLB Player Id of Runner on 2B.\n\non_1b\nPre-pitch MLB Player Id of Runner on 1B.\n\nouts_when_up\nPre-pitch number of outs.\n\ninning\nPre-pitch inning number.\n\ninning_topbot\nPre-pitch top or bottom of inning.\n\nhc_x\nHit coordinate X of batted ball.\n\nhc_y\nHit coordinate Y of batted ball.\n\nsv_id\nNon-unique Id of play event per game.\n\nvx0\nThe velocity of the pitch, in feet per second, in x-dimension, determined at y=50 feet.\n\nvy0\nThe velocity of the pitch, in feet per second, in y-dimension, determined at y=50 feet.\n\nvy0\nThe velocity of the pitch, in feet per second, in z-dimension, determined at y=50 feet.\n\nax\nThe acceleration of the pitch, in feet per second per second, in x-dimension, determined at y=50 feet.\n\nay\nThe acceleration of the pitch, in feet per second per second, in y-dimension, determined at y=50 feet.\n\naz\nThe acceleration of the pitch, in feet per second per second, in z-dimension, determined at y=50 feet.\n\nsz_top\nTop of the batter's strike zone set by the operator when the ball is halfway to the plate.\n\nsz_bot\nBottom of the batter's strike zone set by the operator when the ball is halfway to the plate.\n\nhit_distance\nProjected hit distance of the batted ball.\n\nlaunch_speed\nExit velocity of the batted ball as tracked by Statcast. For the limited subset of batted balls not tracked directly, estimates are included based on the process described here.\n\nlaunch_angle\nLaunch angle of the batted ball as tracked by Statcast. For the limited subset of batted balls not tracked directly, estimates are included based on the process described here.\n\neffective_speed\nDerived speed based on the the extension of the pitcher's release.\n\nrelease_spin\nSpin rate of pitch tracked by Statcast.\n\nrelease_extension\nRelease extension of pitch in feet as tracked by Statcast.\n\ngame_pk\nUnique Id for Game.\n\npitcher\nMLB Player Id tied to the play event.\n\nfielder_2\nMLB Player Id for catcher.\n\nfielder_3\nMLB Player Id for 1B.\n\nfielder_4\nMLB Player Id for 2B.\n\nfielder_5\nMLB Player Id for 3B.\n\nfielder_6\nMLB Player Id for SS.\n\nfielder_7\nMLB Player Id for LF.\n\nfielder_8\nMLB Player Id for CF.\n\nfielder_9\nMLB Player Id for RF.\n\nrelease_pos_y\nRelease position of pitch measured in feet from the catcher's perspective.\n\nestimated_ba_using_speedangle\nEstimated Batting Avg based on launch angle and exit velocity.\n\nestimated_woba_using_speedangle\nEstimated wOBA based on launch angle and exit velocity.\n\nwoba_value\nwOBA value based on result of play.\n\nwoba_denom\nwOBA denominator based on result of play.\n\nbabip_value\nBABIP value based on result of play.\n\niso_value\nISO value based on result of play.\n\nlaunch_speed_angle\nLaunch speed/angle zone based on launch angle and exit velocity.\n1: Weak\n2: Topped\n3: Under\n4: Flare/Burner\n5: Solid Contact\n6: Barrel\n\n\nat_bat_number\nPlate appearance number of the game.\n\npitch_number\nTotal pitch number of the plate appearance.\n\npitch_name\nThe name of the pitch derived from the Statcast Data.\n\nhome_score\nPre-pitch home score\n\naway_score\nPre-pitch away score\n\nbat_score\nPre-pitch bat team score\n\nfld_score\nPre-pitch field team score\n\npost_home_score\nPost-pitch home score\n\npost_away_score\nPost-pitch away score\n\npost_bat_score\nPost-pitch bat team score\n\nif_fielding_alignment\nInfield fielding alignment at the time of the pitch.\n\nof_fielding_alignment\nOutfield fielding alignment at the time of the pitch.\n\nspin_axis\nThe Spin Axis in the 2D X-Z plane in degrees from 0 to 360, such that 180 represents a pure backspin fastball and 0 degrees represents a pure topspin (12-6) curveball\n\ndelta_home_win_exp\nThe change in Win Expectancy before the Plate Appearance and after the Plate Appearance\n\ndelta_run_exp\nThe change in Run Expectancy before the Pitch and after the Pitch\n"}, "statcast_batter": {"docs": "# Statcast Batter\n`statcast_batter(start_dt=[yesterday's date], end_dt=None, player_id)`\n\nThe statcast function retrieves pitch-level statcast data for a given date or range or dates. \n\n## Arguments\n`start_dt:` first day for which you want to retrieve data. Defaults to yesterday's date if nothing is entered. If you only want data for one date, supply a `start_dt` value but not an `end_dt` value. Format: YYYY-MM-DD. \n\n`end_dt:` last day for which you want to retrieve data. Defaults to None. If you want to retrieve data for more than one day, both a `start_dt` and `end_dt` value must be given. Format: YYYY-MM-DD. \n\n`player_id:` MLBAM player ID for the player you want to retrieve data for. To find a player's MLBAM ID, see the function [playerid_lookup](http://github.com/jldbc/pybaseball/docs/playerid_lookup.md) or the examples below. \n\n### A note on data availability \nThe earliest available statcast data comes from the 2008 season when the system was first introduced to Major League Baseball. Queries before this year will not work. Further, some features were introduced after the 2008 season. Launch speed angle, for example, is only available from the 2015 season forward. \n\n## Examples of valid queries\n\n```python\nfrom pybaseball import statcast_batter\nfrom pybaseball import playerid_lookup\n\n# find David Ortiz's player id (mlbam_key)\nplayerid_lookup('ortiz','david')\n\n# get all available data\ndata = statcast_batter('2008-04-01', '2017-07-15', player_id = 120074)\n\n# get data for August 16th, 2014\ndata = statcast_batter('2014-08-16', player_id = 120074)\n```\n", "data_dictionary": "\npitch_type\nThe type of pitch derived from Statcast.\n\ngame_date\nDate of the Game.\n\nrelease_speed\nPitch velocities from 2008-16 are via Pitch F/X, and adjusted to roughly out-of-hand release point. All velocities from 2017 and beyond are Statcast, which are reported out-of-hand.\n\nrelease_pos_x\nHorizontal Release Position of the ball measured in feet from the catcher's perspective.\n\nrelease_pos_z\nVertical Release Position of the ball measured in feet from the catcher's perspective.\n\nplayer_name\nPlayer's name tied to the event of the search formatted as \"Last Name, First Name\"\n\nbatter\nMLB Player Id tied to the play event.\n\npitcher\nMLB Player Id tied to the play event.\n\nevents\nEvent of the resulting Plate Appearance.\n\ndescription\nDescription of the resulting pitch.\n\nzone\nZone location of the ball when it crosses the plate from the catcher's perspective.\n\ndes\nPlate appearance description from game day.\n\ngame_type\nType of Game. E = Exhibition, S = Spring Training, R = Regular Season, F = Wild Card, D = Divisional Series, L = League Championship Series, W = World Series\n\nstand\nSide of the plate batter is standing.\n\np_throws\nHand pitcher throws with.\n\nhome_team\nAbbreviation of home team.\n\naway_team\nAbbreviation of away team.\n\ntype\nShort hand of pitch result. B = ball, S = strike, X = in play.\n\nhit_location\nPosition of first fielder to touch the ball.\n\nbb_type\nBatted ball type, ground_ball, line_drive, fly_ball, popup.\n\nballs\nPre-pitch number of balls in count.\n\nstrikes\nPre-pitch number of strikes in count.\n\ngame_year\nYear game took place.\n\npfx_x\nHorizontal movement in feet from the catcher's perspective.\n\npfx_z\nVertical movement in feet from the catcher's perpsective.\n\nplate_x\nHorizontal position of the ball when it crosses home plate from the catcher's perspective.\n\nplate_z\nVertical position of the ball when it crosses home plate from the catcher's perspective.\n\non_3b\nPre-pitch MLB Player Id of Runner on 3B.\n\non_2b\nPre-pitch MLB Player Id of Runner on 2B.\n\non_1b\nPre-pitch MLB Player Id of Runner on 1B.\n\nouts_when_up\nPre-pitch number of outs.\n\ninning\nPre-pitch inning number.\n\ninning_topbot\nPre-pitch top or bottom of inning.\n\nhc_x\nHit coordinate X of batted ball.\n\nhc_y\nHit coordinate Y of batted ball.\n\nsv_id\nNon-unique Id of play event per game.\n\nvx0\nThe velocity of the pitch, in feet per second, in x-dimension, determined at y=50 feet.\n\nvy0\nThe velocity of the pitch, in feet per second, in y-dimension, determined at y=50 feet.\n\nvy0\nThe velocity of the pitch, in feet per second, in z-dimension, determined at y=50 feet.\n\nax\nThe acceleration of the pitch, in feet per second per second, in x-dimension, determined at y=50 feet.\n\nay\nThe acceleration of the pitch, in feet per second per second, in y-dimension, determined at y=50 feet.\n\naz\nThe acceleration of the pitch, in feet per second per second, in z-dimension, determined at y=50 feet.\n\nsz_top\nTop of the batter's strike zone set by the operator when the ball is halfway to the plate.\n\nsz_bot\nBottom of the batter's strike zone set by the operator when the ball is halfway to the plate.\n\nhit_distance\nProjected hit distance of the batted ball.\n\nlaunch_speed\nExit velocity of the batted ball as tracked by Statcast. For the limited subset of batted balls not tracked directly, estimates are included based on the process described here.\n\nlaunch_angle\nLaunch angle of the batted ball as tracked by Statcast. For the limited subset of batted balls not tracked directly, estimates are included based on the process described here.\n\neffective_speed\nDerived speed based on the the extension of the pitcher's release.\n\nrelease_spin\nSpin rate of pitch tracked by Statcast.\n\nrelease_extension\nRelease extension of pitch in feet as tracked by Statcast.\n\ngame_pk\nUnique Id for Game.\n\npitcher\nMLB Player Id tied to the play event.\n\nfielder_2\nMLB Player Id for catcher.\n\nfielder_3\nMLB Player Id for 1B.\n\nfielder_4\nMLB Player Id for 2B.\n\nfielder_5\nMLB Player Id for 3B.\n\nfielder_6\nMLB Player Id for SS.\n\nfielder_7\nMLB Player Id for LF.\n\nfielder_8\nMLB Player Id for CF.\n\nfielder_9\nMLB Player Id for RF.\n\nrelease_pos_y\nRelease position of pitch measured in feet from the catcher's perspective.\n\nestimated_ba_using_speedangle\nEstimated Batting Avg based on launch angle and exit velocity.\n\nestimated_woba_using_speedangle\nEstimated wOBA based on launch angle and exit velocity.\n\nwoba_value\nwOBA value based on result of play.\n\nwoba_denom\nwOBA denominator based on result of play.\n\nbabip_value\nBABIP value based on result of play.\n\niso_value\nISO value based on result of play.\n\nlaunch_speed_angle\nLaunch speed/angle zone based on launch angle and exit velocity.\n1: Weak\n2: Topped\n3: Under\n4: Flare/Burner\n5: Solid Contact\n6: Barrel\n\n\nat_bat_number\nPlate appearance number of the game.\n\npitch_number\nTotal pitch number of the plate appearance.\n\npitch_name\nThe name of the pitch derived from the Statcast Data.\n\nhome_score\nPre-pitch home score\n\naway_score\nPre-pitch away score\n\nbat_score\nPre-pitch bat team score\n\nfld_score\nPre-pitch field team score\n\npost_home_score\nPost-pitch home score\n\npost_away_score\nPost-pitch away score\n\npost_bat_score\nPost-pitch bat team score\n\nif_fielding_alignment\nInfield fielding alignment at the time of the pitch.\n\nof_fielding_alignment\nOutfield fielding alignment at the time of the pitch.\n\nspin_axis\nThe Spin Axis in the 2D X-Z plane in degrees from 0 to 360, such that 180 represents a pure backspin fastball and 0 degrees represents a pure topspin (12-6) curveball\n\ndelta_home_win_exp\nThe change in Win Expectancy before the Plate Appearance and after the Plate Appearance\n\ndelta_run_exp\nThe change in Run Expectancy before the Pitch and after the Pitch\n"}, "playerid_lookup": {"docs": "# Player ID Lookup\n\n## Single Player Lookup\n\n`playerid_lookup(last, first=None, fuzzy=False)`\n\nLook up a player's MLBAM, Retrosheet, FanGraphs, and Baseball Reference ID by name.\n\n## Arguments\n`last:` String. The player's last name. Case insensitive.\n\n`first:` String. Optional. The player's first name. Case insensitive.\n\n`fuzzy:` Boolean. Optional. Search for inexact name matches, the 5 closest will be returned.\n\nProviding last name only will return all available id data for players with that last name (this will return several rows for a common last name like Jones, for example.) If multiple players exist for a (last name, first name) pair, you can figure out who's who by seeing their first and last years of play in the fields `mlb_played_first` and `mlb_played_last`.\n\nThis data comes from Chadwick Bureau, meaning that there are several people in this data who are not MLB players. For this reason, supplying both last and first name is recommended to narrow your search. \n\n## Examples of valid queries\n\n```python\nfrom pybaseball import playerid_lookup\n\n# find the ids of all players with last name Jones (returns 1,314 rows)\ndata = playerid_lookup('jones')\n\n# only return the ids of chipper jones (returns one row)\ndata = playerid_lookup('jones','chipper')\n\n# Will return all players named Pedro Martinez (returns *2* rows)\ndata = playerid_lookup(\"martinez\", \"pedro\", fuzzy=True)\n\n# Will return the 5 closest names to \"yadi molina\" (returns 5 rows)\n# First row will be Yadier Molina\ndata = playerid_lookup(\"molina\", \"yadi\", fuzzy=True)\n```\n\n## List Lookup\n\n`player_search_list(player_list)`\n\nLook up a list of player ID's by name, return a data frame of all players\n\n`player_list:` List. A list of tuples, of the form `(last, first)`. Case Insensitive.\n\nSources are the same as those used in the above `playerid_lookup` function. Queries for this function must be exact name matches.\n\n## Examples of valid queries\n\n```python\n\nfrom pybaseball import player_search_list\n\n# Will return the ids for both Lou Brock and Chipper Jones (returns 2 rows)\ndata = player_search_list([(\"brock\",\"lou\"), (\"jones\",\"chipper\")])\n\n```", "data_dictionary": "\nname_last: player's last name\nname_first: player's first name\nkey_mlbam: MLB Advanced Media ID\nkey_retro: MLB Retrosheet ID\nkey_bbref: MLB Baseball Reference ID\nkey_fangraphs: MLB FanGraphs ID\nmlb_played_first: first season played by the player\nmlb_played_last: last season played by the player"}, "schedule_and_record": {"docs": "# Schedule and Record\n\n`schedule_and_record(season, team)`\n\nThe schedule_and_record function returns a dataframe of a team's game-level results for a given season, including win/loss/tie result, score, attendance, and winning/losing/saving pitcher. If the season is incomplete, it will provide scheduling information for future games. \n\n## Arguments\n`season:` Integer. The season for which you want a team's record data. \n\n`team:` String. The abbreviation of the team for which you are requesting data (e.g. \"PHI\", \"BOS\", \"LAD\"). \n\nNote that if a team did not exist during the year you are requesting data for, the query will be unsuccessful. Historical name and city changes for teams in older seasons can cause some problems as well. The Los Angeles Dodgers (\"LAD\"), for example, are abbreviated \"BRO\" in older seasons, due to their origins as the Brooklyn Dodgers. This may at times require some detective work in certain cases.   \n\n## Examples of valid queries\n\n```python\nfrom pybaseball import schedule_and_record\n\n# Game-by-game results from the Yankees' 1927 season\ndata = schedule_and_record(1927, \"NYY\")\n\n# Results and upcoming schedule for the Phillies' current season (2017 at the time of writing)\ndata = schedule_and_record(2017, \"PHI\")\n```\n", "data_dictionary": "Date: date the game was played\nTm: team\nHome_Away: indicator of Home (Home) or Away (@) game\nOpp: opponenet\nW/L: Win or Loss indicator\nR: runs scored\nRA: runs allowed\nInn: innings played\nW-L: team's win-loss record after the game end\nRank: team's ranking in the division\nGB: how many games back (or up) the team is in the divion\nWin: winning pitcher\nLoss: losing pitcher\nSave: saving pitcher\nTime: game duration\nD/N: day or night game indicator\nAttendance: game attendance\ncLI: Championship Leverage Index. This is a statistic that measures the importance of winning a game to a team's chances of winning the World Series.\nStreak: how many consecutive wins or losses for the team.  Consecutive wins are represented with positive values while consecutive losses are represented with negative values\nOrig. Scheduled: date the game was originally scheduled (if applicable)"}, "standings": {"docs": "# Standings\n\n`standings(season)`\n\nhe standings(season) function gives division standings for a given season. If the current season is chosen, \nit will give the most current set of standings. Otherwise, it will give the end-of-season standings for each \ndivision for the chosen season. This function returns a list of dataframes. Each dataframe is the standings for one of MLB's six divisions.\n\n## Arguments\n`season:` Integer. Defaults to the current calendar year if no value is provided. \n\n## Examples of valid queries\n\n```python\nfrom pybaseball import standings\n\n# get the current season's up-to-date standings\ndata = standings()\n\n# get the end-of-season division standings for the 1980 season\ndata = standings(1980)\n```\n", "data_dictionary": "Tm: team\nW: wins\nL: losses\nW-L%: win-loss percentage\nGB: games back in the division"}, "playerid_reverse_lookup": {"docs": "# Player ID Reverse Lookup\n\n`playerid_reverse_lookup(player_ids, key_type='mlbam')`\n\nFind the names and ids of one or several players given a list of MLBAM, FanGraphs, Baseball Reference, or Retrosheet ids. \n\n## Arguments\n`player_ids:` List. A list of player ids.\n\n`key_type:` String. The type of id you're passing in the `player_ids` field. Valid inputs are 'mlbam', 'retro', 'bbref', and 'fangraphs'. Defaults to 'mlbam' if no value is passed. \n \nThis function is useful for connecting data sets from various sources or for finding player names when only an id is provided. Data for this function comes from the Chadwick Bureau. \n\n## Examples of valid queries\n\n```python\nfrom pybaseball import playerid_reverse_lookup\n\n# a list of mlbam ids\nplayer_ids = [116539, 116541, 641728, 116540]\n\n# find the names of the players in player_ids, along with their ids from other data sources\ndata = playerid_reverse_lookup(player_ids, key_type='mlbam')\n\n# a list of fangraphs ids\nfg_ids = [826, 5417, 210, 1101]\n\n# find their names and ids from other data sources\ndata = playerid_reverse_lookup(fg_ids, key_type='fangraphs')\n", "data_dictionary": "name_last\nname_first\nkey_mlbam\nkey_retro\nkey_bbref\nkey_fangraphs\nmlb_played_first\nmlb_played_last"}}
+
+
+================================================
+FILE: vectordb/__init__.py
+================================================
+
+
+
+================================================
+FILE: vectordb/create_execution_plan_vectordb_entries.ipynb
+================================================
+# Jupyter notebook converted to Python script.
+
+import pandas as pd
+
+seed_task = 'How many games did the Rays win in 2022?'
+
+seed_plan = '''1. Import the schedule_and_record function from pybaseball:
+
+```python
+from pybaseball import schedule_and_record
+```
+
+2. Get the 2022 schedule and results for the Tampa Bay Rays:
+
+```python
+rays_2022 = schedule_and_record(2022, 'TB')
+```
+
+3. Filter the dataframe to games where the Rays won (W/L == 'W') or had a walk-off win (W/L == 'W-wo'):
+
+```python
+rays_wins = rays_2022[(rays_2022['W/L'] == 'W') | (rays_2022['W/L'] == 'W-wo')]
+```
+
+4. Count the number of rows (games won) in the filtered dataframe:
+
+```python
+num_wins = len(rays_wins)
+print(f"The Tampa Bay Rays won {num_wins} games in 2022.")
+```'''
+
+seed_code = '''# 1. Import the schedule_and_record function from pybaseball
+from pybaseball import schedule_and_record
+# 2. Get the 2022 schedule and results for the Tampa Bay Rays
+rays_2022 = schedule_and_record(2022, 'TB')
+# 3. Filter the dataframe to games where the Rays won (W/L == 'W') or had a walk-off win (W/L == 'W-wo')
+rays_wins = rays_2022[(rays_2022['W/L'] == 'W') | (rays_2022['W/L'] == 'W-wo')]
+# 4. Count the number of rows (games won) in the filtered dataframe
+num_wins = len(rays_wins)
+print(f"The Tampa Bay Rays won {num_wins} games in 2022.")'''
+
+seed_function_detail = 'seed_function_detail'
+
+rows = []
+rows.append([seed_task, seed_plan, seed_code, seed_function_detail])
+
+df = pd.DataFrame(rows, columns=['task','plan','code', 'function_detail'])
+
+df.to_csv('execution_plan.csv', index=False)
+
+
+
+================================================
+FILE: vectordb/execution_plan.csv
+================================================
+task,plan,code,function_detail
+How many games did the Rays win in 2022?,"1. Import the schedule_and_record function from pybaseball:
+
+```python
+from pybaseball import schedule_and_record
+```
+
+2. Get the 2022 schedule and results for the Tampa Bay Rays:
+
+```python
+rays_2022 = schedule_and_record(2022, 'TB')
+```
+
+3. Filter the dataframe to games where the Rays won (W/L == 'W') or had a walk-off win (W/L == 'W-wo'):
+
+```python
+rays_wins = rays_2022[(rays_2022['W/L'] == 'W') | (rays_2022['W/L'] == 'W-wo')]
+```
+
+4. Count the number of rows (games won) in the filtered dataframe:
+
+```python
+num_wins = len(rays_wins)
+print(f""The Tampa Bay Rays won {num_wins} games in 2022."")
+```","# 1. Import the schedule_and_record function from pybaseball
+from pybaseball import schedule_and_record
+# 2. Get the 2022 schedule and results for the Tampa Bay Rays
+rays_2022 = schedule_and_record(2022, 'TB')
+# 3. Filter the dataframe to games where the Rays won (W/L == 'W') or had a walk-off win (W/L == 'W-wo')
+rays_wins = rays_2022[(rays_2022['W/L'] == 'W') | (rays_2022['W/L'] == 'W-wo')]
+# 4. Count the number of rows (games won) in the filtered dataframe
+num_wins = len(rays_wins)
+print(f""The Tampa Bay Rays won {num_wins} games in 2022."")",seed_function_detail
+
+
+
+================================================
+FILE: vectordb/vectordb.py
+================================================
+import chromadb
+from chromadb.utils import embedding_functions
+import pandas as pd
+
+from langchain_community.embeddings import SentenceTransformerEmbeddings
+from langchain_community.vectorstores import Chroma
+
+chroma_client = chromadb.Client()
+sentence_transformer_ef = embedding_functions.SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
+    
+
+def get_execution_plan_collection():
+    '''
+    Returns a Chroma collection
+
+    params:
+        NA
+
+    returns:
+        collection (Chroma): Chroma collection
+    '''
+
+    collection_name = 'execution_plan'
+
+    # initiate a new collection
+    try:
+        chroma_client.delete_collection(name=collection_name)
+    except:
+        pass
+
+    collection = chroma_client.create_collection(name=collection_name, metadata={"hnsw:space": "cosine"}, embedding_function=sentence_transformer_ef)
+
+    # collect the evaluation table as the question bank
+    steps_table = pd.read_csv('vectordb/execution_plan.csv')
+    # double-check to eliminate duplicate tasks
+    steps_table = steps_table.drop_duplicates(subset=['task'])
+    steps_table = steps_table.reset_index(drop=True)
+
+    task_list = []
+    uuid_list = []
+    metadata_list = []
+
+    # add questions to the collection
+    for i in range(steps_table.shape[0]):
+        task = steps_table['task'][i]
+        uuid = str(hash(task))
+        plan = steps_table['plan'][i]
+        code = steps_table['code'][i]
+        function_detail = steps_table['function_detail'][i]
+
+        uuid_list.append(uuid)
+        task_list.append(task)
+        metadata_list.append({"plan": plan, "code": code, 'function_detail': function_detail})
+
+    # add texts to collection
+    collection.add(
+        documents=task_list,
+        metadatas=metadata_list,
+        ids=uuid_list
+    )
+
+    return collection
+

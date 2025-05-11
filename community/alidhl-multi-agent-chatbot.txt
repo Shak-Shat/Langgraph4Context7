@@ -1,0 +1,317 @@
+Directory structure:
+└── alidhl-multi-agent-chatbot/
+    ├── README.md
+    ├── graph.py
+    ├── LICENSE
+    ├── main.py
+    ├── requirements.txt
+    └── agents/
+        ├── executor.py
+        └── planner.py
+
+================================================
+FILE: README.md
+================================================
+# Multi-Agent Chatbot
+
+This project presents a multi-agent chatbot system integrated with a search engine, designed to handle complex user queries with a systematic approach. It leverages the capabilities of LangChain and LangGraph libraries, and Tavily for the search engine functionality. The chatbot uses the "plan-and-execute" coordination strategy among its agents to ensure effective and efficient responses.
+
+## Demo
+
+Check out the live demo of the multi-agent chatbot system: [Multi-Agent Chatbot Demo](https://multi-agent-chatbot.streamlit.app/)
+
+## Features
+
+- **Plan-and-Execute Agent Coordination:** The system incorporates three specialized agents:
+  - **Planner:** Begins by formulating a structured plan based on the user's query.
+  - **Executor:** Follows the defined plan, executing the necessary steps one by one.
+  - **Replanner:** Monitors the execution process, evaluates its effectiveness, and decides whether the current plan suffices or needs adjustments to better address the user's query.
+
+- **Integration with LangChain and LangGraph:** Utilizes the advanced capabilities of these libraries to understand and navigate complex language constructs.
+
+- **Search Engine Integration:** Powered by Tavily, the system includes a robust search engine to fetch relevant information and support the chatbot's responses.
+
+- **Streamlit Web Interface:** The project uses Streamlit for designing and deploying an intuitive web interface, enhancing user interaction and experience.
+
+## How to Use Locally
+
+1. **Clone Repo**
+
+2. **Install requirements.txt**
+```bash
+pip install -r requirements.txt
+```
+
+3. **Run main.py via Streamlit**
+```bash
+streamlit run main.py
+```
+
+## Built With
+
+- [LangChain](https://langchain.com)
+- [LangGraph](https://langgraph.com)
+- [Tavily](https://tavily.com)
+- [OpenAI](https://openai.com)
+- [Streamlit](https://streamlit.io)
+
+## License
+
+This project is licensed under the MIT License.
+
+
+
+================================================
+FILE: graph.py
+================================================
+from typing import List, Tuple, Annotated, TypedDict
+import operator
+from agents.planner import get_planner, get_replanner
+from agents.executor import get_executor
+from agents.planner import Response
+from langgraph.graph import StateGraph, END
+
+import os
+from uuid import uuid4
+from langsmith import Client
+
+unique_id = uuid4().hex[0:8]
+os.environ["LANGCHAIN_TRACING_V2"] = "true"
+os.environ["LANGCHAIN_PROJECT"] = "multi-agent-search"
+os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
+client = Client()
+# Define the State
+class State(TypedDict):
+    input: str
+    plan: List[str]
+    past_steps: Annotated[List[Tuple], operator.add]
+    response: str
+    
+
+# Create the graph
+
+def get_graph():
+    # Create agents
+    executor = get_executor()
+    planner = get_planner()
+    replanner = get_replanner()
+
+    def execute(state: State):
+        task = state['plan'][0]
+        output = executor.invoke({'input': task, "chat_history" : []})
+        return {"past_steps" : (task, output['agent_outcome'].return_values['output'])}
+
+    def plan(state: State):
+        plan = planner.invoke({'objective': state['input']})
+        return {"plan" : plan.steps}
+
+    def replan(state: State):
+        output = replanner.invoke(state)
+        # If the output is a response (the plan is complete), then return the response else update the plan
+        if isinstance(output, Response):
+            return {"response" : output.response}
+        else:
+            return {"plan" : output.steps}
+
+    def should_end(state: State):
+        if (state['response']):
+            return True
+        else:
+            return False
+        
+    graph = StateGraph(State)
+    graph.add_node("planner", plan)
+    graph.add_node("executor", execute)
+    graph.add_node("replanner", replan)
+
+    graph.set_entry_point("planner")
+    graph.add_edge("planner", "executor")
+    graph.add_edge("executor", "replanner")
+    graph.add_conditional_edges(
+        'replanner',
+        should_end,
+        {
+            True: END,
+            False: "executor"
+        })
+    return graph.compile()
+
+
+
+
+
+
+================================================
+FILE: LICENSE
+================================================
+MIT License
+
+Copyright (c) 2024 alidhl
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+
+================================================
+FILE: main.py
+================================================
+from graph import get_graph
+import streamlit as st
+import os
+
+with st.sidebar:
+    st.sidebar.title("API Keys")
+    openai_api_key = st.sidebar.text_input("OpenAI API Key", key= "chatbot_api_key" , type="password")
+    #taveliy_api_key = st.sidebar.text_input("Taveliy API Key", type="password")
+
+
+
+st.title("💬Multi-Agent Search Engine Chatbot")
+if "messages" not in st.session_state:
+    st.session_state["messages"] = [{"role": "assistant", "content": "How can I help you?"}]
+
+for msg in st.session_state.messages:
+    st.chat_message(msg["role"]).write(msg["content"])
+
+if prompt := st.chat_input():
+    if not openai_api_key:
+        st.info("Please add your OpenAI API to continue.")
+        st.stop()
+    os.environ['OPENAI_API_KEY'] = openai_api_key
+    # Will be used in the future for now will use my own API key
+    #os.environ['TAVELIY_API_KEY'] = taveliy_api_key
+    graph = get_graph()
+    st.session_state.messages.append({"role": "user", "content": prompt})
+    st.chat_message("user").write(prompt)
+    response = graph.invoke({"input": st.session_state.messages[-1]})
+    msg = response["response"]
+    st.session_state.messages.append({"role": "assistant", "content": msg})
+    st.chat_message("assistant").write(msg)
+
+
+
+
+
+
+================================================
+FILE: requirements.txt
+================================================
+[Non-text file]
+
+
+================================================
+FILE: agents/executor.py
+================================================
+from langchain import hub
+from langchain.agents import create_openai_functions_agent
+from langchain_openai import ChatOpenAI
+from langchain_community.tools.tavily_search import TavilySearchResults
+from langgraph.prebuilt import create_agent_executor
+
+def get_executor():
+    tools = [TavilySearchResults(max_results=3)]
+    # Basic prompt for the executer
+    prompt = hub.pull("hwchase17/openai-functions-agent")
+    print(prompt)
+    llm = ChatOpenAI(model = "gpt-3.5-turbo")
+    agent = create_openai_functions_agent(llm, tools, prompt)
+    agent_executor = create_agent_executor(agent, tools=tools)
+    return agent_executor
+# Test the agent executor
+if __name__ == "__main__":
+    executor = get_executor()
+    query = "When was Saudi Arabia The Line project announced?"
+    print(query + "\n\n")
+    print(executor.invoke({"input" : query , "chat_history" : []}))
+
+
+
+================================================
+FILE: agents/planner.py
+================================================
+from langchain_core.pydantic_v1 import BaseModel, Field
+from langchain_core.prompts import ChatPromptTemplate
+from langchain.chains.openai_functions import create_structured_output_runnable
+from langchain.chains.openai_functions import create_openai_fn_runnable
+from langchain_openai import ChatOpenAI
+
+class Planner(BaseModel):
+    """Plan the execution of the agent"""
+    
+    steps: list[str] = Field(
+        description="The steps to execute the agent, should be in sorted order"
+    )
+
+def get_planner():
+    planner_prompt = ChatPromptTemplate.from_template(
+"""Given the objective, devise a simple and concise step-by-step plan that involves using a search engine to find the answer. \
+This plan should consist of individual search queries that, if executed correctly, will yield the correct answer. \
+Avoid unnecessary steps and aim to make the plan as short as possible. The result of the final step should be the final answer. \
+
+{objective}"""
+    )
+    return create_structured_output_runnable(
+        output_schema= Planner,
+        llm = ChatOpenAI(model = "gpt-4-0125-preview"),
+        prompt = planner_prompt
+    )
+    
+# Replanner for updating the plan or returning a response
+
+class Response(BaseModel):
+    """Response to user"""
+    
+    response: str
+    
+    
+# Inside the state will be four fields: input , plan , past_steps , response     
+
+def get_replanner():
+    replanner_prompt = ChatPromptTemplate.from_template(
+    """Your task is to revise the current plan based on the executed steps. Remove any steps that have been completed and ensure the remaining steps will lead to the complete answer for the objective. Remember, the objective should be fully answered, not just partially. If the answer is already found in the executed steps, return the answer to the objective.
+
+Objective:
+{input}
+
+Current Plan:
+{plan}
+
+Executed Steps:
+{past_steps}
+
+"""
+    )
+    return create_openai_fn_runnable(
+        functions= [Planner, Response],
+        llm = ChatOpenAI(model = "gpt-4-0125-preview"),
+        prompt = replanner_prompt
+    )
+
+
+# Testing
+if __name__ == "__main__":
+    query = "How do I get a passport in saudi arabia"
+    planner = get_planner()
+    replanner = get_replanner()
+    
+    print(query + "\n\n")
+    print(planner.invoke({"objective" : query}).steps)
+    
+    
+

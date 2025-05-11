@@ -1,0 +1,2385 @@
+Directory structure:
+└── vinay-gatech-stocks-insights-ai-agent/
+    ├── README.md
+    ├── LICENSE.md
+    ├── config/
+    │   ├── __init__.py
+    │   ├── config.json
+    │   └── config_loader.py
+    ├── db/
+    │   ├── __init__.py
+    │   ├── mongo_db.py
+    │   ├── postgres_db.py
+    │   └── models/
+    │       ├── __init__.py
+    │       └── stock_data.py
+    ├── documentation/
+    │   └── openapi.json
+    ├── images/
+    ├── rag_graphs/
+    │   ├── news_rag_graph/
+    │   │   ├── __init__.py
+    │   │   ├── ingestion.py
+    │   │   ├── main.py
+    │   │   └── graph/
+    │   │       ├── __init__.py
+    │   │       ├── constants.py
+    │   │       ├── graph.py
+    │   │       ├── state.py
+    │   │       ├── chains/
+    │   │       │   ├── __init__.py
+    │   │       │   ├── generation.py
+    │   │       │   └── retrieval_grader.py
+    │   │       └── nodes/
+    │   │           ├── __init__.py
+    │   │           ├── generate.py
+    │   │           ├── grade_documents.py
+    │   │           ├── retrieve.py
+    │   │           └── web_search.py
+    │   ├── stock_charts_graph/
+    │   │   ├── __init__.py
+    │   │   ├── main.py
+    │   │   └── graph/
+    │   │       ├── __init__.py
+    │   │       └── graph.py
+    │   └── stock_data_rag_graph/
+    │       ├── __init__.py
+    │       ├── main.py
+    │       └── graph/
+    │           ├── __init__.py
+    │           ├── constants.py
+    │           ├── graph.py
+    │           ├── state.py
+    │           ├── chains/
+    │           │   ├── __init__.py
+    │           │   ├── results_generation.py
+    │           │   ├── retrieval_grader.py
+    │           │   ├── sql_generation_chain.py
+    │           │   └── tests/
+    │           │       └── test_chains.py
+    │           └── nodes/
+    │               ├── __init__.py
+    │               ├── generate.py
+    │               ├── generate_sql.py
+    │               ├── grade_documents.py
+    │               └── sql_search.py
+    ├── rest_api/
+    │   ├── main.py
+    │   ├── routes/
+    │   │   ├── news_routes.py
+    │   │   └── stock_routes.py
+    │   └── tests/
+    │       ├── __init__.py
+    │       ├── test_app.py
+    │       ├── test_initialization_background_tasks.py
+    │       ├── test_news_route.py
+    │       └── test_stock_route.py
+    ├── scraper/
+    │   ├── __init__.py
+    │   ├── generic_scraper.py
+    │   ├── news_scraper.py
+    │   ├── postgres_table.py
+    │   ├── scraper_factory.py
+    │   ├── stock_data_scraper.py
+    │   └── tests/
+    │       ├── __init__.py
+    │       ├── test_integration_factories.py
+    │       ├── test_news_scraper.py
+    │       ├── test_scraper_factory.py
+    │       └── test_stock_data_scraper.py
+    └── utils/
+        ├── logger.py
+        ├── logger_config.py
+        └── tests/
+            ├── __init__.py
+            └── test_logger.py
+
+================================================
+FILE: README.md
+================================================
+   <a rel="license" href="http://creativecommons.org/licenses/by-nc-sa/4.0/"><img alt="Creative Commons License" style="border-width:0" src="https://i.creativecommons.org/l/by-nc-sa/4.0/88x31.png" /></a><br />This work is licensed under a <a rel="license" href="http://creativecommons.org/licenses/by-nc-sa/4.0/">Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License</a>.
+   
+
+# Stock Data Insights Application
+
+This project demonstrates the use of Agentic Retrieval-Augmented Generation (RAG) workflows to extract insights from news and financial data pertaining to specific companies and the broader stock market. It leverages Large Language Models (LLMs), ChromaDB as a vector database, LangChain, LangChain Expression Language (LCEL), and LangGraph to provide comprehensive analyses.
+
+## Features
+
+- **Stock Performance Visualization**: Displays graphs and charts illustrating the historical performance of selected stocks.
+- **Attribute-Specific Data Retrieval**: Fetches detailed information related to specific attributes of a particular stock.
+- **News Aggregation**: Presents general news or topic-specific articles related to a particular stock or company.
+
+## High Level Architecture
+![High Level Design](documentation/high_level_design.png)
+
+## Approach
+
+### Asynchronous Scraping
+
+1. **News Data**: Asynchronously scrapes news data for a predefined set of stocks at regular intervals, storing the information in MongoDB. The documents are synchronized with ChromaDB to enable LLMs to perform semantic searches, facilitating the retrieval of relevant information specific to a particular stock or company.
+2. **Financial Data**: Asynchronously scrapes financial data for selected stocks at regular intervals, storing the information in PostgreSQL.
+
+### LangGraph Workflows
+
+#### News Data RAG Graph
+An Agentic RAG Graph designed to search news data for a stock either in the vector database (synced documents from MongoDB) or perform a web search if relevant documents are not found.
+
+![News RAG Graph](images/news-rag-graph.png)
+
+This graph comprises the following nodes:
+
+- **Retrieve News from DB (`retrieve_news`)**: Utilizes LLMs, LangChain, and a Retriever Tool to perform semantic searches in the vector database for documents related to a specific stock topic.
+- **Grade Documents (`grade_documents`)**: Evaluates the quality of documents retrieved in the previous step, assigning a score to determine their relevance. A conditional edge decides whether to generate results or perform an additional web search if the documents are not pertinent.
+- **Web Search (`web_search`)**: Conducts a web search using TavilySearch tooling integrated with LangChain and LLM calls.
+- **Generate Results (`generate_results`)**: Produces results based on the user query and the documents retrieved in prior steps.
+
+#### Stock Data RAG Graph
+
+![News RAG Graph](images/stock-data-rag-graph.png)
+
+An Agentic RAG Graph that searches financial data for a stock in the SQL database (PostgreSQL).
+
+This graph includes the following nodes:
+
+- **Generate SQL (`generate_sql`)**: Employs LLMs and LangChain to generate an SQL query based on user input.
+- **Execute SQL (`execute_sql`)**: Executes the SQL query generated in the previous step to fetch data from the database.
+- **Generate Results (`generate_results`)**: Utilizes LLMs to generate results according to the user query and the data retrieved in the preceding step.
+
+#### Stock Data Charts RAG Graph
+
+![News RAG Graph](images/stock-charts-rag-graph.png)
+
+An Agentic RAG Graph that retrieves financial data for a stock from the SQL database (PostgreSQL) and generates visual charts.
+
+This graph consists of the following nodes:
+
+- **Generate SQL (`generate_sql`)**: Uses LLMs and LangChain to create an SQL query based on user input.
+- **Execute SQL (`execute_sql`)**: Runs the SQL query generated earlier to fetch data from the database.
+
+## APIs
+For detailed API specifications, refer to the attached `openapi.json` file.
+
+
+### Price Stats (GET `/stock/{ticker}/price-stats`)
+
+Get stock price statistics for a specific ticker.
+
+Args:
+    ticker (str): Stock ticker symbol.
+    operation (str): Operation to perform (e.g., 'highest', 'lowest', 'average').
+    price_type (str): Type of price (e.g., 'open', 'close', 'low', 'high').
+    duration (int): Number of days
+
+Returns:
+    dict: Stock data with the requested statistics.
+
+#### Parameters:
+- `ticker`: string - Stock ticker symbol
+- `operation`: string - Operation to perform: 'highest', 'lowest', 'average'
+- `price_type`: string - Price type: 'open', 'close', 'low', 'high'
+- `duration`: string - Duration (days): '1', '7', '14', '30'
+
+### Chart (GET `/stock/{ticker}/chart`)
+
+Get stock price statistics and return a histogram/chart for a specific ticker.
+
+Args:
+    ticker (str): Stock ticker symbol.
+    price_type (str): Type of price (e.g., 'open', 'close', 'low', 'high').
+    duration (int): Number of days
+
+Returns:
+    dict: Stock data with the requested statistics.
+
+#### Parameters:
+- `ticker`: string - Stock ticker symbol
+- `price_type`: string - Price type: 'open', 'close', 'low', 'high'
+- `duration`: string - Duration (days): '1', '7', '14', '30'
+
+### News By Topic (GET `/news/{ticker}`)
+
+Get news a specific ticker.
+
+Args:
+    ticker (str): Stock ticker symbol.
+    topic (str): Topic to fetch news for a specific stock.
+
+Returns:
+    dict: Relevant news for a speicific ticker.
+
+#### Parameters:
+- `ticker`: string - Stock ticker symbol
+- `topic`: string - Topic
+
+### Root (GET `/`)
+
+Root/home page of the application
+
+#### Parameters:
+No parameters
+
+
+## Class Diagrams
+
+![Class Diagram](images/classes_stock_proj.png)
+## Images
+
+For visual representations, refer to the images in the `images/` directory.
+
+## Testing Framework
+The project employs the pytest framework for automated testing. This ensures that all modules are thoroughly tested to maintain reliability and robustness. Key features of the testing setup include:
+
+Comprehensive Test Cases: Test cases are written for every module, ensuring complete coverage of the application.
+Ease of Use: Simply run the following command to execute all tests:
+```bash
+pytest
+```
+Test Reports: The framework generates detailed reports for each test run, highlighting successes and failures.
+This testing setup ensures that the application remains stable and functional as new features are added or existing features are updated.
+
+## Observability and Tracing
+To monitor the application's performance and debug LLM-related processes, the project integrates LangSmith tracing. This enables detailed tracing of all LLM calls, providing insights into the application's execution flow.
+
+Key Features:
+LLM Call Tracing: Tracks all interactions with Large Language Models, including inputs, outputs, and execution times.
+Debugging Assistance: Helps in identifying bottlenecks or errors in LLM workflows.
+LangSmith Dashboard: Offers a user-friendly interface to visualize and analyze traces.
+How It Works:
+LangSmith tracing is seamlessly integrated into the application. All RAG workflows, including News RAG Graph, Stock Data RAG Graph, and Stock Data Charts RAG Graph, utilize LangSmith to provide actionable observability insights.
+
+
+## References
+
+- **LangGraph**: A library for building stateful, multi-actor applications with LLMs, facilitating the creation of agent and multi-agent workflows.
+- **LangChain Expression Language (LCEL)**: A declarative approach to composing chains, enabling seamless integration and optimization of complex workflows.
+
+This project exemplifies the integration of advanced AI workflows to provide insightful analyses of financial and news data, offering users a comprehensive tool for stock market evaluation.
+
+
+
+================================================
+FILE: LICENSE.md
+================================================
+   <a rel="license" href="http://creativecommons.org/licenses/by-nc-sa/4.0/"><img alt="Creative Commons License" style="border-width:0" src="https://i.creativecommons.org/l/by-nc-sa/4.0/88x31.png" /></a><br />This work is licensed under a <a rel="license" href="http://creativecommons.org/licenses/by-nc-sa/4.0/">Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License</a>.
+
+
+================================================
+FILE: config/__init__.py
+================================================
+
+
+
+================================================
+FILE: config/config.json
+================================================
+{
+    "SCRAPE_TICKERS": [
+        "AAPL", "MSFT", "GOOG", "AMZN", "TSLA", "NVDA", "BRK-B", "META",
+        "UNH", "JNJ", "V", "PG", "XOM", "JPM", "WMT", "MA", "CVX", "LLY",
+        "PFE", "HD", "KO", "ABBV", "PEP", "MRK", "BAC", "TMO", "AVGO",
+        "COST", "DIS", "CSCO", "DHR", "TMUS", "MCD", "ADBE", "NFLX",
+        "CMCSA", "TXN", "NKE", "PM", "VZ", "INTC", "ORCL", "QCOM",
+        "ABT", "WFC", "LIN", "BMY", "ACN", "UPS", "RTX"
+    ],
+
+    "SCRAPING_INTERVAL": 86400
+}
+
+
+
+================================================
+FILE: config/config_loader.py
+================================================
+import json
+
+class ConfigLoader:
+    """
+    A class to load configuration from a JSON file.
+    """
+    def __init__(self, config_file="config.json"):
+        self.config_file = config_file
+        self.config_data = self._load_config()
+
+    def _load_config(self):
+        """
+        Load and parse the JSON configuration file.
+        """
+        try:
+            with open(self.config_file, "r") as file:
+                return json.load(file)
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Configuration file {self.config_file} not found.")
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Error parsing {self.config_file}: {e}")
+
+    def get(self, key, default=None):
+        """
+        Get a configuration value by key.
+        """
+        return self.config_data.get(key, default)
+
+
+
+================================================
+FILE: db/__init__.py
+================================================
+
+
+
+================================================
+FILE: db/mongo_db.py
+================================================
+import os
+from pymongo import MongoClient
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+class MongoDBClient:
+    _instance = None
+
+    def __new__(cls, *args, **kwargs):
+        if not cls._instance:
+            cls._instance = super(MongoDBClient, cls).__new__(cls, *args, **kwargs)
+        return cls._instance
+
+    def __init__(self, uri=None, database_name=None):
+        if not hasattr(self, '_initialized'):  # Prevent reinitialization in the singleton
+            # Load default values from environment variables if not provided
+            self.uri = uri or os.getenv('MONGO_URI', 'mongodb://localhost:27017/')
+            self.database_name = database_name or os.getenv('DATABASE_NAME', 'default_db')
+            self.client = MongoClient(self.uri)
+            self.db = self.client[self.database_name]
+            self._initialized = True
+
+    def get_collection(self, collection_name=None):
+        """Retrieve a collection."""
+        # Load default collection name from environment variables if not provided
+        collection_name = collection_name or os.getenv('COLLECTION_NAME', 'default_collection')
+        return self.db[collection_name]
+
+    def insert_one(self, collection_name, document):
+        """Insert a single document into a collection."""
+        collection = self.get_collection(collection_name)
+        result = collection.insert_one(document)
+        return result.inserted_id
+
+    def insert_many(self, collection_name, documents):
+        """Insert multiple documents into a collection."""
+        collection = self.get_collection(collection_name)
+        result = collection.insert_many(documents)
+        return result.inserted_ids
+
+    def find(self, collection_name, query={}, projection=None):
+        """Retrieve documents from a collection."""
+        collection = self.get_collection(collection_name)
+        return list(collection.find(query, projection))
+
+    def update_one(self, collection_name, query, update, upsert=False):
+        """Update a single document in a collection."""
+        collection = self.get_collection(collection_name)
+        result = collection.update_one(query, update, upsert=upsert)
+        return result.modified_count
+
+    def update_many(self, collection_name, query, update, upsert=False):
+        """Update multiple documents in a collection."""
+        collection = self.get_collection(collection_name)
+        result = collection.update_many(query, update, upsert=upsert)
+        return result.modified_count
+
+    def delete_one(self, collection_name, query):
+        """Delete a single document from a collection."""
+        collection = self.get_collection(collection_name)
+        result = collection.delete_one(query)
+        return result.deleted_count
+
+    def delete_many(self, collection_name, query):
+        """Delete multiple documents from a collection."""
+        collection = self.get_collection(collection_name)
+        result = collection.delete_many(query)
+        return result.deleted_count
+
+
+
+================================================
+FILE: db/postgres_db.py
+================================================
+import psycopg2
+from psycopg2 import sql, OperationalError
+from utils.logger import logger
+
+class PostgresDBClient:
+    _instance = None  # Singleton instance
+
+    def __new__(cls, *args, **kwargs):
+        if not cls._instance:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __init__(self, host, database, user, password, port=5432):
+        if not hasattr(self, "_initialized"):
+            self.host = host
+            self.database = database
+            self.user = user
+            self.password = password
+            self.port = port
+            self.connection = None
+            self._initialized = True
+
+    def connect(self):
+        """Establish a database connection."""
+        if not self.connection:
+            try:
+                self.connection = psycopg2.connect(
+                    host=self.host,
+                    database=self.database,
+                    user=self.user,
+                    password=self.password,
+                    port=self.port,
+                )
+                logger.info("PostgreSQL connection established.")
+            except OperationalError as e:
+                logger.error(f"Error connecting to PostgreSQL: {e}")
+                raise
+
+    def close(self):
+        """Close the database connection."""
+        if self.connection:
+            self.connection.close()
+            self.connection = None
+            logger.info("PostgreSQL connection closed.")
+
+    def execute_query(self, query, params=None):
+        """Execute a query (INSERT, UPDATE, DELETE)."""
+        try:
+            self.connect()
+            cursor = self.connection.cursor()
+            cursor.execute(query, params)
+            self.connection.commit()
+            # logger.info("Query executed successfully.")
+            cursor.close()
+        except Exception as e:
+            logger.error(f"Error executing query: {e}")
+            self.connection.rollback()
+            raise
+
+    def fetch_query(self, query, params=None):
+        """Execute a SELECT query and fetch results."""
+        try:
+            self.connect()
+            cursor = self.connection.cursor()
+            cursor.execute(query, params)
+            results = cursor.fetchall()
+            columns = [desc[0] for desc in cursor.description] if cursor.description else []
+            cursor.close()
+            return results, columns
+        except Exception as e:
+            logger.error(f"Error fetching data: {e}")
+            raise
+
+    # CRUD Methods
+    def create(self, table, data):
+        """Insert a row into a table."""
+        try:
+            columns = data.keys()
+            values = tuple(data.values())
+            query = sql.SQL(
+                "INSERT INTO {table} ({fields}) VALUES ({placeholders})"
+            ).format(
+                table=sql.Identifier(table),
+                fields=sql.SQL(", ").join(map(sql.Identifier, columns)),
+                placeholders=sql.SQL(", ").join(sql.Placeholder() * len(columns)),
+            )
+            self.execute_query(query, values)
+        except Exception as e:
+            logger.error(f"Error in CREATE operation: {e}")
+            raise
+
+    def read(self, table, conditions=None):
+        """Read rows from a table."""
+        try:
+            query = sql.SQL("SELECT * FROM {table}").format(
+                table=sql.Identifier(table)
+            )
+            if conditions:
+                condition_clause = sql.SQL(" WHERE {conditions}").format(
+                    conditions=sql.SQL(" AND ").join(
+                        [sql.SQL(f"{key} = %s") for key in conditions.keys()]
+                    )
+                )
+                query += condition_clause
+                params = tuple(conditions.values())
+            else:
+                params = None
+
+            return self.fetch_query(query, params)
+        except Exception as e:
+            logger.error(f"Error in READ operation: {e}")
+            raise
+
+    def update(self, table, data, conditions):
+        """Update rows in a table."""
+        try:
+            set_clause = sql.SQL(", ").join(
+                [sql.SQL(f"{key} = %s") for key in data.keys()]
+            )
+            condition_clause = sql.SQL(" AND ").join(
+                [sql.SQL(f"{key} = %s") for key in conditions.keys()]
+            )
+            query = sql.SQL(
+                "UPDATE {table} SET {set_clause} WHERE {condition_clause}"
+            ).format(
+                table=sql.Identifier(table),
+                set_clause=set_clause,
+                condition_clause=condition_clause,
+            )
+            params = tuple(data.values()) + tuple(conditions.values())
+            self.execute_query(query, params)
+        except Exception as e:
+            logger.error(f"Error in UPDATE operation: {e}")
+            raise
+
+    def delete(self, table, conditions):
+        """Delete rows from a table."""
+        try:
+            condition_clause = sql.SQL(" AND ").join(
+                [sql.SQL(f"{key} = %s") for key in conditions.keys()]
+            )
+            query = sql.SQL("DELETE FROM {table} WHERE {condition_clause}").format(
+                table=sql.Identifier(table),
+                condition_clause=condition_clause,
+            )
+            params = tuple(conditions.values())
+            self.execute_query(query, params)
+        except Exception as e:
+            logger.error(f"Error in DELETE operation: {e}")
+            raise
+
+
+
+================================================
+FILE: db/models/__init__.py
+================================================
+
+
+
+================================================
+FILE: db/models/stock_data.py
+================================================
+from dotenv import load_dotenv
+from sqlalchemy import create_engine, Column, Integer, String, Date, Float, BigInteger
+from sqlalchemy.ext.declarative import declarative_base
+import os
+
+load_dotenv()
+
+# Define the base class for declarative models
+Base = declarative_base()
+
+
+# Define the StockData model
+class StockData(Base):
+    __tablename__ = "stock_data"  # Replace with a static name
+
+    # __tablename__ = os.getenv('STOCK_TABLE')
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    ticker = Column(String(10), nullable=False)
+    date = Column(Date, nullable=False)
+    open = Column(Float)
+    high = Column(Float)
+    low = Column(Float)
+    close = Column(Float)
+    volume = Column(BigInteger)
+
+
+
+================================================
+FILE: documentation/openapi.json
+================================================
+{"openapi":"3.1.0","info":{"title":"FastAPI","version":"0.1.0"},"paths":{"/stock/{ticker}/price-stats":{"get":{"tags":["Stock Data"],"summary":"Price Stats","description":"Get stock price statistics for a specific ticker.\n\nArgs:\n    ticker (str): Stock ticker symbol.\n    operation (str): Operation to perform (e.g., 'highest', 'lowest', 'average').\n    price_type (str): Type of price (e.g., 'open', 'close', 'low', 'high').\n    duration (int): Number of days\n\nReturns:\n    dict: Stock data with the requested statistics.","operationId":"price_stats_stock__ticker__price_stats_get","parameters":[{"name":"ticker","in":"path","required":true,"schema":{"type":"string","title":"Ticker"}},{"name":"operation","in":"query","required":true,"schema":{"type":"string","description":"Operation to perform: 'highest', 'lowest', 'average'","title":"Operation"},"description":"Operation to perform: 'highest', 'lowest', 'average'"},{"name":"price_type","in":"query","required":true,"schema":{"type":"string","description":"Price type: 'open', 'close', 'low', 'high'","title":"Price Type"},"description":"Price type: 'open', 'close', 'low', 'high'"},{"name":"duration","in":"query","required":true,"schema":{"type":"string","description":"Duration (days): '1', '7', '14', '30'","title":"Duration"},"description":"Duration (days): '1', '7', '14', '30'"}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/stock/{ticker}/chart":{"get":{"tags":["Stock Data"],"summary":"Chart","description":"Get stock price statistics and return a histogram/chart for a specific ticker.\n\nArgs:\n    ticker (str): Stock ticker symbol.\n    price_type (str): Type of price (e.g., 'open', 'close', 'low', 'high').\n    duration (int): Number of days\n\nReturns:\n    dict: Stock data with the requested statistics.","operationId":"chart_stock__ticker__chart_get","parameters":[{"name":"ticker","in":"path","required":true,"schema":{"type":"string","title":"Ticker"}},{"name":"price_type","in":"query","required":true,"schema":{"type":"string","description":"Price type: 'open', 'close', 'low', 'high'","title":"Price Type"},"description":"Price type: 'open', 'close', 'low', 'high'"},{"name":"duration","in":"query","required":true,"schema":{"type":"string","description":"Duration (days): '1', '7', '14', '30'","title":"Duration"},"description":"Duration (days): '1', '7', '14', '30'"}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/news/{ticker}":{"get":{"tags":["News Articles"],"summary":"News By Topic","description":"Get news a specific ticker.\n\nArgs:\n    ticker (str): Stock ticker symbol.\n    topic (str): Topic to fetch news for a specific stock.\n\nReturns:\n    dict: Relevant news for a speicific ticker.","operationId":"news_by_topic_news__ticker__get","parameters":[{"name":"ticker","in":"path","required":true,"schema":{"type":"string","title":"Ticker"}},{"name":"topic","in":"query","required":false,"schema":{"type":"string","description":"Topic","title":"Topic"},"description":"Topic"}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/":{"get":{"summary":"Root","operationId":"root__get","responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}}}}}},"components":{"schemas":{"HTTPValidationError":{"properties":{"detail":{"items":{"$ref":"#/components/schemas/ValidationError"},"type":"array","title":"Detail"}},"type":"object","title":"HTTPValidationError"},"ValidationError":{"properties":{"loc":{"items":{"anyOf":[{"type":"string"},{"type":"integer"}]},"type":"array","title":"Location"},"msg":{"type":"string","title":"Message"},"type":{"type":"string","title":"Error Type"}},"type":"object","required":["loc","msg","type"],"title":"ValidationError"}}}}
+
+
+
+================================================
+FILE: rag_graphs/news_rag_graph/__init__.py
+================================================
+
+
+
+================================================
+FILE: rag_graphs/news_rag_graph/ingestion.py
+================================================
+from dotenv import load_dotenv
+from langchain_chroma import Chroma
+from langchain_openai import OpenAIEmbeddings
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_core.documents import Document
+from db.mongo_db import MongoDBClient
+import os
+from typing import List
+from utils.logger import logger
+
+load_dotenv()
+
+# Retrieve documents from Chroma
+news_articles_retriever = Chroma(
+    collection_name=os.getenv('VECTOR_DB_COLLECTION'),
+    persist_directory=os.getenv("VECTOR_DB_DIRECTORY"),
+    embedding_function=OpenAIEmbeddings()
+).as_retriever()
+
+class DocumentSyncManager:
+    def __init__(self):
+        self.mongo_client = MongoDBClient()
+        self.news_collection = self.mongo_client.get_collection()
+        self.vector_db_collection = os.getenv('VECTOR_DB_COLLECTION')
+        self.vector_db_directory = os.getenv('VECTOR_DB_DIRECTORY')
+
+    def fetch_unsynced_documents(self):
+        """
+        Fetches documents from the database where 'synced' is set to False.
+        """
+        return self.news_collection.find({'synced': False}, {'_id': 1, 'description': 1})
+
+    def mark_documents_as_synced(self, document_ids: List):
+        """
+        Marks the provided document IDs as synced in the database.
+        """
+        result = self.news_collection.update_many(
+            {'_id': {'$in': document_ids}},
+            {'$set': {'synced': True}}
+        )
+        logger.info(f"Marked {result.modified_count} documents as synced.")
+
+    def process_content(self, contents: List[str]):
+        """
+        Processes content into chunks using a text splitter.
+        """
+        text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
+            chunk_size=250, chunk_overlap=0
+        )
+        documents = [Document(page_content=content) for content in contents]
+        return text_splitter.split_documents(documents)
+
+    def store_documents_in_chroma(self, doc_splits: List[Document]):
+        """
+        Stores processed document chunks as embeddings in Chroma.
+        """
+        vectorstore = Chroma.from_documents(
+            documents=doc_splits,
+            collection_name=self.vector_db_collection,
+            embedding=OpenAIEmbeddings(),
+            persist_directory=self.vector_db_directory
+        )
+        logger.info("Documents stored in Chroma.")
+
+    def sync_documents(self):
+        """
+        Orchestrates the process of syncing unsynced documents:
+        - Fetches unsynced documents
+        - Processes their content
+        - Stores them in Chroma
+        - Marks them as synced in the database
+        """
+        unsynced_articles = list(self.fetch_unsynced_documents())
+        if not unsynced_articles:
+            logger.info("No unsynced documents found in MongoDB!")
+            return
+
+        descriptions = [article['description'] for article in unsynced_articles if 'description' in article]
+        document_ids = [article['_id'] for article in unsynced_articles]
+
+        if descriptions:
+            doc_splits = self.process_content(descriptions)
+            self.store_documents_in_chroma(doc_splits)
+            self.mark_documents_as_synced(document_ids)
+            logger.info("Documents processed, stored, and marked as synced.")
+
+if __name__ == '__main__':
+    DocumentSyncManager().sync_documents()
+
+
+================================================
+FILE: rag_graphs/news_rag_graph/main.py
+================================================
+from dotenv import load_dotenv
+from rag_graphs.news_rag_graph.graph.graph import app
+from utils.logger import logger
+
+load_dotenv()
+
+if __name__=='__main__':
+    logger.info("--STOCK NEWS GRAPH--")
+    res = app.invoke({"question": "Documents related to Apple"})
+
+
+
+================================================
+FILE: rag_graphs/news_rag_graph/graph/__init__.py
+================================================
+
+
+
+================================================
+FILE: rag_graphs/news_rag_graph/graph/constants.py
+================================================
+RETRIEVE_NEWS   = "retrieve_news"
+GRADE_DOCUMENT  = "grade_documents"
+WEB_SEARCH      = "web_search"
+GENERATE_RESULT = "generate_result"
+
+
+
+================================================
+FILE: rag_graphs/news_rag_graph/graph/graph.py
+================================================
+from dotenv import load_dotenv
+from langgraph.graph import StateGraph,END
+from rag_graphs.news_rag_graph.graph.constants import RETRIEVE_NEWS, GENERATE_RESULT, GRADE_DOCUMENT, WEB_SEARCH
+from rag_graphs.news_rag_graph.graph.nodes import retrieve, generate, grade_documents, web_search
+from rag_graphs.news_rag_graph.graph.state import GraphState
+from utils.logger import logger
+
+load_dotenv()
+
+def decide_to_generate(state):
+    logger.info("---ASSESS GRADED DOCUMENTS---")
+    if state["web_search"]:
+        logger.info("""---DECISION: NOT ALL DOCUMENTS ARE RELEVANT TO THE QUESTION, INCLUDE WEB SEARCH---""")
+        return WEB_SEARCH
+    else:
+        logger.info("---DECISION: GENERATE---")
+        return GENERATE_RESULT
+
+graph_builder  = StateGraph(state_schema=GraphState)
+
+graph_builder.add_node(RETRIEVE_NEWS, retrieve)
+graph_builder.add_node(GRADE_DOCUMENT, grade_documents)
+graph_builder.add_node(WEB_SEARCH, web_search)
+graph_builder.add_node(GENERATE_RESULT, generate)
+
+graph_builder.add_edge(RETRIEVE_NEWS, GRADE_DOCUMENT)
+graph_builder.add_conditional_edges(
+    GRADE_DOCUMENT,
+    decide_to_generate,
+    path_map={
+        WEB_SEARCH: WEB_SEARCH,
+        GENERATE_RESULT: GENERATE_RESULT
+    }
+)
+graph_builder.add_edge(WEB_SEARCH, GENERATE_RESULT)
+graph_builder.add_edge(GENERATE_RESULT, END)
+
+graph_builder.set_entry_point(RETRIEVE_NEWS)
+
+app = graph_builder.compile()
+app.get_graph().draw_mermaid_png(output_file_path="news-rag-graph.png")
+
+
+================================================
+FILE: rag_graphs/news_rag_graph/graph/state.py
+================================================
+from typing import List, TypedDict
+
+class GraphState(TypedDict):
+    """
+    Represents the state of our graph
+
+    Attributes:
+        question: Qustion
+        generation: LLM generation
+        web_seach: Whether to search the web for additional info
+        documents: List of documents
+    """
+    question: str
+    generation: str
+    web_seach: bool
+    documents: List[str]
+
+
+
+================================================
+FILE: rag_graphs/news_rag_graph/graph/chains/__init__.py
+================================================
+
+
+
+================================================
+FILE: rag_graphs/news_rag_graph/graph/chains/generation.py
+================================================
+from dotenv import load_dotenv
+from langchain_core.output_parsers import StrOutputParser
+from langchain_openai import ChatOpenAI
+from langchain import hub
+
+load_dotenv()
+
+llm         = ChatOpenAI(temperature=0)
+rag_prompt  = hub.pull("rlm/rag-prompt")
+
+generation_chain    = rag_prompt | llm | StrOutputParser()
+
+
+
+================================================
+FILE: rag_graphs/news_rag_graph/graph/chains/retrieval_grader.py
+================================================
+from dotenv import load_dotenv
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_openai import ChatOpenAI
+from pydantic.v1 import BaseModel, Field
+
+load_dotenv()
+llm = ChatOpenAI(temperature=0)
+
+class GradeDocuments(BaseModel):
+    """Binary score for relevance check on retrieved documents"""
+    binary_score: str = Field(
+        description="Documents are relevant to the question, 'yes' or 'no'",
+    )
+
+structured_llm_grader   = llm.with_structured_output(GradeDocuments)
+
+system  = """You are a grader assessing relevance of a retrieved document to a user question. \n
+             If the document contains keyword(s) or semantic meaning related to the question, grade it as relevant.
+             Give a binary score 'yes' or 'no' score to indicate whether the document is relevant to the question. 
+"""
+
+grade_prompt    = ChatPromptTemplate.from_messages(
+    [
+        ("system", system),
+        ("human", "Retrieved document: \n\n {document} \n\n User question: {question}")
+    ]
+)
+
+retrieval_grader    = grade_prompt | structured_llm_grader
+
+
+
+
+================================================
+FILE: rag_graphs/news_rag_graph/graph/nodes/__init__.py
+================================================
+from rag_graphs.news_rag_graph.graph.nodes.generate import generate
+from rag_graphs.news_rag_graph.graph.nodes.grade_documents import grade_documents
+from rag_graphs.news_rag_graph.graph.nodes.retrieve import retrieve
+from rag_graphs.news_rag_graph.graph.nodes.web_search import web_search
+
+__all__ = ["generate", "grade_documents", "retrieve", "web_search"]
+
+
+================================================
+FILE: rag_graphs/news_rag_graph/graph/nodes/generate.py
+================================================
+from dotenv import load_dotenv
+from typing import Any, Dict
+from rag_graphs.news_rag_graph.graph.chains.generation import generation_chain
+from rag_graphs.news_rag_graph.graph.state import GraphState
+from utils.logger import logger
+
+load_dotenv()
+
+def generate(state: GraphState) -> Dict[str, Any]:
+    logger.info("---GENERATE---")
+    question    = state["question"]
+    documents   = state["documents"]
+
+    generation  = generation_chain.invoke({
+        "context": documents,
+        "question": question,
+    })
+
+    return {
+        "documents": documents,
+        "question": question,
+        "generation": generation
+    }
+
+
+================================================
+FILE: rag_graphs/news_rag_graph/graph/nodes/grade_documents.py
+================================================
+from dotenv import load_dotenv
+from typing import Any, Dict
+from rag_graphs.news_rag_graph.graph.chains.retrieval_grader import retrieval_grader
+from rag_graphs.news_rag_graph.graph.state import GraphState
+from utils.logger import logger
+
+load_dotenv()
+def grade_documents(state: GraphState)-> Dict[str, Any]:
+    """
+    Determines whether the retrieved documents are relevant to the question
+    If any document is not relevant, we will set a flag to run web search
+
+    Args:
+        state(dict): The current graph state
+
+    Returns:
+        state(dict): Filtered out irrelevant documents and updated web_search state
+    :param state:
+    :return:
+    """
+    logger.info("---CHECK DOCUMENT RELEVANCE TO THE QUESTION---" )
+    question    = state["question"]
+    documents   = state["documents"]
+
+    filtered_docs   = []
+    web_search      = True
+
+    for d in documents:
+        score   = retrieval_grader.invoke(
+            {"question": question, "document": d.page_content}
+        )
+        grade   = score.binary_score
+
+        if grade.lower()=="yes":
+            logger.info("---GRADE: DOCUMENT RELEVANT---")
+            filtered_docs.append(d)
+            web_search = False
+        else:
+            logger.info("---GRADE: DOCUMENT NOT RELEVANT---")
+            web_search  = True
+            continue
+
+    return {"documents": filtered_docs, "question": question, "web_search": web_search}
+
+
+
+
+
+================================================
+FILE: rag_graphs/news_rag_graph/graph/nodes/retrieve.py
+================================================
+# Code for retrieval node
+from typing import Any, Dict
+from rag_graphs.news_rag_graph.graph.state import GraphState
+from rag_graphs.news_rag_graph.ingestion import news_articles_retriever
+from utils.logger import logger
+
+def retrieve(state:GraphState)->Dict[str, Any]:
+    logger.info("---RETRIEVE---")
+    question    = state['question']
+    documents   = news_articles_retriever.invoke(question)
+
+    return {"documents": documents, "question": question}
+
+
+================================================
+FILE: rag_graphs/news_rag_graph/graph/nodes/web_search.py
+================================================
+from typing import Any, Dict
+from dotenv import load_dotenv
+from langchain_community.tools import TavilySearchResults
+from rag_graphs.news_rag_graph.graph.state import GraphState
+from langchain.schema import Document
+from utils.logger import logger
+
+load_dotenv()
+
+web_search_tool = TavilySearchResults(max_results=3)
+
+def web_search(state:GraphState) -> Dict[str, Any]:
+    logger.info("---WEB SEARCH---")
+    question    = state["question"]
+    documents   = state["documents"]
+
+    tavily_results = web_search_tool.invoke({"query": question})
+    joined_tavily_result    = "\n".join(
+        [tavily_result["content"] for tavily_result in tavily_results]
+    )
+
+    web_results = Document(page_content=joined_tavily_result)
+    if documents is not None:
+        documents.append(web_results)
+    else:
+        documents   = [web_results]
+
+    return {"documents": documents, "question": question}
+
+if __name__ == "__main__":
+    web_search(state={"question":"agent memory", "documents":None})
+
+
+
+================================================
+FILE: rag_graphs/stock_charts_graph/__init__.py
+================================================
+
+
+
+================================================
+FILE: rag_graphs/stock_charts_graph/main.py
+================================================
+from dotenv import load_dotenv
+from rag_graphs.stock_charts_graph.graph.graph import app
+from utils.logger import logger
+
+load_dotenv()
+
+if __name__=='__main__':
+    logger.info("--STOCK CHARTS CHAIN--")
+    res = app.invoke({"question": "All unique values of 'Date' and 'Low' of AAPL for last 7 days"})
+    print(res)
+
+
+================================================
+FILE: rag_graphs/stock_charts_graph/graph/__init__.py
+================================================
+
+
+
+================================================
+FILE: rag_graphs/stock_charts_graph/graph/graph.py
+================================================
+from dotenv import load_dotenv
+from langgraph.graph import StateGraph,END
+from rag_graphs.stock_data_rag_graph.graph.constants import GENERATE_SQL, EXECUTE_SQL, GENERATE_RESULTS
+from rag_graphs.stock_data_rag_graph.graph.state import GraphState
+from rag_graphs.stock_data_rag_graph.graph.nodes.generate_sql import generate_sql
+from rag_graphs.stock_data_rag_graph.graph.nodes.sql_search import sql_fetch_query
+# from rag_graphs.stock_data_rag_graph.graph.nodes.generate import generate
+
+
+load_dotenv()
+
+
+graph_builder  = StateGraph(state_schema=GraphState)
+
+graph_builder.add_node(GENERATE_SQL, generate_sql)
+graph_builder.add_node(EXECUTE_SQL, sql_fetch_query)
+# graph_builder.add_node(GENERATE_RESULTS, generate)
+
+graph_builder.set_entry_point(GENERATE_SQL)
+graph_builder.add_edge(GENERATE_SQL, EXECUTE_SQL)
+# graph_builder.add_edge(EXECUTE_SQL, GENERATE_RESULTS)
+# graph_builder.add_edge(GENERATE_RESULTS, END)
+graph_builder.add_edge(EXECUTE_SQL, END)
+
+
+app = graph_builder.compile()
+app.get_graph().draw_mermaid_png(output_file_path="stock-charts-rag-graph.png")
+
+
+================================================
+FILE: rag_graphs/stock_data_rag_graph/__init__.py
+================================================
+
+
+
+================================================
+FILE: rag_graphs/stock_data_rag_graph/main.py
+================================================
+from dotenv import load_dotenv
+from rag_graphs.stock_data_rag_graph.graph.graph import app
+from utils.logger import logger
+
+load_dotenv()
+
+if __name__=='__main__':
+    logger.info("--STOCK DATA CHAIN--")
+    res = app.invoke({"question": "What is the lowest price of AAPL over last 7 days?"})
+    print(res)
+
+
+================================================
+FILE: rag_graphs/stock_data_rag_graph/graph/__init__.py
+================================================
+
+
+
+================================================
+FILE: rag_graphs/stock_data_rag_graph/graph/constants.py
+================================================
+GENERATE_SQL        = "generate_sql"
+EXECUTE_SQL         = "execute_sql"
+GENERATE_RESULTS    = "generate_results"
+
+
+
+================================================
+FILE: rag_graphs/stock_data_rag_graph/graph/graph.py
+================================================
+from dotenv import load_dotenv
+from langgraph.graph import StateGraph,END
+from rag_graphs.stock_data_rag_graph.graph.constants import GENERATE_SQL, EXECUTE_SQL, GENERATE_RESULTS
+from rag_graphs.stock_data_rag_graph.graph.state import GraphState
+from rag_graphs.stock_data_rag_graph.graph.nodes.generate_sql import generate_sql
+from rag_graphs.stock_data_rag_graph.graph.nodes.sql_search import sql_fetch_query
+from rag_graphs.stock_data_rag_graph.graph.nodes.generate import generate
+
+
+load_dotenv()
+
+
+graph_builder  = StateGraph(state_schema=GraphState)
+
+graph_builder.add_node(GENERATE_SQL, generate_sql)
+graph_builder.add_node(EXECUTE_SQL, sql_fetch_query)
+graph_builder.add_node(GENERATE_RESULTS, generate)
+
+graph_builder.set_entry_point(GENERATE_SQL)
+graph_builder.add_edge(GENERATE_SQL, EXECUTE_SQL)
+graph_builder.add_edge(EXECUTE_SQL, GENERATE_RESULTS)
+graph_builder.add_edge(GENERATE_RESULTS, END)
+
+
+app = graph_builder.compile()
+app.get_graph().draw_mermaid_png(output_file_path="stock-data-rag-graph.png")
+
+
+================================================
+FILE: rag_graphs/stock_data_rag_graph/graph/state.py
+================================================
+from typing import List, TypedDict
+
+
+
+class GraphState(TypedDict):
+    """
+    Represents the state of our graph
+
+    Attributes:
+        question: Qustion
+        generation: LLM generation
+        web_seach: Whether to search the web for additional info
+        documents: List of documents
+    """
+    question: str
+    sql_query: str
+    sql_results: str
+    generation: str
+
+
+
+================================================
+FILE: rag_graphs/stock_data_rag_graph/graph/chains/__init__.py
+================================================
+
+
+
+================================================
+FILE: rag_graphs/stock_data_rag_graph/graph/chains/results_generation.py
+================================================
+from dotenv import load_dotenv
+from langchain_core.output_parsers import StrOutputParser
+from langchain_openai import ChatOpenAI
+from langchain import hub
+from langchain_core.prompts import ChatPromptTemplate
+load_dotenv()
+
+llm                 = ChatOpenAI(temperature=0)
+
+system = """You are a helpful AI assistant which specializes in reading stock data provided in pandas.Dataframe format and answering relevant queries.
+            Answer the question user asks. Be polite.
+            Consider the provided context to frame your answer 
+            At the end ask if the user would like to ask any more queries. 
+"""
+generation_prompt   = ChatPromptTemplate.from_messages(
+    [
+        ("system", system),
+        ("human", "Stock Data: {context}\n\nUser question: {question}")
+    ]
+)
+
+generation_chain    = generation_prompt | llm | StrOutputParser()
+
+
+
+================================================
+FILE: rag_graphs/stock_data_rag_graph/graph/chains/retrieval_grader.py
+================================================
+from dotenv import load_dotenv
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_openai import ChatOpenAI
+from pydantic.v1 import BaseModel, Field
+
+load_dotenv()
+llm = ChatOpenAI(temperature=0)
+
+class GradeDocuments(BaseModel):
+    """Binary score for relevance check on retrieved documents"""
+    binary_score: str = Field(
+        description="Documents are relevant to the question, 'yes' or 'no'",
+    )
+
+structured_llm_grader   = llm.with_structured_output(GradeDocuments)
+
+system  = """You are a grader assessing relevance of a retrieved document to a user question. \n
+             If the document contains keyword(s) or semantic meaning related to the question, grade it as relevant.
+             Give a binary score 'yes' or 'no' score to indicate whether the document is relevant to the question. 
+"""
+
+grade_prompt    = ChatPromptTemplate.from_messages(
+    [
+        ("system", system),
+        ("human", "Retrieved document: \n\n {document} \n\n User question: {question}")
+    ]
+)
+
+retrieval_grader    = grade_prompt | structured_llm_grader
+# retrieval_grader.invoke("agent memory")
+
+
+
+
+================================================
+FILE: rag_graphs/stock_data_rag_graph/graph/chains/sql_generation_chain.py
+================================================
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_openai import ChatOpenAI
+from langchain_core.output_parsers import StrOutputParser
+from dotenv import load_dotenv
+from utils.logger import logger
+
+load_dotenv()
+llm = ChatOpenAI(temperature=0)
+
+system = """
+You are an AI assistant that converts natural language queries into SQL queries.
+The table name is stock_data and the schema is id(integer), ticker(character),date(date) ,open(double) ,high(double) ,low(double) ,close(double) ,volume(bigint),
+Convert the user question into a valid SQL query.
+"""
+
+sql_generation_prompt   = ChatPromptTemplate.from_messages(
+    [
+        ("system", system),
+        ("human", "User question: {question}")
+    ]
+)
+sql_generation_chain    = sql_generation_prompt | llm | StrOutputParser()
+
+if __name__ == "__main__":
+    question    = "Query the last 1 month of data for AAPL."
+
+    res         = sql_generation_chain.invoke(input={
+                "question": question,
+    })
+
+    logger.info(f"Generated SQL Query ={res}")
+
+
+
+================================================
+FILE: rag_graphs/stock_data_rag_graph/graph/chains/tests/test_chains.py
+================================================
+from pprint import pprint
+
+from dotenv import load_dotenv
+
+from graph.chains.retrieval_grader import GradeDocuments, retrieval_grader
+from graph.chains.generation import generation_chain
+from ingestion import retriever
+
+load_dotenv()
+
+
+def test_retrieval_grader_answer_yes()->None:
+    question    = "agent memory"
+    docs        = retriever.invoke(question)
+    doc_txt     = docs[0].page_content
+
+    res: GradeDocuments = retrieval_grader.invoke(
+        {"question": question, "document": doc_txt}
+    )
+
+    assert res.binary_score=="yes"
+
+def test_retrieval_grader_answer_no()->None:
+    question    = "agent memory"
+    docs        = retriever.invoke(question)
+    doc_txt     = docs[0].page_content
+
+    res: GradeDocuments = retrieval_grader.invoke(
+        {"question": "How to make pizza", "document": doc_txt}
+    )
+
+    assert res.binary_score=="no"
+
+def test_generation_chain():
+    question    = "agent memory"
+    docs        = retriever.invoke(question)
+    res         = generation_chain.invoke({
+        "context": docs,
+        "question": question
+
+    })
+    pprint(res)
+    assert True
+
+
+
+================================================
+FILE: rag_graphs/stock_data_rag_graph/graph/nodes/__init__.py
+================================================
+# from graph.nodes.generate import generate
+# from graph.nodes.grade_documents import grade_documents
+# from graph.nodes.retrieve import retrieve
+# from graph.nodes.web_search import web_search
+#
+# __all__ = ["generate", "grade_documents", "generate_sql.py", "sql_search.py"]
+
+
+================================================
+FILE: rag_graphs/stock_data_rag_graph/graph/nodes/generate.py
+================================================
+from dotenv import load_dotenv
+from typing import Any, Dict
+from rag_graphs.stock_data_rag_graph.graph.chains.results_generation import generation_chain
+from rag_graphs.stock_data_rag_graph.graph.state import GraphState
+from utils.logger import logger
+
+load_dotenv()
+
+def generate(state: GraphState) -> Dict[str, Any]:
+    logger.info("---GENERATE RESULTS---")
+    question    = state["question"]
+    sql_results = state["sql_results"]
+
+    generation  = generation_chain.invoke({
+        "context": sql_results,
+        "question": question,
+    })
+
+    return {
+        "sql_results": sql_results,
+        "question": question,
+        "generation": generation
+    }
+
+
+================================================
+FILE: rag_graphs/stock_data_rag_graph/graph/nodes/generate_sql.py
+================================================
+# Code for retrieval node
+from typing import Any, Dict
+from rag_graphs.stock_data_rag_graph.graph.state import GraphState
+from rag_graphs.stock_data_rag_graph.graph.chains.sql_generation_chain import sql_generation_chain
+from utils.logger import logger
+import re
+
+
+def clean_sql_string(input_sql_query):
+    input_sql_query = input_sql_query.replace('\n', ' ')
+
+    # Extract the SQL query
+    match = re.search(r"```sql\s+(.*?)\s+```", input_sql_query, re.DOTALL)
+    if match:
+        sql_query = match.group(1)
+        return (sql_query)
+    else:
+        return input_sql_query
+
+
+def generate_sql(state:GraphState)->Dict[str, Any]:
+    logger.info("---GENERATE SQL---")
+    question    = state['question']
+    generated_sql   = sql_generation_chain.invoke(question)
+    clean_sql_query = clean_sql_string(generated_sql)
+    return {"sql_query": clean_sql_query, "question": question}
+
+
+================================================
+FILE: rag_graphs/stock_data_rag_graph/graph/nodes/grade_documents.py
+================================================
+from dotenv import load_dotenv
+from typing import Any, Dict
+
+from utils.logger import logger
+
+load_dotenv()
+
+from rag_graphs.stock_data_rag_graph.graph.chains.retrieval_grader import retrieval_grader
+from rag_graphs.stock_data_rag_graph.graph.state import GraphState
+
+def grade_documents(state: GraphState)-> Dict[str, Any]:
+    """
+    Determines whether the retrieved documents are relevant to the question
+    If any document is not relevant, we will set a flag to run web search
+
+    Args:
+        state(dict): The current graph state
+
+    Returns:
+        state(dict): Filtered out irrelevant documents and updated web_search state
+    :param state:
+    :return:
+    """
+    logger.info("---CHECK DOCUMENT RELEVANCE TO THE QUESTION---" )
+    question    = state["question"]
+    documents   = state["documents"]
+
+    filtered_docs   = []
+    web_search      = False
+
+    for d in documents:
+        score   = retrieval_grader.invoke(
+            {"question": question, "document": d.page_content}
+        )
+        grade   = score.binary_score
+
+        if grade.lower()=="yes":
+            logger.info("---GRADE: DOCUMENT RELEVANT---")
+            filtered_docs.append(d)
+        else:
+            logger.info("---GRADE: DOCUMENT NOT RELEVANT---")
+            web_search = True
+            continue
+
+    return {"documents": filtered_docs, "question": question, "web_search": web_search}
+
+
+
+
+
+================================================
+FILE: rag_graphs/stock_data_rag_graph/graph/nodes/sql_search.py
+================================================
+from typing import Any, Dict
+from dotenv import load_dotenv
+from db.postgres_db import PostgresDBClient
+from rag_graphs.stock_data_rag_graph.graph.state import GraphState
+# from sqlalchemy import create_engine, text
+import os
+import pandas as pd
+from utils.logger import logger
+
+load_dotenv()
+
+def initialize_db_client():
+    """
+    Initialize the PostgresDBClient using .env credentials.
+    """
+    user = os.getenv("POSTGRES_USERNAME")
+    password = os.getenv("POSTGRES_PASSWORD")
+    host = os.getenv("POSTGRES_HOST")
+    port = os.getenv("POSTGRES_PORT", 5432)  # Default to 5432 if not specified
+    db_name = os.getenv("POSTGRES_DB")
+
+    return PostgresDBClient(
+        host=host,
+        database=db_name,
+        user=user,
+        password=password,
+        port=port
+    )
+
+
+def execute_query(query: str, params: dict = None):
+    """
+    Execute a SQL query using PostgresDBClient and return results as a DataFrame.
+
+    Args:
+        query (str): The SQL query to execute.
+        params (dict, optional): Parameters for the query.
+
+    Returns:
+        pd.DataFrame: The query results as a Pandas DataFrame.
+    """
+    db_client   = initialize_db_client()
+    try:
+        if "select" in query.lower():  # For SELECT queries
+            results, columns = db_client.fetch_query(query, params)
+            if not columns:  # Handle case where no columns are returned
+                logger.warning("Query returned no columns.")
+                return pd.DataFrame()  # Return an empty DataFrame
+            return pd.DataFrame(results, columns=columns)
+        else:  # For other queries (INSERT, UPDATE, DELETE)
+            db_client.execute_query(query, params)
+            return pd.DataFrame()  # Return an empty DataFrame for non-SELECT
+    except Exception as e:
+        logger.error(f"Error executing query: {e}")
+        raise
+
+
+
+def sql_fetch_query(state:GraphState) -> Dict[str, Any]:
+    logger.info("---SQL SEARCH---")
+    sql_query               = state["sql_query"]
+    sql_results             = execute_query(sql_query)
+
+    return {"sql_results": sql_results, "sql_query": sql_query}
+
+
+
+
+================================================
+FILE: rest_api/main.py
+================================================
+from fastapi import FastAPI
+from dotenv import load_dotenv
+from config.config_loader import ConfigLoader
+from rag_graphs.news_rag_graph.ingestion import DocumentSyncManager
+from rest_api.routes import stock_routes, news_routes
+from utils.logger import logger
+from scraper.scraper_factory import StockScraperFactory, NewsScraperFactory
+from datetime import datetime
+
+import asyncio
+import os
+
+# Load .env
+load_dotenv()
+
+# Initialize FastAPI
+app = FastAPI()
+
+# Initialize ConfigLoader
+config_loader = ConfigLoader(config_file="config/config.json")
+
+# Load configurations
+SCRAPE_TICKERS = config_loader.get("SCRAPE_TICKERS")
+SCRAPING_INTERVAL = config_loader.get("SCRAPING_INTERVAL", 3600)
+
+if not SCRAPE_TICKERS:
+    raise ValueError("No tickers found in config.json. Please check the configuration.")
+
+async def run_scrapers_in_background():
+    """
+    Run news_scraper and stock_scraper in parallel in the background.
+    """
+    loop = asyncio.get_event_loop()
+
+    stock_factory = StockScraperFactory()
+    stock_scraper = stock_factory.create_scraper()
+
+    news_factory = NewsScraperFactory()
+    news_scraper = news_factory.create_scraper(collection_name=os.getenv("COLLECTION_NAME"),
+                                               scrape_num_articles=int(os.getenv("SCRAPE_NUM_ARTICLES", 1)))
+
+    # Run both scrapers concurrently
+    await asyncio.gather(
+        loop.run_in_executor(None, news_scraper.scrape_all_tickers, SCRAPE_TICKERS),
+        loop.run_in_executor(None, stock_scraper.scrape_all_tickers, SCRAPE_TICKERS)
+    )
+    # Sync scraped docs in Vector DB
+    DocumentSyncManager().sync_documents()
+
+@app.on_event("startup")
+async def start_scraping_task():
+    """
+    Start the background task to scrape data at regular intervals when the server starts.
+    """
+    asyncio.create_task(scrape_in_interval(SCRAPING_INTERVAL))
+
+async def scrape_in_interval(interval: int):
+    """
+    Runs the scraping task at regular intervals.
+    """
+    while True:
+        logger.info(f"Starting scraping at {datetime.now()}")
+
+        # Run scrapers in parallel
+        await run_scrapers_in_background()
+
+        hours   = interval / 3600  # Convert seconds to hours
+        logger.info(f"Scraping completed at {datetime.now()}. Next run in {hours:.2f} hours.")
+        # Wait for the specified interval
+        await asyncio.sleep(interval)
+
+
+# Include routes
+app.include_router(stock_routes.router, prefix="/stock", tags=["Stock Data"])
+app.include_router(news_routes.router, prefix="/news", tags=["News Articles"])
+
+@app.get("/")
+def root():
+ return {"message": "Welcome to the Financial Data API"}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+================================================
+FILE: rest_api/routes/news_routes.py
+================================================
+from fastapi import APIRouter, HTTPException, Query
+from rag_graphs.news_rag_graph.graph.graph import app
+router = APIRouter()
+
+@router.get("/{ticker}")
+def news_by_topic(
+    ticker: str,
+    # Optional query parameter
+    topic: str  = Query(None, description="Topic"),
+):
+    """
+    Get news a specific ticker.
+
+    Args:
+        ticker (str): Stock ticker symbol.
+        topic (str): Topic to fetch news for a specific stock.
+
+    Returns:
+        dict: Relevant news for a speicific ticker.
+    """
+
+    try:
+
+        if topic:
+            human_query = f"News related to {topic} for {ticker}"
+        else:
+            human_query = f"News related to {ticker}"
+
+        res         = app.invoke({"question": human_query})
+        return {
+            "ticker": ticker,
+            "topic": topic,
+            "result": res["generation"]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+================================================
+FILE: rest_api/routes/stock_routes.py
+================================================
+from fastapi import APIRouter, HTTPException, Query
+from rag_graphs.stock_data_rag_graph.graph.graph import app as stock_data_graph
+from rag_graphs.stock_charts_graph.graph.graph import app as stock_charts_graph
+router = APIRouter()
+#
+
+@router.get("/{ticker}/price-stats")
+def price_stats(
+    ticker: str,
+    operation: str  = Query(..., description="Operation to perform: 'highest', 'lowest', 'average'"),
+    price_type: str = Query(..., description="Price type: 'open', 'close', 'low', 'high'"),
+    duration :str   = Query(..., description="Duration (days): '1', '7', '14', '30'"),
+):
+    """
+    Get stock price statistics for a specific ticker.
+
+    Args:
+        ticker (str): Stock ticker symbol.
+        operation (str): Operation to perform (e.g., 'highest', 'lowest', 'average').
+        price_type (str): Type of price (e.g., 'open', 'close', 'low', 'high').
+        duration (int): Number of days
+
+    Returns:
+        dict: Stock data with the requested statistics.
+    """
+
+    try:
+        human_query = f"What is the {operation} value of {price_type} for '{ticker}' over last {duration} day(s) ?"
+
+        res         = stock_data_graph.invoke({"question": human_query})
+        return {
+            "ticker": ticker,
+            "operation": operation,
+            "price_type": price_type,
+            "duration": duration,
+            "result": res['generation']
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/{ticker}/chart")
+def chart(
+    ticker: str,
+    price_type: str = Query(..., description="Price type: 'open', 'close', 'low', 'high'"),
+    duration :str   = Query(..., description="Duration (days): '1', '7', '14', '30'"),
+
+):
+    """
+    Get stock price statistics and return a histogram/chart for a specific ticker.
+
+    Args:
+        ticker (str): Stock ticker symbol.
+        price_type (str): Type of price (e.g., 'open', 'close', 'low', 'high').
+        duration (int): Number of days
+
+    Returns:
+        dict: Stock data with the requested statistics.
+    """
+
+    try:
+        human_query = f"All unique values of 'date' and {price_type} for '{ticker}' for last {duration} day(s)"
+
+        res         = stock_charts_graph.invoke({"question": human_query})
+        return {
+            "ticker": ticker,
+            "price_type": price_type,
+            "duration": duration,
+            "result": res['sql_results']
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
+================================================
+FILE: rest_api/tests/__init__.py
+================================================
+
+
+
+================================================
+FILE: rest_api/tests/test_app.py
+================================================
+import pytest
+from fastapi.testclient import TestClient
+from rest_api.main import app
+
+client = TestClient(app)
+
+def test_root_route():
+    response = client.get("/")
+    assert response.status_code == 200
+    assert response.json() == {"message": "Welcome to the Financial Data API"}
+
+
+
+================================================
+FILE: rest_api/tests/test_initialization_background_tasks.py
+================================================
+import asyncio
+from unittest.mock import patch
+from rest_api.main import run_scrapers_in_background, scrape_in_interval
+import pytest
+
+@patch("scraper.scraper_factory.StockScraperFactory.create_scraper")
+@patch("scraper.scraper_factory.NewsScraperFactory.create_scraper")
+@patch("rag_graphs.news_rag_graph.ingestion.DocumentSyncManager.sync_documents")
+@pytest.mark.asyncio
+async def test_run_scrapers_in_background(mock_sync, mock_news_scraper, mock_stock_scraper):
+    mock_news_scraper().scrape_all_tickers = lambda x: None
+    mock_stock_scraper().scrape_all_tickers = lambda x: None
+
+    await run_scrapers_in_background()
+    mock_sync.assert_called_once()
+
+@patch("main.run_scrapers_in_background")
+@pytest.mark.asyncio
+async def test_scrape_in_interval(mock_run_scrapers):
+    mock_run_scrapers.return_value = None
+    interval = 2
+    task = asyncio.create_task(scrape_in_interval(interval))
+    await asyncio.sleep(3)  # Allow the interval to trigger
+    task.cancel()
+    mock_run_scrapers.assert_called()
+
+
+
+================================================
+FILE: rest_api/tests/test_news_route.py
+================================================
+from unittest.mock import patch
+from fastapi.testclient import TestClient
+from rest_api.main import app
+
+client = TestClient(app)
+
+@patch("rag_graphs.news_rag_graph.graph.graph.app.invoke")
+def test_news_by_topic(mock_invoke):
+    mock_invoke.return_value = {"generation": ["News about AI for AAPL"]}
+
+    response = client.get("/news/AAPL", params={"topic": "AI"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ticker"] == "AAPL"
+    assert data["topic"] == "AI"
+    assert "News about AI for AAPL" in data["result"]
+
+@patch("rag_graphs.news_rag_graph.graph.graph.app.invoke")
+def test_news_no_topic(mock_invoke):
+    mock_invoke.return_value = {"generation": ["General news about AAPL"]}
+
+    response = client.get("/news/AAPL")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ticker"] == "AAPL"
+    assert data["topic"] is None
+    assert "General news about AAPL" in data["result"]
+
+def test_news_route_error_handling():
+    response = client.get("/news/AAPL", params={"topic": "InvalidTopic"})
+    assert response.status_code in {400, 500}  # Assuming exception leads to 500
+
+
+
+================================================
+FILE: rest_api/tests/test_stock_route.py
+================================================
+from unittest.mock import patch
+from fastapi.testclient import TestClient
+from rest_api.main import app
+
+client = TestClient(app)
+
+@patch("rag_graphs.stock_data_rag_graph.graph.graph.app.invoke")
+def test_stock_price_stats(mock_invoke):
+    mock_invoke.return_value = {"generation": ["The highest close price is 150"]}
+
+    response = client.get(
+        "/stock/AAPL/price-stats",
+        params={"operation": "highest", "price_type": "close", "duration": "7"}
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ticker"] == "AAPL"
+    assert data["operation"] == "highest"
+    assert data["price_type"] == "close"
+    assert data["duration"] == "7"
+    assert "The highest close price is 150" in data["result"]
+
+def test_stock_price_stats_error_handling():
+    response = client.get(
+        "/stock/INVALID/price-stats",
+        params={"operation": "highest", "price_type": "close", "duration": "7"}
+    )
+    assert response.status_code in {400, 500}  # Assuming exception leads to 500
+
+
+
+================================================
+FILE: scraper/__init__.py
+================================================
+
+
+
+================================================
+FILE: scraper/generic_scraper.py
+================================================
+from abc import ABC, abstractmethod
+
+class GenericScraper(ABC):
+    """
+    Abstract scraper interface defining common methods.
+    """
+    @abstractmethod
+    def scrape_all_tickers(self, **kwargs):
+        pass
+
+
+
+================================================
+FILE: scraper/news_scraper.py
+================================================
+import os
+import re
+import requests
+from time import sleep
+from bs4 import BeautifulSoup
+from dotenv import load_dotenv
+from db.mongo_db import MongoDBClient
+from scraper.generic_scraper import GenericScraper
+from utils.logger import logger
+
+class NewsScraper(GenericScraper):
+    def __init__(self, collection_name, scrape_num_articles=1):
+        """
+        Initialize the NewsScraper with necessary parameters.
+        """
+        self.headers    = {
+            'accept': '*/*',
+            'accept-encoding': 'gzip, deflate, br',
+            'accept-language': 'en-US,en;q=0.9',
+            'referer': 'https://www.google.com',
+            'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.83 Safari/537.36 Edg/85.0.564.44'
+        }
+
+        self.collection_name        = collection_name
+        self.scrape_num_articles    = scrape_num_articles
+        self.mongo_client           = MongoDBClient()
+
+
+    @staticmethod
+    def extract_article(card):
+        """
+        Extract article information from the raw HTML.
+        """
+        headline        = card.find('h4', 's-title').text
+        source          = card.find("span", 's-source').text
+        posted          = card.find('span', 's-time').text.replace('·', '').strip()
+        description     = card.find('p', 's-desc').text.strip()
+        raw_link        = card.find('a').get('href')
+        unquoted_link   = requests.utils.unquote(raw_link)
+        pattern         = re.compile(r'RU=(.+)\/RK')
+        clean_link      = re.search(pattern, unquoted_link).group(1)
+
+        return {
+            'headline': headline,
+            'source': source,
+            'posted': posted,
+            'description': description,
+            'link': clean_link,
+            'synced': False
+        }
+
+    def scrape_articles(self, search_query):
+        """
+        Scrape news articles for a specific search query.
+        """
+        template    = 'https://news.search.yahoo.com/search?p={}'
+        url         = template.format(search_query)
+        articles    = []
+        links       = set()
+        num_search  = self.scrape_num_articles
+
+        while num_search:
+            num_search -= 1
+            response    = requests.get(url, headers=self.headers)
+            soup        = BeautifulSoup(response.text, 'html.parser')
+            cards       = soup.find_all('div', 'NewsArticle')
+
+            # Extract articles from the page
+            for card in cards:
+                article = self.extract_article(card)
+                link    = article['link']
+                if link not in links:
+                    links.add(link)
+                    articles.append(article)
+
+            # Find the next page
+            try:
+                url = soup.find('a', 'next').get('href')
+                sleep(1)
+            except AttributeError:
+                break
+
+        # Insert articles into MongoDB
+        if articles:
+            self.mongo_client.insert_many(self.collection_name, articles)
+            logger.info(f"Inserted {len(articles)} articles into MongoDB.")
+
+        return articles
+
+    def scrape_all_tickers(self, tickers):
+        """
+        Scrape news articles for a list of tickers.
+        """
+        for ticker in tickers:
+            logger.info(f"Scraping news for ticker: {ticker}")
+            try:
+                self.scrape_articles(ticker)
+            except Exception as e:
+                logger.error(f"Error while scraping news for {ticker}: {e}")
+
+
+if __name__ == "__main__":
+
+    # Initialize the scraper
+    scraper = NewsScraper(
+        collection_name = os.getenv("COLLECTION_NAME"),
+        scrape_num_articles = int(os.getenv("SCRAPE_NUM_ARTICLES", 1))
+    )
+
+    # List of tickers to scrape
+    top_50_tickers = [
+        "AAPL", "MSFT", "GOOG", "AMZN", "TSLA", "NVDA", "BRK-B", "META",
+        "UNH", "JNJ", "V", "PG", "XOM", "JPM", "WMT", "MA", "CVX", "LLY",
+        "PFE", "HD", "KO", "ABBV", "PEP", "MRK", "BAC", "TMO", "AVGO",
+        "COST", "DIS", "CSCO", "DHR", "TMUS", "MCD", "ADBE", "NFLX",
+        "CMCSA", "TXN", "NKE", "PM", "VZ", "INTC", "ORCL", "QCOM",
+        "ABT", "WFC", "LIN", "BMY", "ACN", "UPS", "RTX"
+    ]
+
+    # Scrape all tickers
+    scraper.scrape_all_tickers(top_50_tickers)
+
+
+
+================================================
+FILE: scraper/postgres_table.py
+================================================
+from dotenv import load_dotenv
+from sqlalchemy import create_engine, Column, Integer, String, Date, Float, BigInteger
+from sqlalchemy.ext.declarative import declarative_base
+import os
+
+load_dotenv()
+
+# Define the base class for declarative models
+Base = declarative_base()
+
+# Define the StockData model
+class StockData(Base):
+    __tablename__   = os.getenv('STOCK_TABLE')
+
+    id      = Column(Integer, primary_key=True, autoincrement=True)
+    ticker  = Column(String(10), nullable=False)
+    date    = Column(Date, nullable=False)
+    open    = Column(Float)
+    high    = Column(Float)
+    low     = Column(Float)
+    close   = Column(Float)
+    volume  = Column(BigInteger)
+    
+
+
+================================================
+FILE: scraper/scraper_factory.py
+================================================
+from abc import ABC, abstractmethod
+
+from scraper.generic_scraper import GenericScraper
+from scraper.news_scraper import NewsScraper
+from scraper.stock_data_scraper import StockDataScraper
+
+
+class ScraperFactory(ABC):
+    """
+    Abstract factory interface for creating scraper instances.
+    """
+    @abstractmethod
+    def create_scraper(self, **kwargs)->GenericScraper:
+        pass
+
+class StockScraperFactory(ScraperFactory):
+    """
+    Factory class for creating StockScraper instances.
+    """
+    def create_scraper(self, **kwargs)->StockDataScraper:
+        """
+        Create a StockScraper instance.
+        """
+        return StockDataScraper()
+
+class NewsScraperFactory(ScraperFactory):
+    """
+    Factory class for creating NewsScraper instances.
+    """
+    def create_scraper(self, **kwargs)->NewsScraper:
+        """
+        Create a NewsScraper instance.
+        """
+        collection_name     = kwargs.get("collection_name", "default_collection")
+        scrape_num_articles = kwargs.get("scrape_num_articles", 1)
+        return NewsScraper(collection_name, scrape_num_articles)
+
+
+
+================================================
+FILE: scraper/stock_data_scraper.py
+================================================
+import asyncio
+
+from db.postgres_db import PostgresDBClient
+from utils.logger import logger
+import yfinance as yf
+from dotenv import load_dotenv
+import os
+
+class StockDataScraper:
+    def __init__(self):
+        self.db_client = self.initialize_db_client()
+
+    @staticmethod
+    def initialize_db_client():
+        """
+        Initialize the PostgresDBClient using .env credentials.
+        """
+        load_dotenv()  # Load environment variables
+        user = os.getenv("POSTGRES_USERNAME")
+        password = os.getenv("POSTGRES_PASSWORD")
+        host = os.getenv("POSTGRES_HOST")
+        port = os.getenv("POSTGRES_PORT", 5432)  # Default to 5432
+        db_name = os.getenv("POSTGRES_DB")
+
+        return PostgresDBClient(
+            host=host,
+            database=db_name,
+            user=user,
+            password=password,
+            port=port,
+        )
+
+    def fetch_stock_data_sync(self, ticker, period='1mo'):
+        """
+        Synchronously fetches historical stock data for a given ticker.
+        """
+        ticker_data = yf.Ticker(ticker)
+        return ticker_data.history(period=period)
+
+    def insert_data_into_db(self, ticker, historical_data):
+        """
+        Inserts historical stock data for a given ticker into the database using PostgresDBClient.
+        """
+        try:
+            for date, row in historical_data.iterrows():
+                data = {
+                    "ticker": ticker,
+                    "date": date.date(),
+                    "open": row["Open"],
+                    "high": row["High"],
+                    "low": row["Low"],
+                    "close": row["Close"],
+                    "volume": row["Volume"],
+                }
+                self.db_client.create("stock_data", data)  # Assuming table is named `stock_data`
+            logger.info(f"Data for {ticker} successfully inserted into the database.")
+        except Exception as e:
+            logger.error(f"Error inserting data for {ticker}: {e}")
+            raise
+
+    def scrape_all_tickers(self, tickers):
+        """
+        Fetches and stores stock data for all tickers.
+        """
+        for ticker in tickers:
+            try:
+                logger.info(f"Scraping data for {ticker}...")
+                historical_data = self.fetch_stock_data_sync(ticker)
+                self.insert_data_into_db(ticker, historical_data)
+            except Exception as e:
+                logger.error(f"Error scraping data for {ticker}: {e}")
+
+# Example usage
+if __name__ == "__main__":
+    top_50_tickers = [
+        "AAPL", "MSFT", "GOOG", "AMZN", "TSLA", "NVDA", "BRK-B", "META",
+        "UNH", "JNJ", "V", "PG", "XOM", "JPM", "WMT", "MA", "CVX", "LLY",
+        "PFE", "HD", "KO", "ABBV", "PEP", "MRK", "BAC", "TMO", "AVGO",
+        "COST", "DIS", "CSCO", "DHR", "TMUS", "MCD", "ADBE", "NFLX",
+        "CMCSA", "TXN", "NKE", "PM", "VZ", "INTC", "ORCL", "QCOM",
+        "ABT", "WFC", "LIN", "BMY", "ACN", "UPS", "RTX"
+    ]
+
+    scraper = StockDataScraper()
+    scraper.scrape_all_tickers(top_50_tickers)
+
+
+
+================================================
+FILE: scraper/tests/__init__.py
+================================================
+
+
+
+================================================
+FILE: scraper/tests/test_integration_factories.py
+================================================
+from scraper.scraper_factory import StockScraperFactory, NewsScraperFactory
+
+def test_stock_scraper_factory_integration():
+    factory = StockScraperFactory()
+    scraper = factory.create_scraper()
+    scraper.scrape_all_tickers(["AAPL", "GOOG"])
+
+def test_news_scraper_factory_integration():
+    factory = NewsScraperFactory()
+    scraper = factory.create_scraper(collection_name="test_collection", scrape_num_articles=2)
+    scraper.scrape_all_tickers(["AAPL", "MSFT"])
+
+
+
+================================================
+FILE: scraper/tests/test_news_scraper.py
+================================================
+from scraper.news_scraper import NewsScraper
+from unittest.mock import patch, MagicMock
+
+@patch("scraper.news_scraper.requests.get")
+@patch("scraper.news_scraper.MongoDBClient.insert_many")
+def test_scrape_articles(mock_insert, mock_get):
+    mock_response = MagicMock()
+    mock_response.text = """
+    <div class="NewsArticle">
+        <h4 class="s-title">Test Headline</h4>
+        <span class="s-source">Test Source</span>
+        <span class="s-time">1 hour ago</span>
+        <p class="s-desc">Test Description</p>
+        <a href="https://example.com">Link</a>
+    </div>
+    """
+    mock_get.return_value = mock_response
+    scraper = NewsScraper(collection_name="test_collection", scrape_num_articles=1)
+    articles = scraper.scrape_articles("AAPL")
+    assert len(articles) == 1
+    assert articles[0]["headline"] == "Test Headline"
+    assert articles[0]["source"] == "Test Source"
+    mock_insert.assert_called_once()
+
+
+
+================================================
+FILE: scraper/tests/test_scraper_factory.py
+================================================
+from scraper.scraper_factory import StockScraperFactory, NewsScraperFactory
+from scraper.news_scraper import NewsScraper
+from scraper.stock_data_scraper import StockDataScraper
+
+def test_stock_scraper_factory():
+    factory = StockScraperFactory()
+    scraper = factory.create_scraper()
+    assert isinstance(scraper, StockDataScraper)
+
+def test_news_scraper_factory():
+    factory = NewsScraperFactory()
+    scraper = factory.create_scraper(collection_name="test_collection", scrape_num_articles=5)
+    assert isinstance(scraper, NewsScraper)
+    assert scraper.collection_name == "test_collection"
+    assert scraper.scrape_num_articles == 5
+
+
+
+================================================
+FILE: scraper/tests/test_stock_data_scraper.py
+================================================
+from scraper.stock_data_scraper import StockDataScraper
+from unittest.mock import patch
+
+@patch("scraper.stock_data_scraper.yf.Ticker")
+def test_fetch_stock_data_sync(mock_ticker):
+    mock_ticker().history.return_value = {"Open": 150, "Close": 155}
+    scraper = StockDataScraper()
+    data = scraper.fetch_stock_data_sync("AAPL")
+    assert data["Open"] == 150
+    assert data["Close"] == 155
+
+@patch("scraper.stock_data_scraper.StockDataScraper.insert_data_into_db_sync")
+def test_scrape_all_tickers(mock_insert):
+    scraper = StockDataScraper()
+    scraper.scrape_all_tickers(["AAPL", "MSFT"])
+    assert mock_insert.call_count == 2
+
+
+
+================================================
+FILE: utils/logger.py
+================================================
+from utils.logger_config import setup_logger
+
+# Initialize logger
+logger = setup_logger(__name__)
+
+
+
+================================================
+FILE: utils/logger_config.py
+================================================
+import logging
+from logging.handlers import RotatingFileHandler
+import os
+
+# Define the log directory
+LOG_DIR = "logs"
+os.makedirs(LOG_DIR, exist_ok=True)
+
+# Configure the logger
+def setup_logger(name):
+    """
+    Set up a logger with a specific name.
+
+    Args:
+        name (str): Name of the logger (usually __name__ of the module).
+
+    Returns:
+        logging.Logger: Configured logger instance.
+    """
+    logger = logging.getLogger(name)
+    logger.setLevel(logging.DEBUG)  # Log everything, including debug-level messages
+
+    # Console Handler
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)  # Console logs only for info and above
+    console_format = logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
+    console_handler.setFormatter(console_format)
+
+    # File Handler (Rotating)
+    log_file = os.path.join(LOG_DIR, f"{name}.log")
+    file_handler = RotatingFileHandler(log_file, maxBytes=5 * 1024 * 1024, backupCount=3)
+    file_handler.setLevel(logging.DEBUG)
+    file_format = logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
+    file_handler.setFormatter(file_format)
+
+    # Add Handlers
+    if not logger.hasHandlers():  # Avoid duplicate handlers
+        logger.addHandler(console_handler)
+        logger.addHandler(file_handler)
+
+    return logger
+
+
+
+================================================
+FILE: utils/tests/__init__.py
+================================================
+
+
+
+================================================
+FILE: utils/tests/test_logger.py
+================================================
+import logging
+import os
+import pytest
+from utils.logger_config import setup_logger
+
+# Test `setup_logger` function
+def test_setup_logger_creates_logger():
+    logger_name = "test_logger"
+    logger = setup_logger(logger_name)
+
+    # Verify logger is created
+    assert isinstance(logger, logging.Logger)
+    assert logger.name == logger_name
+
+def test_logger_has_console_handler():
+    logger_name = "test_logger"
+    logger = setup_logger(logger_name)
+
+    # Check for console handler
+    console_handlers = [
+        handler for handler in logger.handlers if isinstance(handler, logging.StreamHandler)
+    ]
+    assert len(console_handlers) == 1
+
+    console_handler = console_handlers[0]
+    assert console_handler.level == logging.INFO
+
+def test_logger_has_file_handler():
+    logger_name = "test_logger"
+    logger = setup_logger(logger_name)
+
+    # Check for file handler
+    file_handlers = [
+        handler for handler in logger.handlers if isinstance(handler, logging.handlers.RotatingFileHandler)
+    ]
+    assert len(file_handlers) == 1
+
+    file_handler = file_handlers[0]
+    assert file_handler.level == logging.DEBUG
+
+def test_file_logging_creates_log_file():
+    logger_name = "test_logger_file"
+    log_dir = "logs"
+    logger = setup_logger(logger_name)
+
+    # Write a debug log
+    logger.debug("This is a debug message")
+
+    # Verify log file is created
+    log_file_path = os.path.join(log_dir, f"{logger_name}.log")
+    assert os.path.exists(log_file_path)
+
+    # Verify log content
+    with open(log_file_path, "r") as log_file:
+        log_content = log_file.read()
+        assert "This is a debug message" in log_content
+
+def test_log_rotation():
+    logger_name = "test_logger_rotation"
+    log_dir = "logs"
+    logger = setup_logger(logger_name)
+
+    # Simulate log rotation by writing large logs
+    log_file_path = os.path.join(log_dir, f"{logger_name}.log")
+    for _ in range(10000):  # Create a large log to exceed 5MB
+        logger.debug("This is a test message for rotation")
+
+    # Check if multiple log files are created
+    rotated_files = [
+        file for file in os.listdir(log_dir) if file.startswith(logger_name)
+    ]
+    assert len(rotated_files) > 1  # At least one rotated file should exist
+
+

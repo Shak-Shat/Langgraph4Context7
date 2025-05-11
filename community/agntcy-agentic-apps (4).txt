@@ -1,0 +1,847 @@
+Directory structure:
+└── marketing_campaign/
+    ├── __init__.py
+    ├── app.py
+    ├── email_reviewer.py
+    ├── generate_manifest.py
+    ├── gradio_ui.py
+    ├── mailcomposer.py
+    ├── main_acp_client.py
+    ├── main_langgraph.py
+    └── state.py
+
+================================================
+FILE: marketing-campaign/src/marketing_campaign/__init__.py
+================================================
+# Copyright AGNTCY Contributors (https://github.com/agntcy)
+# SPDX-License-Identifier: Apache-2.0
+
+
+================================================
+FILE: marketing-campaign/src/marketing_campaign/app.py
+================================================
+# Copyright AGNTCY Contributors (https://github.com/agntcy)
+# SPDX-License-Identifier: Apache-2.0
+import os
+import copy
+
+from agntcy_iomapper import FieldMetadata
+from agntcy_acp.langgraph.api_bridge import APIBridgeAgentNode
+from agntcy_acp.langgraph.io_mapper import (
+    add_io_mapped_conditional_edge,
+    add_io_mapped_edge,
+)
+from langgraph.graph import StateGraph, START, END
+from langgraph.graph.state import CompiledStateGraph
+from marketing_campaign import mailcomposer
+from marketing_campaign import state
+from agntcy_acp.langgraph.acp_node import ACPNode
+from agntcy_acp import ApiClientConfiguration
+from langchain_core.runnables.graph import MermaidDrawMethod
+from langchain_core.runnables import RunnableConfig
+from langchain_openai.chat_models.azure import AzureChatOpenAI
+from marketing_campaign import email_reviewer
+from marketing_campaign.state import MailComposerState
+from langgraph.checkpoint.memory import MemorySaver
+
+
+# Fill in client configuration for the remote agent
+MAILCOMPOSER_AGENT_ID = os.environ.get("MAILCOMPOSER_ID", "")
+EMAIL_REVIEWER_AGENT_ID = os.environ.get("EMAIL_REVIEWER_ID", "")
+SENDGRID_HOST = os.environ.get("SENDGRID_HOST", "http://localhost:8080")
+MAILCOMPOSER_CLIENT_CONFIG = ApiClientConfiguration.fromEnvPrefix("MAILCOMPOSER_")
+EMAIL_REVIEWER_CONFIG = ApiClientConfiguration.fromEnvPrefix("EMAIL_REVIEWER_")
+
+# Set to True to generate a mermaid graph
+GENERATE_MERMAID_GRAPH = (
+    os.environ.get("GENERATE_MERMAID_GRAPH", "False").lower() == "true"
+)
+
+
+def process_inputs(
+    state: state.OverallState, config: RunnableConfig
+) -> state.OverallState:
+    cfg = config.get("configurable", {})
+
+    user_message = state.messages[-1].content
+    if "recipient_email_address" not in cfg or "sender_email_address" not in cfg:
+        raise ValueError(
+            """
+            recipient_email_address and/or sender_email_address not provided. 
+            You can set them as environment variables 
+            RECIPIENT_EMAIL_ADDRESS SENDER_EMAIL_ADDRESS
+            """
+        )
+    state.recipient_email_address = cfg["recipient_email_address"]
+    state.sender_email_address = cfg["sender_email_address"]
+
+    if user_message.upper() == "OK":
+        state.has_composer_completed = True
+
+    else:
+        state.has_composer_completed = False
+
+    state.target_audience = email_reviewer.TargetAudience(cfg["target_audience"])
+
+    state.mailcomposer_state = MailComposerState(
+        input=mailcomposer.InputSchema(
+            messages=copy.deepcopy(state.messages),
+            is_completed=state.has_composer_completed,
+        )
+    )
+    return state
+
+
+def prepare_output(
+    state: state.OverallState, config: RunnableConfig
+) -> state.OverallState:
+    state.messages = copy.deepcopy(
+        state.mailcomposer_state.output.messages
+        if (
+            state.mailcomposer_state
+            and state.mailcomposer_state.output
+            and state.mailcomposer_state.output.messages
+        )
+        else []
+    )
+    if (
+        state.sendgrid_state
+        and state.sendgrid_state.output
+        and state.sendgrid_state.output.result
+    ):
+        state.operation_logs.append(
+            f"Email Send Operation: {state.sendgrid_state.output.result}"
+        )
+
+    return state
+
+
+def check_final_email(state: state.OverallState):
+    return (
+        "done"
+        if (
+            state.mailcomposer_state
+            and state.mailcomposer_state.output
+            and state.mailcomposer_state.output.final_email
+        )
+        else "user"
+    )
+
+
+def build_graph() -> CompiledStateGraph:
+    llm = AzureChatOpenAI(
+        model="gpt-4o-mini",
+        api_version="2024-07-01-preview",
+        seed=42,
+        temperature=0,
+    )
+
+    # Instantiate the local ACP node for the remote agent
+    acp_mailcomposer = ACPNode(
+        name="mailcomposer",
+        agent_id=MAILCOMPOSER_AGENT_ID,
+        client_config=MAILCOMPOSER_CLIENT_CONFIG,
+        input_path="mailcomposer_state.input",
+        input_type=mailcomposer.InputSchema,
+        output_path="mailcomposer_state.output",
+        output_type=mailcomposer.OutputSchema,
+    )
+
+    acp_email_reviewer = ACPNode(
+        name="email_reviewer",
+        agent_id=EMAIL_REVIEWER_AGENT_ID,
+        client_config=EMAIL_REVIEWER_CONFIG,
+        input_path="email_reviewer_state.input",
+        input_type=email_reviewer.InputSchema,
+        output_path="email_reviewer_state.output",
+        output_type=email_reviewer.OutputSchema,
+    )
+
+    # Instantiate APIBridge Agent Node
+    sendgrid_api_key = os.environ.get("SENDGRID_API_KEY", None)
+    if sendgrid_api_key is None:
+        raise ValueError("SENDGRID_API_KEY environment variable is not set")
+
+    send_email = APIBridgeAgentNode(
+        name="sendgrid",
+        input_path="sendgrid_state.input",
+        output_path="sendgrid_state.output",
+        service_api_key=sendgrid_api_key,
+        hostname=SENDGRID_HOST,
+        service_name="sendgrid",
+    )
+
+    # Create the state graph
+    sg = StateGraph(state.OverallState)
+
+    # Add nodes
+    sg.add_node(process_inputs)
+    sg.add_node(acp_mailcomposer)
+    sg.add_node(acp_email_reviewer)
+    sg.add_node(send_email)
+    sg.add_node(prepare_output)
+
+    # Add edges
+    sg.add_edge(START, "process_inputs")
+    sg.add_edge("process_inputs", acp_mailcomposer.get_name())
+    ## Add conditional edge between mailcomposer and either send_email or END, adding io_mappers between them
+    add_io_mapped_conditional_edge(
+        sg,
+        start=acp_mailcomposer,
+        path=check_final_email,
+        iomapper_config_map={
+            "done": {
+                "end": acp_email_reviewer,
+                "metadata": {
+                    "input_fields": [
+                        "mailcomposer_state.output.final_email",
+                        "target_audience",
+                    ]
+                },
+            },
+            "user": {"end": "prepare_output", "metadata": None},
+        },
+        llm=llm,
+    )
+
+    ## Add conditional edge between mail reviewer and either send_email or END, adding io_mappers between them
+
+    add_io_mapped_edge(
+        sg,
+        start=acp_email_reviewer,
+        end=send_email,
+        iomapper_config={
+            "input_fields": [
+                "sender_email_address",
+                "recipient_email_address",
+                "mailcomposer_state.output.final_email",
+            ],
+            "output_fields": [
+                FieldMetadata(
+                    json_path="sendgrid_state",
+                    description="An object that has A prompt asking to send an email. It specifies the email address of the sender, the email address of the recipient and the content of the email.",
+                    examples=[
+                        "Please send an email from master@info.com to xxx@acme.com: The content of the email should be:\n Dear xxx, I am writing to you the say hello. Best Regards. Alessandro\n",
+                        "Write an email from alessandro@company.com  to the reipient 'someone@company.com' : The content of the email should be:\n Hello someone, How are you? Bye. Frank\n",
+                    ],
+                )
+            ],
+        },
+        llm=llm,
+    )
+
+    sg.add_edge(send_email.get_name(), "prepare_output")
+    sg.add_edge("prepare_output", END)
+
+    memory = MemorySaver()
+    g = sg.compile(checkpointer=memory)
+    g.name = "Marketing Campaign Manager"
+    if GENERATE_MERMAID_GRAPH:
+        with open("___graph.png", "wb") as f:
+            f.write(
+                g.get_graph().draw_mermaid_png(
+                    draw_method=MermaidDrawMethod.API,
+                )
+            )
+    return g
+
+
+graph = build_graph()
+
+
+
+================================================
+FILE: marketing-campaign/src/marketing_campaign/email_reviewer.py
+================================================
+# Generated from ACP Descriptor org.agntcy.mail_reviewer using datamodel_code_generator.
+
+from __future__ import annotations
+
+from enum import Enum
+from typing import Any, Optional
+
+from pydantic import BaseModel, Field, RootModel
+
+
+class ConfigSchema(RootModel[Any]):
+    root: Any = Field(..., title='ConfigSchema')
+
+
+class InputSchema(BaseModel):
+    email: str = Field(
+        ..., description='The email content to be reviewed and corrected', title='Email'
+    )
+    target_audience: TargetAudience = Field(
+        ...,
+        description='The target audience for the email, affecting the style of review',
+    )
+
+
+class OutputSchema(BaseModel):
+    correct: bool = Field(
+        ...,
+        description='Indicates whether the email is correct and requires no changes',
+        title='Correct',
+    )
+    corrected_email: Optional[str] = Field(
+        None,
+        description='The corrected version of the email, if changes were necessary',
+        title='Corrected Email',
+    )
+
+
+class TargetAudience(Enum):
+    general = 'general'
+    technical = 'technical'
+    business = 'business'
+    academic = 'academic'
+
+
+
+================================================
+FILE: marketing-campaign/src/marketing_campaign/generate_manifest.py
+================================================
+# Copyright AGNTCY Contributors (https://github.com/agntcy)
+# SPDX-License-Identifier: Apache-2.0
+from pathlib import Path
+from pydantic import AnyUrl
+from marketing_campaign.state import OverallState, ConfigModel
+from agntcy_acp.manifest import (
+    AgentManifest,
+    AgentDeployment,
+    DeploymentOptions,
+    LangGraphConfig,
+    EnvVar,
+    AgentMetadata,
+    AgentACPSpec,
+    AgentRef,
+    Capabilities,
+    SourceCodeDeployment,
+    AgentDependency
+)
+
+
+manifest = AgentManifest(
+    metadata=AgentMetadata(
+        ref=AgentRef(name="org.agntcy.marketing-campaign", version="0.0.1", url=None),
+        description="Offer a chat interface to compose an email for a marketing campaign. Final output is the email that could be used for the campaign"),
+    specs=AgentACPSpec(
+        input=OverallState.model_json_schema(),
+        output=OverallState.model_json_schema(),
+        config=ConfigModel.model_json_schema(),
+        capabilities=Capabilities(
+            threads=False,
+            callbacks=False,
+            interrupts=False,
+            streaming=None
+        ),
+        custom_streaming_update=None,
+        thread_state=None,
+        interrupts=None
+    ),
+    deployment=AgentDeployment(
+        deployment_options=[
+            DeploymentOptions(
+                root = SourceCodeDeployment(
+                    type="source_code",
+                    name="source_code_local",
+                    url=AnyUrl("file://../"),
+                    framework_config=LangGraphConfig(
+                        framework_type="langgraph",
+                        graph="marketing_campaign.app:graph"
+                    )
+                )
+            )
+        ],
+        env_vars=[EnvVar(name="AZURE_OPENAI_API_KEY", desc="Azure key for the OpenAI service"),
+                  EnvVar(name="AZURE_OPENAI_ENDPOINT", desc="Azure endpoint for the OpenAI service"),
+                  EnvVar(name="SENDGRID_API_KEY", desc="Sendgrid API key")],
+        dependencies=[
+            AgentDependency(
+                name="mailcomposer",
+                ref=AgentRef(name="org.agntcy.mailcomposer", version="0.0.1", url=AnyUrl("file://mailcomposer.json")),
+                deployment_option = None,
+                env_var_values = None
+            ),
+           AgentDependency(
+                name="email_reviewer",
+                ref=AgentRef(name="org.agntcy.email_reviewer", version="0.0.1", url=AnyUrl("file://email_reviewer.json")),
+                deployment_option = None,
+                env_var_values = None
+            )
+        ]
+    )
+)
+
+with open(f"{Path(__file__).parent}/../../deploy/marketing-campaign.json", "w") as f:
+    f.write(manifest.model_dump_json(
+        exclude_unset=True,
+        exclude_none=True,
+        indent=2
+    ))
+
+
+
+================================================
+FILE: marketing-campaign/src/marketing_campaign/gradio_ui.py
+================================================
+# Copyright AGNTCY Contributors (https://github.com/agntcy)
+# SPDX-License-Identifier: Apache-2.0
+import asyncio
+import json
+import os
+import re
+import subprocess
+import sys
+import urllib.request
+from urllib.parse import urlparse
+
+import gradio as gr
+from marketing_campaign import mailcomposer
+from marketing_campaign.email_reviewer import TargetAudience
+from marketing_campaign.state import ConfigModel, OverallState
+
+from agntcy_acp.acp_v0.async_client.api_client import ApiClient
+from agntcy_acp import ApiClientConfiguration, AsyncACPClient
+from agntcy_acp.models import (
+    Config,
+    RunCreateStateless,
+    RunError,
+    RunResult,
+)
+
+overall_state = OverallState(
+    messages=[], operation_logs=[], has_composer_completed=False
+)
+client_config = None
+
+# Must be provided before you could run the app
+os.environ["RECIPIENT_EMAIL_ADDRESS"] = ""
+os.environ["SENDER_EMAIL_ADDRESS"] = ""
+
+
+def install_wfsm():
+    WFSM_INSTALLER = "https://raw.githubusercontent.com/agntcy/workflow-srv-mgr/refs/heads/main/install.sh"
+    try:
+        wfsm_installer_filename, _ = urllib.request.urlretrieve(WFSM_INSTALLER)
+
+        process = subprocess.run(
+            ["bash", wfsm_installer_filename],
+            env={'WFSM_TARGET': '.'},
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            universal_newlines=True,
+        )
+        print(process.stdout)
+
+        if process.stderr:
+            print(process.stderr)
+
+        os.remove(wfsm_installer_filename)
+    except Exception as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+
+def run_make_commands(path, command):
+    """Runs make commands for each project and updates PATH, showing logs."""
+    try:
+        # Change the directory to the project path
+        os.chdir(path)
+
+        # Execute the make command and capture the output
+
+        process = subprocess.Popen(
+            command.split(),
+            stdout=subprocess.PIPE,
+            stderr=sys.stderr,
+            text=True,  # Important for string output
+            bufsize=1,  # line buffered
+        )
+
+        r = 0
+        while process.poll() is None:
+            line = process.stdout.readline()
+            if line:
+                sys.stdout.write(line)
+                sys.stdout.flush()
+
+            match = re.search(
+                r"Agent ID:\s*([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})",
+                line,
+            )
+
+            if match:
+                agent_id = match.group(1).lstrip().strip()
+                os.environ["MARKETING_CAMPAIGN_ID"] = str(agent_id)
+
+            match_2 = re.search(
+                r"API Key:\s*([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})",
+                line,
+            )
+
+            if match_2:
+                api_key = match_2.group(1).lstrip().strip()
+                api_key = str(api_key)
+                os.environ["MARKETING_CAMPAIGN_API_KEY"] = json.dumps(
+                    {"x-api-key": api_key}
+                )
+            url_pattern = r"listening for ACP requests on: (https?://[^\s\x1b]+)"
+
+            acp_url_match = re.search(url_pattern, line)
+            if acp_url_match:
+                acp_url = acp_url_match.group(1)
+                the_url = acp_url.strip()
+
+                parsed_url = urlparse(the_url)
+                if parsed_url.scheme and parsed_url.netloc:
+                    os.environ["MARKETING_CAMPAIGN_HOST"] = str(the_url)
+                else:
+                    print("invalid url")
+                print(
+                    "Environment variable MARKETING_CAMPAIGN_HOST is set to:",
+                    os.environ["MARKETING_CAMPAIGN_HOST"],
+                )
+
+            start_campaign = re.search(r"Uvicorn running on", line)
+            if start_campaign:
+                r += 1
+                if r == 3:
+                    sys.stdout.write("Done")
+                    sys.stdout.flush()
+                    return True
+
+        logs = "/n done"
+        result_message = (
+            "Make command executed successfully and executable moved to path."
+        )
+        return result_message, logs
+    except subprocess.CalledProcessError as e:
+        error_logs = f"An error occurred: {e}\n{e.stderr}"
+        return error_logs, error_logs
+
+
+def generate_config_interface(components_paths):
+    """Creates the configuration interface."""
+
+    for i, path in enumerate(components_paths):
+        curr_commands = path["commands"]
+
+        for command in curr_commands:
+            run_make_commands(path["path"], command)
+
+
+async def chat_with_bot(api_client, message, history):
+    marketing_campaign_id = os.environ.get("MARKETING_CAMPAIGN_ID", "")
+
+    global overall_state
+    overall_state.messages.append(
+        mailcomposer.Message(content=message, type=mailcomposer.Type.human)
+    )
+
+    run_create = RunCreateStateless(
+        agent_id=marketing_campaign_id,
+        input=overall_state.model_dump(),
+        config=Config(
+            configurable=ConfigModel(
+                recipient_email_address=os.environ["RECIPIENT_EMAIL_ADDRESS"],
+                sender_email_address=os.environ["SENDER_EMAIL_ADDRESS"],
+                target_audience=TargetAudience.academic,
+            ).model_dump()
+        ),
+    )
+
+    acp_client = AsyncACPClient(api_client=api_client)
+    run_output = None
+
+    run_output = await acp_client.create_and_wait_for_stateless_run_output(run_create)
+
+    if run_output.output is None:
+        raise Exception("Run output is None")
+    actual_output = run_output.output.actual_instance
+
+    if isinstance(actual_output, RunResult):
+        run_result: RunResult = actual_output
+
+    elif isinstance(actual_output, RunError):
+        run_error: RunError = actual_output
+        raise Exception(f"Run Failed: {run_error}")
+
+    else:
+        raise Exception(f"ACP Server returned a unsupported response: {run_output}")
+
+    runState = run_result.values  # type: ignore
+    outputState = OverallState.model_validate(runState)
+
+    if len(outputState.operation_logs) > 0:
+        print(outputState.operation_logs)
+    else:
+        print(outputState.messages[-1].content)
+        history.append({"content": outputState.messages[-1].content, "role": "system"})
+
+    overall_state = outputState
+
+    return outputState.messages[-1].content
+
+
+async def gradio_ui():
+    path = os.path.abspath(os.getcwd())
+
+    ioa_components_paths = [
+        {
+            "name": None,
+            "path": path,
+            "commands": [
+                "./wfsm deploy -m ./deploy/marketing-campaign.json -e ./deploy/marketing_campaign_example.yaml"
+            ],
+        },
+    ]
+
+    install_wfsm()
+    generate_config_interface(ioa_components_paths)
+
+    client_config = ApiClientConfiguration.fromEnvPrefix("MARKETING_CAMPAIGN_")
+    api_client = ApiClient(configuration=client_config)
+
+    async with api_client:
+        async def response(message, chat_history):
+            chat_history.append({"role": "user", "content": message})
+            answer = await chat_with_bot(api_client, message=message, history=chat_history)
+            yield answer
+
+
+        demo = gr.ChatInterface(response, title="LangGraph Chat", type="messages")
+
+        demo.launch(server_port=7861)
+
+
+def main():
+    asyncio.run(gradio_ui())
+
+if __name__ == "__main__":
+    main()
+
+
+
+================================================
+FILE: marketing-campaign/src/marketing_campaign/mailcomposer.py
+================================================
+# Copyright AGNTCY Contributors (https://github.com/agntcy)
+# SPDX-License-Identifier: Apache-2.0
+# Generated from ACP Descriptor org.agntcy.mailcomposer using datamodel_code_generator.
+
+from __future__ import annotations
+
+from enum import Enum
+from typing import List, Optional
+
+from pydantic import BaseModel, Field
+
+
+class ConfigSchema(BaseModel):
+    test: bool = Field(..., title='Test')
+
+
+class InputSchema(BaseModel):
+    messages: Optional[List[Message]] = Field(None, title='Messages')
+    is_completed: Optional[bool] = Field(None, title='Is Completed')
+
+
+class Message(BaseModel):
+    type: Type = Field(
+        ...,
+        description='indicates the originator of the message, a human or an assistant',
+    )
+    content: str = Field(..., description='the content of the message', title='Content')
+
+
+class OutputSchema(BaseModel):
+    messages: Optional[List[Message]] = Field(None, title='Messages')
+    is_completed: Optional[bool] = Field(None, title='Is Completed')
+    final_email: Optional[str] = Field(
+        None,
+        description='Final email produced by the mail composer',
+        title='Final Email',
+    )
+
+
+class Type(Enum):
+    human = 'human'
+    assistant = 'assistant'
+    ai = 'ai'
+
+
+
+================================================
+FILE: marketing-campaign/src/marketing_campaign/main_acp_client.py
+================================================
+# Copyright AGNTCY Contributors (https://github.com/agntcy)
+# SPDX-License-Identifier: Apache-2.0
+import os
+import asyncio
+from marketing_campaign.state import OverallState, ConfigModel
+from marketing_campaign import mailcomposer
+from marketing_campaign.email_reviewer import TargetAudience
+from agntcy_acp import AsyncACPClient, ApiClientConfiguration
+from agntcy_acp.acp_v0.async_client.api_client import ApiClient as AsyncApiClient
+
+from agntcy_acp.models import (
+    RunCreateStateless,
+    RunResult,
+    RunError,
+    Config,
+)
+
+
+async def main():
+    print("What marketing campaign do you want to create?")
+    inputState = OverallState(
+        messages=[],
+        operation_logs=[],
+        has_composer_completed=False
+    )
+
+    marketing_campaign_id = os.environ.get("MARKETING_CAMPAIGN_ID", "")
+    client_config = ApiClientConfiguration.fromEnvPrefix("MARKETING_CAMPAIGN_")
+
+    while True:
+        usermsg = input("YOU [Type OK when you are happy with the email proposed] >>> ")
+        inputState.messages.append(mailcomposer.Message(content=usermsg, type=mailcomposer.Type.human))
+        run_create = RunCreateStateless(
+            agent_id=marketing_campaign_id,
+            input=inputState.model_dump(),
+            config=Config(configurable=ConfigModel(
+                recipient_email_address=os.environ["RECIPIENT_EMAIL_ADDRESS"],
+                sender_email_address=os.environ["SENDER_EMAIL_ADDRESS"],
+                target_audience=TargetAudience.academic
+            ).model_dump())
+        )
+        async with AsyncApiClient(configuration=client_config) as api_client:
+            acp_client = AsyncACPClient(api_client=api_client)
+            run_output = await acp_client.create_and_wait_for_stateless_run_output(run_create)
+            if run_output.output is None:
+                raise Exception("Run output is None")
+            actual_output = run_output.output.actual_instance
+            if isinstance(actual_output, RunResult):
+                run_result: RunResult = actual_output
+            elif isinstance(actual_output, RunError):
+                run_error: RunError = actual_output
+                raise Exception(f"Run Failed: {run_error}")
+            else:
+                raise Exception(f"ACP Server returned a unsupported response: {run_output}")
+
+            runState = run_result.values # type: ignore
+            outputState = OverallState.model_validate(runState)
+            if len(outputState.operation_logs) > 0:
+                print(outputState.operation_logs)
+                break
+            else:
+                print(outputState.messages[-1].content)
+            inputState = outputState
+
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+
+================================================
+FILE: marketing-campaign/src/marketing_campaign/main_langgraph.py
+================================================
+# Copyright AGNTCY Contributors (https://github.com/agntcy)
+# SPDX-License-Identifier: Apache-2.0
+import os
+import asyncio
+from marketing_campaign.app import graph
+from marketing_campaign.state import OverallState, ConfigModel
+from marketing_campaign import mailcomposer
+from marketing_campaign.email_reviewer import TargetAudience
+from langchain_core.runnables.config import RunnableConfig
+
+
+async def main():
+    print("What marketing campaign do you want to create?")
+    inputState = OverallState(
+        messages=[],
+        operation_logs=[],
+        has_composer_completed=False
+    )
+    while True:
+        usermsg = input("YOU [Type OK when you are happy with the email proposed] >>> ")
+        inputState.messages.append(mailcomposer.Message(content=usermsg, type=mailcomposer.Type.human))
+        configurable=ConfigModel(
+                recipient_email_address=os.environ["RECIPIENT_EMAIL_ADDRESS"],
+                sender_email_address=os.environ["SENDER_EMAIL_ADDRESS"],
+                target_audience=TargetAudience.academic
+            ).model_dump()
+        
+        configurable["thread_id"] = "thread_id"
+        output = await graph.ainvoke(inputState, RunnableConfig(
+            configurable=configurable
+        )
+)
+
+        outputState = OverallState.model_validate(output)
+        if len(outputState.operation_logs) > 0:
+            print(outputState.operation_logs)
+            break
+        else:
+            print(outputState.messages[-1].content)
+        inputState = outputState
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+
+
+================================================
+FILE: marketing-campaign/src/marketing_campaign/state.py
+================================================
+# Copyright AGNTCY Contributors (https://github.com/agntcy)
+# SPDX-License-Identifier: Apache-2.0
+from agntcy_acp.langgraph.api_bridge import APIBridgeOutput, APIBridgeInput
+from pydantic import BaseModel, Field
+from typing import List, Optional
+from marketing_campaign import mailcomposer
+from marketing_campaign import email_reviewer
+
+class ConfigModel(BaseModel):
+    recipient_email_address: str = Field(..., description="Email address of the email recipient")
+    sender_email_address: str = Field(..., description="Email address of the email sender")
+    target_audience: email_reviewer.TargetAudience = Field(..., description="Target audience for the marketing campaign")
+
+class MailComposerState(BaseModel):
+    input: Optional[mailcomposer.InputSchema] = None
+    output: Optional[mailcomposer.OutputSchema] = None
+
+class MailReviewerState(BaseModel):
+    input: Optional[email_reviewer.InputSchema] = None
+    output: Optional[email_reviewer.OutputSchema] = None
+
+class SendGridState(BaseModel):
+    input: Optional[APIBridgeInput] = None
+    output: Optional[APIBridgeOutput]= None
+
+class OverallState(BaseModel):
+    messages: List[mailcomposer.Message] = Field([], description="Chat messages")
+    operation_logs: List[str] = Field([],
+                                      description="An array containing all the operations performed and their result. Each operation is appended to this array with a timestamp.",
+                                      examples=[["Mar 15 18:10:39 Operation performed: email sent Result: OK",
+                                                 "Mar 19 18:13:39 Operation X failed"]])
+
+    has_composer_completed: Optional[bool] = Field(None, description="Flag indicating if the mail composer has succesfully completed its task")
+    has_reviewer_completed: Optional[bool] = None
+    has_sender_completed: Optional[bool] = None
+    mailcomposer_state: Optional[MailComposerState] = None
+    email_reviewer_state: Optional[MailReviewerState] = None
+    target_audience: Optional[email_reviewer.TargetAudience] = None
+    sendgrid_state: Optional[SendGridState] = None
+    recipient_email_address: Optional[str] = Field(
+        None, description="Email address of the email recipient"
+    )
+    sender_email_address: Optional[str] = Field(
+        None, description="Email address of the email sender"
+    )
+
+

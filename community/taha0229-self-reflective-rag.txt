@@ -1,0 +1,1050 @@
+Directory structure:
+└── langgraph_self_reflective_rag.ipynb
+
+================================================
+FILE: langgraph_self_reflective_rag.ipynb
+================================================
+# Jupyter notebook converted to Python script.
+
+"""
+# Self Reflective RAG for a Business
+
+Self Reflective RAG is an advanced and state-of-the-art strategy that unites (1) [query analysis](https://blog.langchain.dev/query-construction/) with (2) [active / self-corrective RAG](https://blog.langchain.dev/agentic-rag-with-langgraph/).
+
+The implementation is inspired by this [paper](https://arxiv.org/abs/2403.14403). 
+I have chosen LangGraph to build the RAG and Gradio to build the chatting interface. Skip to [chatting interface](#setup-chatting-interface).
+
+The architecture involves following data sources/ Routing:
+* URL and pdf for the vector store
+* SQL database
+* Web Search using
+* Fallback conversational LLM
+  
+The Self-Reflection loop includes:
+* Grading retrieved documents -> re-retrieve or change the data source if document is not relevant
+* Hallucination checker -> re-generates the response if hallucination is found
+* Answer checker -> checks whether the generated answer addresses the user query or not otherwise generates again
+  
+Additionally, the LangSmith is used to trace the RAG for evaluation and debugging
+
+![flow_chart.svg](flow_chart.svg)
+"""
+
+"""
+# Setup Environment  
+
+install all the required dependencies  
+environment variables required: `OPENAI_API_KEY`, `TAVILY_API_KEY`, `LANGCHAIN_API_KEY`, and `PINECONE_API_KEY`
+"""
+
+%%capture --no-stderr
+! pip install -U \
+    langchain_community tiktoken langchain-openai\
+        langchainhub chromadb langchain langgraph\
+        tavily-python pypdf pinecone-notebooks \
+        langchain-pinecone gradio
+
+
+import os
+from dotenv import load_dotenv, find_dotenv
+
+"""
+### Tracing
+
+Using [LangSmith](https://docs.smith.langchain.com/) for tracing: 
+"""
+
+### Tracing 
+
+# Hard coded example not recommended, rather setup these as environment variables
+# os.environ["LANGCHAIN_TRACING_V2"]="true"
+# os.environ["LANGCHAIN_ENDPOINT"]="https://api.smith.langchain.com"
+# os.environ["LANGCHAIN_PROJECT"]="Test"
+# os.environ["LANGCHAIN_API_KEY"] = "<your-api-key>"
+
+"""
+# Setup Pinecone Index
+"""
+
+# setup the pinecone api key
+
+# pinecone_api_key = os.environ.get("PINECONE_API_KEY")
+
+"""
+### Create an Index
+uncomment to create an index
+"""
+
+# import time
+
+# from pinecone import Pinecone, ServerlessSpec
+# pc = Pinecone(api_key=pinecone_api_key)
+
+# index_name = "self-reflective-rag
+
+# existing_indexes = [index_info["name"] for index_info in pc.list_indexes()]
+
+# if index_name not in existing_indexes:
+#     pc.create_index(
+#         name=index_name,
+#         dimension=1536,
+#         metric="cosine",
+#         spec=ServerlessSpec(cloud="aws", region="us-east-1"),
+#     )
+#     while not pc.describe_index(index_name).status["ready"]:
+#         print("sleeping")
+#         time.sleep(1)
+
+# index = pc.Index(index_name)
+
+"""
+### Setup Multi Source Index  
+
+* Using `WebBaseLoader` to parse `urls` to create knowledge source. 
+* Using `PyPDFLoader` to parse the pdfs.
+* `Embedding` is to the `OpenAIEmbeddings`
+* Using `RecursiveCharacterTextSplitter` to create chunks
+"""
+
+### Build Index
+
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.document_loaders import WebBaseLoader
+from langchain_openai import OpenAIEmbeddings
+from langchain.document_loaders import PyPDFLoader
+from langchain_pinecone import PineconeVectorStore
+
+
+# Set embeddings
+embd = OpenAIEmbeddings()
+
+# Docs to index
+
+# urls to index
+urls = [
+    "https://lilianweng.github.io/posts/2023-06-23-agent/",
+    "https://lilianweng.github.io/posts/2023-03-15-prompt-engineering/",
+    "https://lilianweng.github.io/posts/2023-10-25-adv-attack-llm/",
+]
+
+# pdf to index
+pdf_loader = PyPDFLoader("Magic_SEO.pdf")
+
+# Load
+docs = [WebBaseLoader(url).load() for url in urls]
+pdf_pages = pdf_loader.load()
+
+docs_list = [item for sublist in docs for item in sublist] + pdf_pages
+
+
+# Split
+text_splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
+    chunk_size=500, 
+    chunk_overlap=20, 
+    separators=["\n\n", "\n", "(?<=\. )", " ", ""]
+)
+doc_splits = text_splitter.split_documents(docs_list)
+
+# Add to vectorstore
+index_name = "self-reflective-rag" 
+vectorstore = PineconeVectorStore.from_documents(
+    documents=doc_splits, 
+    embedding=embd, 
+    index_name=index_name
+)
+
+# Setup Pinecone as the retriever
+retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
+
+# Test the retriever
+retriever.invoke("What is Agent?")
+
+"""
+### SQL Agent
+
+To query the SQL database, we can use the the SQL Agent by LangChain
+"""
+
+from langchain_community.utilities import SQLDatabase
+from langchain_community.agent_toolkits import create_sql_agent
+from langchain_openai import ChatOpenAI
+
+
+db = SQLDatabase.from_uri("sqlite:///db.sqlite3")
+llm = ChatOpenAI(model="gpt-3.5-turbo", temperature=0)
+
+
+
+sql_agent = create_sql_agent(llm, db=db, agent_type="openai-tools") 
+sql_agent.invoke({"input": "Which product did the customer with name Shannon Garcia buy?"})["output"]
+# Output:
+#   'The customer with the name Shannon Garcia bought the product "Stumps".'
+
+"""
+# Setup Chains 
+
+"""
+
+"""
+### Router
+
+Router is responsible for selecting an appropriate knowledge 
+"""
+
+### Router
+
+from typing import Literal
+
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.pydantic_v1 import BaseModel, Field
+from langchain_openai import ChatOpenAI
+
+
+# Data model
+class RouteQuery(BaseModel):
+    """Route a user query to the most relevant datasource."""
+
+    datasource: Literal["vectorstore", "web_search", "conversation", "sql_database"] = Field(
+        ...,
+        description="Given a user question choose to route it to sql database, web search, conversation or a vectorstore.",
+    )
+
+
+# LLM with function call
+llm = ChatOpenAI(model="gpt-3.5-turbo-0125", temperature=0)
+structured_llm_router = llm.with_structured_output(RouteQuery)
+
+# Prompt
+system = """You are an expert at routing a user question to a vectorstore, conversation or web search.
+The vectorstore contains documents related to agents, prompt engineering, Magic SEO and adversarial attacks.
+Use the vectorstore for questions on these topics only. 
+
+The SQL database contains data related to customers, orders, products and shipment information.
+Use the SQL database for questions on these topics.
+If a user uses informal conversation, then use conversation. Otherwise, use web-search."""
+route_prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", system),
+        ("human", "{question}"),
+    ]
+)
+# Router chain
+question_router = route_prompt | structured_llm_router
+
+# Run test
+print(question_router.invoke({"question": "Who will the Bears draft first in the NFL draft?"}))
+print(question_router.invoke({"question": "What are the types of agent memory?"}))
+print(question_router.invoke({"question": "How are you?"}))
+print(question_router.invoke({"question": "What services do you offer??"}))
+print(question_router.invoke({"question": "Which product did the customer with name Shannon Garcia buy?"}))
+print(question_router.invoke({"question": "What are the products did Shlok Taneja buy?"}))
+# Output:
+#   datasource='web_search'
+
+#   datasource='vectorstore'
+
+#   datasource='conversation'
+
+#   datasource='vectorstore'
+
+#   datasource='sql_database'
+
+#   datasource='sql_database'
+
+
+"""
+### Retrieved Document Grader
+
+The Grader is responsible to grade the retrieved documents as relevant or not
+"""
+
+### Retrieval Grader
+
+# Data model
+class GradeDocuments(BaseModel):
+    """Binary score for relevance check on retrieved documents."""
+
+    binary_score: str = Field(
+        description="Documents are relevant to the question, 'yes' or 'no'"
+    )
+
+
+# LLM with function call
+llm = ChatOpenAI(model="gpt-3.5-turbo-0125", temperature=0)
+structured_llm_grader = llm.with_structured_output(GradeDocuments)
+
+# Prompt
+system = """You are a grader assessing relevance of a retrieved document to a user question. \n 
+    If the document contains keyword(s) or semantic meaning related to the user question, grade it as relevant. \n
+    It does not need to be a stringent test. The goal is to filter out erroneous retrievals. \n
+    Give a binary score 'yes' or 'no' score to indicate whether the document is relevant to the question."""
+grade_prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", system),
+        ("human", "Retrieved document: \n\n {document} \n\n User question: {question}"),
+    ]
+)
+
+# Retriever grader chain
+retrieval_grader = grade_prompt | structured_llm_grader
+
+# Run test
+question = "What is agent"
+docs = retriever.invoke(question)
+doc_txt = docs[0].page_content
+res_retgr = retrieval_grader.invoke({"question": question, "document": doc_txt})
+
+print(res_retgr)
+res_retgr.binary_score
+# Output:
+#   binary_score='no'
+
+#   'no'
+
+"""
+### Generator
+
+Responsible for generating the final query
+"""
+
+### Generate
+
+from langchain import hub
+from langchain_core.output_parsers import StrOutputParser
+
+# Prompt
+prompt = hub.pull("rlm/rag-prompt")
+
+# LLM
+llm = ChatOpenAI(model_name="gpt-3.5-turbo", temperature=0)
+
+
+# Post-processing
+def format_docs(docs):
+    return "\n\n".join(doc.page_content for doc in docs)
+
+
+# Generate Chain
+rag_chain = prompt | llm | StrOutputParser()
+
+# Test Run
+generation = rag_chain.invoke({"context": format_docs(docs), "question": question})
+print(generation)
+# Output:
+#   An agent is a software program that performs tasks on behalf of a user or another program. It can be used in various fields such as AI, SEO, and video generation. Agents can automate processes, gather information, and make decisions based on predefined rules.
+
+
+"""
+### Fallback Conversation Chain
+
+To carry out casual conversation, the fallback chain can be used
+"""
+
+
+### Fallback Conversation 
+from langchain_core.output_parsers import StrOutputParser
+
+system = """You are a highly knowledgeable assistant of the company called CyberPun 
+    Your name is PunAssist. If a user ask you anything other than CyberPun and greetings you must not reply to that
+    and remind them that you are just an assistant and they should only ask something related to CyberPun.
+    """
+    
+conv_prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", system),
+        ("human", "{question}")
+    ]
+)
+
+# LLM
+conv_llm = ChatOpenAI(model_name="gpt-3.5-turbo", temperature=0)
+
+
+# Conversation Chain
+conversation_chain = conv_prompt | conv_llm | StrOutputParser()
+
+# Test Run
+conv_test1 = conversation_chain.invoke({"question":"What is an Agent"})
+print(conv_test1)
+conv_test2 = conversation_chain.invoke({"question":"For which company do you work for?"})
+print(conv_test2)
+conv_test3 = conversation_chain.invoke({"question":"Do you know how many people work at CyberPun?"})
+print(conv_test3)
+
+"""
+### Hallucination Grader
+
+Checks whether the generated response is grounded or the LLM is producing gibberish
+"""
+
+### Hallucination Grader
+
+
+# Data model
+class GradeHallucinations(BaseModel):
+    """Binary score for hallucination present in generation answer."""
+
+    binary_score: str = Field(
+        description="Answer is grounded in the facts, 'yes' or 'no'"
+    )
+
+
+# LLM with function call
+llm = ChatOpenAI(model="gpt-3.5-turbo-0125", temperature=0)
+structured_llm_grader = llm.with_structured_output(GradeHallucinations)
+
+# Prompt
+system = """You are a grader assessing whether an LLM generation is grounded in / supported by a set of retrieved facts. \n 
+     Give a binary score 'yes' or 'no'. 'Yes' means that the answer is grounded in / supported by the set of facts."""
+hallucination_prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", system),
+        ("human", "Set of facts: \n\n {documents} \n\n LLM generation: {generation}"),
+    ]
+)
+
+# Hallucination chain
+hallucination_grader = hallucination_prompt | structured_llm_grader
+
+# Run test
+print(hallucination_grader.invoke({"documents": docs, "generation": generation}))
+# Output:
+#   binary_score='yes'
+
+
+"""
+### Answer Grader
+
+Grades based on whether the generated answer addresses the asked question or not
+"""
+
+### Answer Grader
+
+
+# Data model
+class GradeAnswer(BaseModel):
+    """Binary score to assess answer addresses question."""
+
+    binary_score: str = Field(
+        description="Answer addresses the question, 'yes' or 'no'"
+    )
+
+
+# LLM with function call
+llm = ChatOpenAI(model="gpt-3.5-turbo-0125", temperature=0)
+structured_llm_grader = llm.with_structured_output(GradeAnswer)
+
+# Prompt
+system = """You are a grader assessing whether an answer addresses / resolves a question \n 
+     Give a binary score 'yes' or 'no'. Yes' means that the answer resolves the question."""
+answer_prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", system),
+        ("human", "User question: \n\n {question} \n\n LLM generation: {generation}"),
+    ]
+)
+
+# Answer grader chain
+answer_grader = answer_prompt | structured_llm_grader
+
+# Run test
+print(answer_grader.invoke({"question": question, "generation": generation}))
+# Output:
+#   binary_score='yes'
+
+
+"""
+### Question Re-Writer
+
+used when the LLM is unable to produce good results due to either bad or difficult input query 
+"""
+
+### Question Re-writer
+
+# LLM
+llm = ChatOpenAI(model="gpt-3.5-turbo-0125", temperature=0)
+
+# Prompt
+system = """You a question re-writer that converts an input question to a better version that is optimized \n 
+     for vectorstore retrieval. Look at the input and try to reason about the underlying semantic intent / meaning."""
+re_write_prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", system),
+        (
+            "human",
+            "Here is the initial question: \n\n {question} \n Formulate an improved question.",
+        ),
+    ]
+)
+
+# Question rewriter chain
+question_rewriter = re_write_prompt | llm | StrOutputParser()
+
+# Run test
+question_rewriter.invoke({"question": question})
+# Output:
+#   'What is the definition of an agent?'
+
+"""
+### Web Search
+
+adds web searching capabilities 
+"""
+
+### Search
+
+from langchain_community.tools.tavily_search import TavilySearchResults
+
+# web search tool
+web_search_tool = TavilySearchResults(k=3)
+
+test_search = web_search_tool.invoke({"query":"Define what is an agent in Artificial Intelligence"})
+test_search[0]
+# Output:
+#   {'url': 'https://www.geeksforgeeks.org/agents-artificial-intelligence/',
+
+#    'content': 'Here are a few:\nCharacteristics of an Agent\nTypes of Agents\nAgents can be grouped into five classes based on their degree of perceived intelligence and capability :\nSimple Reflex Agents\nSimple reflex agents ignore the rest of the percept history and act only on the basis of the current percept. Data Structures and Algorithms\nML & Data Science\nWeb Development\nLanguages\nInterview Corner\nCS Subjects\nJobs\nPractice\nContests\nAgents in Artificial Intelligence\nIn artificial intelligence, an agent is a computer program or system that is designed to perceive its environment, make decisions and take actions to achieve a specific goal or set of goals. Uses of Agents\nAgents are used in a wide range of applications in artificial intelligence, including:\nOverall, agents are a versatile and powerful tool in artificial intelligence that can help solve a wide range of problems in different fields.\n MAS can be classified into different types based on their characteristics, such as whether the agents have the same or different goals, whether the agents are cooperative or competitive, and whether the agents are homogeneous or heterogeneous.\n Interaction of Agents with the Environment\nStructure of an AI Agent\nTo understand the structure of Intelligent Agents, we should be familiar with Architecture and Agent programs.'}
+
+"""
+# Setup Graph 
+
+Capture the flow in as a graph.
+
+### Graph state
+"""
+
+from typing import List
+
+from typing_extensions import TypedDict
+
+
+class GraphState(TypedDict):
+    """
+    Represents the state of our graph.
+
+    Attributes:
+        question: question
+        generation: LLM generation
+        documents: list of documents
+    """
+
+    question: str
+    generation: str
+    documents: List[str]
+
+"""
+### Graph Flow 
+
+Each node has a corresponding straight forward function, and each edge has a conditional function 
+
+
+"""
+
+from langchain.schema import Document
+
+
+def transform_query(state):
+    """
+    Transform the query to produce a better question.
+
+    Args:
+        state (dict): The current graph state
+
+    Returns:
+        state (dict): Updates question key with a re-phrased question
+    """
+
+    print("---TRANSFORM QUERY---")
+    question = state["question"]
+    documents = state["documents"]
+
+    # Re-write question
+    better_question = question_rewriter.invoke({"question": question})
+    return {"documents": documents, "question": better_question}
+
+def retrieve(state):
+    """
+    Retrieve documents
+
+    Args:
+        state (dict): The current graph state
+
+    Returns:
+        state (dict): New key added to state, documents, that contains retrieved documents
+    """
+    print("---RETRIEVE---")
+    question = state["question"]
+
+    # Retrieval
+    documents = retriever.invoke(question)
+    return {"documents": documents, "question": question}
+
+def conversation(state):
+    """
+    Acts as a fall back conversation chain. 
+
+    Args:
+        state (dict): The current graph state
+
+    Returns:
+        state (dict): New key added to state, generation, that contains LLM generation
+    """
+    print("---CONVERSATION---")
+    question = state["question"]
+    
+    # Conversation
+    conversation = conversation_chain.invoke({"question": question})
+    return { "question": question, "generation": conversation}
+    
+def query_sql(state):
+    """
+    Queries SQL database on the question. 
+
+    Args:
+        state (dict): The current graph state
+
+    Returns:
+        state (dict): New key added to state, generation, that contains LLM generation from SQL 
+    """
+    print("---SQL DATABASE---")
+    question = state["question"]
+    
+    # Conversation
+    sql_results = sql_agent.invoke({"input": question})["output"]
+    return { "question": question, "generation": sql_results}
+    
+    
+def grade_documents(state):
+    """
+    Determines whether the retrieved documents are relevant to the question.
+
+    Args:
+        state (dict): The current graph state
+
+    Returns:
+        state (dict): Updates documents key with only filtered relevant documents
+    """
+
+    print("---CHECK DOCUMENT RELEVANCE TO QUESTION---")
+    question = state["question"]
+    documents = state["documents"]
+
+    # Score each doc
+    filtered_docs = []
+    for d in documents:
+        score = retrieval_grader.invoke(
+            {"question": question, "document": d.page_content}
+        )
+        grade = score.binary_score
+        if grade == "yes":
+            print("---GRADE: DOCUMENT RELEVANT---")
+            filtered_docs.append(d)
+        else:
+            print("---GRADE: DOCUMENT NOT RELEVANT---")
+            continue
+    return {"documents": filtered_docs, "question": question}
+
+
+def web_search(state):
+    """
+    Web search based on the re-phrased question.
+
+    Args:
+        state (dict): The current graph state
+
+    Returns:
+        state (dict): Updates documents key with appended web results
+    """
+
+    print("---WEB SEARCH---")
+    question = state["question"]
+
+    # Web search
+    docs = web_search_tool.invoke({"query": question})
+    web_results = "\n".join([d["content"] for d in docs])
+    web_results = Document(page_content=web_results)
+
+    return {"documents": web_results, "question": question}
+
+
+def generate(state):
+    """
+    Generate answer
+
+    Args:
+        state (dict): The current graph state
+
+    Returns:
+        state (dict): New key added to state, generation, that contains LLM generation
+    """
+    print("---GENERATE---")
+    question = state["question"]
+    documents = state["documents"]
+
+    # RAG generation
+    generation = rag_chain.invoke({"context": documents, "question": question})
+    return {"documents": documents, "question": question, "generation": generation}
+
+
+### Edges ###
+def route_question(state):
+    """
+    Route question to web search, conversation or RAG.
+
+    Args:
+        state (dict): The current graph state
+
+    Returns:
+        str: Next node to call
+    """
+
+    print("---ROUTE QUESTION---")
+    question = state["question"]
+    source = question_router.invoke({"question": question})
+    if source.datasource == "web_search":
+        print("---ROUTE QUESTION TO WEB SEARCH---")
+        return "web_search"
+    elif source.datasource == "vectorstore":
+        print("---ROUTE QUESTION TO RAG---")
+        return "vectorstore"
+    elif source.datasource == "sql_database":
+        print("--ROUTE QUESTION TO SQL DATABASE--")
+        return "sql_database"
+    elif source.datasource == "conversation":
+        print("--ROUTE QUESTION TO CONVERSATION")
+        return "conversation"
+
+
+def decide_to_generate(state):
+    """
+    Determines whether to generate an answer, or re-generate a question.
+
+    Args:
+        state (dict): The current graph state
+
+    Returns:
+        str: Binary decision for next node to call
+    """
+
+    print("---ASSESS GRADED DOCUMENTS---")
+    state["question"]
+    filtered_documents = state["documents"]
+
+    if not filtered_documents:
+        # All documents have been filtered check_relevance
+        # We will re-generate a new query
+        print(
+            "---DECISION: ALL DOCUMENTS ARE NOT RELEVANT TO QUESTION, TRANSFORM QUERY---"
+        )
+        return "transform_query"
+    else:
+        # We have relevant documents, so generate answer
+        print("---DECISION: GENERATE---")
+        return "generate"
+
+
+def grade_generation_v_documents_and_question(state):
+    """
+    Determines whether the generation is grounded in the document and answers question.
+
+    Args:
+        state (dict): The current graph state
+
+    Returns:
+        str: Decision for next node to call
+    """
+
+    print("---CHECK HALLUCINATIONS---")
+    question = state["question"]
+    documents = state["documents"]
+    generation = state["generation"]
+
+    score = hallucination_grader.invoke(
+        {"documents": documents, "generation": generation}
+    )
+    grade = score.binary_score
+
+    # Check hallucination
+    if grade == "yes":
+        print("---DECISION: GENERATION IS GROUNDED IN DOCUMENTS---")
+        # Check question-answering
+        print("---GRADE GENERATION vs QUESTION---")
+        score = answer_grader.invoke({"question": question, "generation": generation})
+        grade = score.binary_score
+        if grade == "yes":
+            print("---DECISION: GENERATION ADDRESSES QUESTION---")
+            return "useful"
+        else:
+            print("---DECISION: GENERATION DOES NOT ADDRESS QUESTION---")
+            return "not useful"
+    else:
+        print("---DECISION: GENERATION IS NOT GROUNDED IN DOCUMENTS, RE-TRY---")
+        return "not supported"
+
+"""
+## Build Graph
+"""
+
+"""
+### Setup memory
+"""
+
+# Setup memory for the RAG
+
+from langgraph.checkpoint.sqlite import SqliteSaver
+
+memory = SqliteSaver.from_conn_string(":memory:")
+
+"""
+### Build the Graph
+
+* first create nodes as per the chosen architecture - individual processes
+* implement edges and conditional edges - implements execution flow based on the conditions
+"""
+
+from langgraph.graph import END, StateGraph, START
+
+workflow = StateGraph(GraphState)
+
+# Define the nodes
+workflow.add_node("web_search", web_search)  # web search
+workflow.add_node("retrieve", retrieve)  # retrieve
+workflow.add_node("conversation", conversation)  # fallback conversation
+workflow.add_node("query_sql", query_sql)  # query SQL database
+workflow.add_node("grade_documents", grade_documents)  # grade documents
+workflow.add_node("generate", generate)  # generate
+workflow.add_node("transform_query", transform_query)  # transform_query
+
+# Build graph
+workflow.add_conditional_edges(
+    START,
+    route_question,
+    {
+        "conversation": "conversation",
+        "web_search": "web_search",
+        "vectorstore": "retrieve",
+        "sql_database": "query_sql",
+    },
+)
+
+workflow.add_edge("query_sql", END)
+workflow.add_edge("conversation", END)
+workflow.add_edge("web_search", "generate")
+workflow.add_edge("retrieve", "grade_documents")
+workflow.add_conditional_edges(
+    "grade_documents",
+    decide_to_generate,
+    {
+        "transform_query": "transform_query",
+        "generate": "generate",
+    },
+)
+workflow.add_edge("transform_query", "retrieve")
+workflow.add_conditional_edges(
+    "generate",
+    grade_generation_v_documents_and_question,
+    {
+        "not supported": "generate",
+        "useful": END,
+        "not useful": "transform_query",
+    },
+)
+
+# Compile
+app = workflow.compile(checkpointer=memory)
+
+"""
+### Test the Graph before implementing chat interface
+"""
+
+from pprint import pprint
+
+# Run
+inputs = {
+    "question": "What player at the Bears expected to draft first in the 2024 NFL draft?"
+}
+thread = {"configurable": {"thread_id": "1"}}
+for output in app.stream(inputs, thread):
+    for key, value in output.items():
+        # Node
+        pprint(f"Node '{key}':")
+        # Optional: print full state at each node
+        # pprint.pprint(value["keys"], indent=2, width=80, depth=None)
+    pprint("\n---\n")
+
+# Final generation
+pprint(value["generation"])
+# Output:
+#   ---ROUTE QUESTION---
+
+#   ---ROUTE QUESTION TO WEB SEARCH---
+
+#   ---WEB SEARCH---
+
+#   "Node 'web_search':"
+
+#   '\n---\n'
+
+#   ---GENERATE---
+
+#   ---CHECK HALLUCINATIONS---
+
+#   ---DECISION: GENERATION IS GROUNDED IN DOCUMENTS---
+
+#   ---GRADE GENERATION vs QUESTION---
+
+#   ---DECISION: GENERATION ADDRESSES QUESTION---
+
+#   "Node 'generate':"
+
+#   '\n---\n'
+
+#   ('Caleb Williams from USC was the player expected to be drafted first by the '
+
+#    'Chicago Bears in the 2024 NFL draft. He was selected with the No. 1 pick and '
+
+#    'was considered the top prospect in a draft class filled with talented '
+
+#    'quarterbacks.')
+
+
+# Run
+inputs = {"question": "For which company do you work for?"}
+thread = {"configurable": {"thread_id": "1"}}
+for output in app.stream(inputs, thread):
+    for key, value in output.items():
+        # Node
+        pprint(f"Node '{key}':")
+        
+    pprint("\n---\n")
+
+# Final generation
+pprint(value["generation"])
+
+# Run
+inputs = {"question": "What is CyberPun?"}
+thread = {"configurable": {"thread_id": "1"}}
+for output in app.stream(inputs, thread):
+    for key, value in output.items():
+        # Node
+        pprint(f"Node '{key}':")
+        
+    pprint("\n---\n")
+
+# Final generation
+pprint(value["generation"])
+
+# Run
+inputs = {"question": "Which product did the customer with name Shannon Garcia buy?"}
+thread = {"configurable": {"thread_id": "1"}}
+for output in app.stream(inputs, thread):
+    for key, value in output.items():
+        # Node
+        pprint(f"Node '{key}':")
+        
+    pprint("\n---\n")
+
+# Final generation
+pprint(value["generation"])
+# Output:
+#   ---ROUTE QUESTION---
+
+#   --ROUTE QUESTION TO SQL DATABASE--
+
+#   ---SQL DATABASE---
+
+#   "Node 'query_sql':"
+
+#   '\n---\n'
+
+#   {'input': 'Which product did the customer with name Shannon Garcia buy?',
+
+#    'output': 'The customer with the name Shannon Garcia bought the product '
+
+#              '"Stumps".'}
+
+
+# Run
+inputs = {"question": "My name is Taha. What is my name? What is your name?"}
+thread = {"configurable": {"thread_id": "1"}}
+for output in app.stream(inputs, thread):
+    for key, value in output.items():
+        # Node
+        pprint(f"Node '{key}':")
+        
+    pprint("\n---\n")
+
+# Final generation
+pprint(value["generation"])
+
+
+import time
+
+def inference(inputs, history, *args, **kwargs):
+    """
+    Inference Generator to support streaming
+
+    Args:
+        inputs (str): The input query for inference
+        history (list[list] | list[tuple]): The chat history; internally managed by the gradio app
+        args: additional arguments
+        kwargs: additional keyword arguments
+
+    Yields:
+      str: A string containing a portion of the generated text, simulating a gradual generation process.
+    """
+    # thread is required for memory checkpoint
+    thread = {"configurable": {"thread_id": "1"}}
+    
+    # input the graph
+    inputs = {"question": inputs}
+    
+    # the output can be streamed but due to the print statements, I am using invoke
+    output = app.invoke(inputs, thread)
+    
+    output_generation = output["generation"].split(" ")
+    generated_text = ""
+    
+    for i in  range(len(output_generation)):
+        time.sleep(0.05)
+        generated_text = ' '.join(output_generation[:i+1])
+        
+        yield generated_text
+
+
+"""
+# Setup Chatting Interface
+
+Using Gradio app to build a simple and easy to use UI
+"""
+
+import gradio as gr
+
+chat_interface = gr.ChatInterface(
+    inference,
+    chatbot=gr.Chatbot(height=300),
+    textbox=gr.Textbox(placeholder="message PunAssist", container=False, scale=7),
+    title="PunAssist",
+    description="Ask me anything CyberPun. About company, Services, Projects, Contact Information, Products, Customers, Shipment Details, Orders and more",
+    undo_btn=None,
+    clear_btn="Clear",
+)
+
+demo = gr.TabbedInterface([chat_interface], ["Chat"])
+demo.launch()
+# Output:
+#   Running on local URL:  http://127.0.0.1:7906
+
+#   
+
+#   To create a public link, set `share=True` in `launch()`.
+
+#   <IPython.core.display.HTML object>
+#   ---ROUTE QUESTION---
+
+#   --ROUTE QUESTION TO SQL DATABASE--
+
+#   ---SQL DATABASE---
+
+
+

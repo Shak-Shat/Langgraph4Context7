@@ -1,0 +1,366 @@
+Directory structure:
+└── magnetic-one-langgraph.ipynb
+
+================================================
+FILE: magnetic-one-langgraph.ipynb
+================================================
+# Jupyter notebook converted to Python script.
+
+"""
+# Magnetic-one
+
+"""
+
+"""
+Summary of the workflow diagram of **Magnetic-One Multi-Agent System** presented in its article:
+
+### 1. Outer Loop – Initial Setup and Planning
+
+   - **Task Trigger**: The process begins when a prompt or task is initiated. This prompts the **Orchestrator**, the main coordinating agent, to set up a **Task Ledger**.
+   - **Task Ledger Creation**: The Task Ledger acts as a short-term memory for the task, recording key details that will guide the workflow.
+   - **Fact and Guess Collection**: The Orchestrator gathers and pre-populates the Task Ledger with known facts, information to look up, derivable data, and educated guesses to frame initial responses.
+   - **Plan Formation**: Using the Task Ledger and the capabilities of the available agents, the Orchestrator creates a **step-by-step plan**. This plan provides hints for task execution, guiding each agent in its respective role.
+   - **Inner Loop Initiation**: After establishing the plan, the Orchestrator starts the **Inner Loop**.
+
+### 2. Inner Loop – Iterative Task Execution and Monitoring
+
+   During each iteration of the inner loop, the Orchestrator:
+   
+   - **Evaluates Task Completion**: Checks if the task has been fully satisfied.
+   - **Checks for Loops or Stalls**: Monitors for repeated steps or a lack of forward progress.
+   - **Makes Adjustments**: If progress is slow or looping is detected, the **Counter** (a stalling indicator) is incremented.
+   - **Agent Selection and Instructions**: As long as progress continues or the Counter is within threshold limits, the Orchestrator selects the next agent to act and gives it specific instructions for the task at hand.
+   - **Reflection and Self-Refinement**: If the Counter exceeds the threshold, the Orchestrator pauses the inner loop, revisits its previous steps, updates the Task Ledger, and revises the plan. This self-reflection allows the system to adapt and correct any identified issues before resuming the inner loop.
+
+   The inner loop continues until the Orchestrator determines the task is complete or hits a predefined stopping criterion (e.g., maximum attempts or time limits).
+
+### 3. Agents – Specialized Task Execution
+
+   - **WebSurfer**: Manages interactions with a web browser, handling tasks like navigating websites, clicking, typing, or summarizing webpage content.
+   - **FileSurfer**: Focuses on navigating and reading files, such as PDFs and images, to retrieve necessary data.
+   - **Coder**: Develops, analyzes, or debugs code as needed for the task.
+   - **ComputerTerminal**: Executes code or installs libraries to support programming tasks, interacting with a console environment.
+
+   Each agent specializes in particular actions, and the Orchestrator directs agents as needed to accomplish the overall task.
+
+### 4. Termination and Final Reporting
+
+   - Once the task is complete or the termination conditions are met, both the outer and inner loops end.
+   - **Final Review and Report**: The Orchestrator reviews all progress records and the Task Ledger to produce either a final solution or its best educated guess if uncertainties remain.
+
+In summary, the workflow allows the Orchestrator to iteratively guide agents, adapt to challenges, and refine its approach in real time. This multi-layered control ensures robust task execution even in complex, dynamic environments.
+"""
+
+"""
+## Workflow Diagram
+
+The following diagram illustrates the workflow of the MagneticOne multi-agent system, breaking down the **Outer Loop**, **Inner Loop**, and **Agent** components. This visualization provides a structural overview of task progression, agent roles, and decision points within the system.
+
+"""
+
+"""
+![MagneticOne Workflow Diagram](diagram_representation_workflow.svg)
+
+"""
+
+"""
+### Mermaid Chart Structure
+
+You can view the diagram directly and copy it to edit it using this [Mermaid Chart link](https://www.mermaidchart.com/app/projects/e0960e96-f27b-4905-b83b-a4741a09c128/diagrams/bcc71cc4-c0fe-4267-a797-99ec0491a8fb/version/v0.1/edit).
+
+In addition, here's the structure from Mermaid Chart: 
+
+```mermaid
+flowchart TD
+    subgraph OuterLoop ["Outer Loop"]
+        Start["Initial Task Trigger"]
+        Start -->|Creates| TaskLedger["Task Ledger"]
+        TaskLedger -->|Pre-populates with| Facts["Facts, Lookups, Guesses"]
+        Facts -->|Uses roles to form| Plan["Step-by-Step Plan"]
+        Plan -->|Starts| InnerLoop
+    end
+
+    subgraph InnerLoop ["Inner Loop"]
+        InnerLoop -->|Evaluate| CheckTask{"Is Task Complete?"}
+        CheckTask -->|Yes| Terminate[Terminate]
+        CheckTask -->|No| ProgressCheck{"Stalling or Looping?"}
+        ProgressCheck -->|No| NextAgent["Choose Next Agent"]
+        NextAgent --> InnerLoop
+        ProgressCheck -->|Yes| Counter["Increment Counter"]
+        Counter -->|Exceeds Threshold| Reflect["Reflection & Self-Refinement"]
+        Reflect --> UpdateLedger["Update Task Ledger and Plan"]
+        UpdateLedger --> InnerLoop
+    end
+
+    subgraph Agents ["Agents in Magnetic-One System"]
+        Orchestrator -- Directs --> WebSurfer
+        Orchestrator -- Directs --> FileSurfer
+        Orchestrator -- Directs --> Coder
+        Orchestrator -- Directs --> ComputerTerminal
+    end
+
+    Terminate --> Review["Review & Final Report"]
+    OuterLoop --> Agents
+
+"""
+
+"""
+## Code adaptation
+"""
+
+"""
+The following expanded code structure integrates each part of the **Magnetic-One Multi-Agent System** workflow, ensuring that the Orchestrator manages agents within an inner/outer loop, assigns agents to prevent stalls, and generates a comprehensive final report based on the Task Ledger.
+
+This code an intent to perform **Magnetic-One** workflow based on **LangGraph**, it's the version 0.0.1 and still need refinement and testing. **Agents may need tool calling**, it's suggested to create such tools by following: [Creating tools with Hierarchical Agent Teams](https://github.com/langchain-ai/langgraph/blob/main/docs/docs/tutorials/multi_agent/hierarchical_agent_teams.ipynb) and then adjust the code by alligning those tools.
+"""
+
+"""
+### 1. Libraries, Setup, and Initialization
+
+Defining the required imports, classes, and initial setup based on `LangGraph`.
+
+"""
+
+# install our required packages and set our API keys
+%%capture --no-stderr
+%pip install -U langgraph langchain langchain_openai langchain_experimental
+
+import getpass
+import os
+
+def _set_if_undefined(var: str):
+    if not os.environ.get(var):
+        os.environ[var] = getpass.getpass(f"Please provide your {var}")
+
+
+_set_if_undefined("OPENAI_API_KEY")
+_set_if_undefined("TAVILY_API_KEY")
+
+
+from langgraph.graph import StateGraph, END, START
+from langchain_openai import ChatOpenAI
+from typing import Dict, List, Tuple, Optional
+
+# Initialize OpenAI model for language processing
+llm = ChatOpenAI(model="gpt-4o-mini")
+
+# Define Task State Structure
+class TaskState:
+    """
+    Define the task state structure, including Task Ledger, plan, counter, and result summary.
+    """
+    def __init__(self):
+        self.messages: List[str] = []
+        self.task_ledger: Dict[str, str] = {}    # Task Ledger for facts, guesses, etc.
+        self.task_plan: List[Tuple[str, str]] = []  # Step-by-step task plan
+        self.counter: int = 0                    # Counter to detect stalls
+        self.final_report: Optional[str] = None  # Stores the final report summary
+        self.task_complete: bool = False         # Completion status
+
+    def update_task_ledger(self, key: str, value: str):
+        self.task_ledger[key] = value
+
+    def increment_counter(self):
+        self.counter += 1
+
+    def reset_counter(self):
+        self.counter = 0
+
+    def set_task_complete(self, status: bool = True):
+        self.task_complete = status
+
+
+"""
+### 2. Orchestrator and Inner/Outer Loop
+
+The **Orchestrator** will serve as the central agent, managing task setup, ledger updates, plan formation, and calling agents. I'll implement this with additional helper functions.
+
+"""
+
+def orchestrator_agent(state: TaskState):
+    """
+    Initializes the Task Ledger, sets up a plan, and manages agent selection.
+    """
+    state.task_ledger = create_task_ledger()
+    state.task_plan = generate_task_plan(state)
+    state.messages.append("Orchestrator has set up the task and plan.")
+    return state
+
+def create_task_ledger() -> Dict[str, str]:
+    """
+    Populates the Task Ledger with initial facts and guesses.
+    """
+    return {
+        "task_id": "001",
+        "known_facts": "Initial task facts",
+        "guesses": "Potential unknown elements"
+    }
+
+def generate_task_plan(state: TaskState) -> List[Tuple[str, str]]:
+    """
+    Generates a task plan based on the Task Ledger.
+    """
+    return [
+        ("WebSurfer", "Perform web search"),
+        ("FileSurfer", "Read from files"),
+        ("Coder", "Analyze data"),
+        ("ComputerTerminal", "Execute necessary commands"),
+    ]
+
+def assign_next_agent(state: TaskState):
+    """
+    Assigns the next agent based on progress or stall detection.
+    """
+    if state.task_complete:
+        return "Complete"
+
+    if state.counter >= 2:  # Counter threshold for stalls
+        state.messages.append("Orchestrator reflecting due to stall.")
+        reflect_and_adjust(state)
+        state.reset_counter()
+    else:
+        state.increment_counter()
+
+    if state.task_plan:
+        next_task = state.task_plan.pop(0)
+        state.reset_counter()
+        return next_task
+    else:
+        return "Reflect and Adjust"
+
+def reflect_and_adjust(state: TaskState):
+    """
+    Revisits the Task Ledger and redefines the task plan if stalls are detected.
+    """
+    state.messages.append("Revisiting task plan and refining approach.")
+    # Modify the task plan based on current state as a demonstration
+    state.task_plan = [("WebSurfer", "Re-attempt web search"), ("FileSurfer", "Re-check files")]
+
+def evaluate_completion(state: TaskState) -> bool:
+    """
+    Determines if the task is complete based on criteria in the Task Ledger.
+    """
+    return "web_data" in state.task_ledger and "file_data" in state.task_ledger
+
+"""
+
+### 3. Specialized Agents for Task Execution
+
+Each agent will be tasked with specific actions, such as web scraping, reading files, or code analysis.
+
+"""
+
+def web_surfer_agent(state: TaskState):
+    """
+    Gathers data from the web and updates Task Ledger.
+    """
+    state.messages.append("WebSurfer is gathering data from the web.")
+    state.task_ledger["web_data"] = "Sample web data retrieved"
+    return state
+
+def file_surfer_agent(state: TaskState):
+    """
+    Reads files and updates Task Ledger.
+    """
+    state.messages.append("FileSurfer is reading files.")
+    state.task_ledger["file_data"] = "Sample file data retrieved"
+    return state
+
+def coder_agent(state: TaskState):
+    """
+    Analyzes or debugs code as required by the task.
+    """
+    state.messages.append("Coder is analyzing code.")
+    state.task_ledger["code_analysis"] = "Code analyzed successfully."
+    return state
+
+def computer_terminal_agent(state: TaskState):
+    """
+    Executes necessary commands or installs libraries.
+    """
+    state.messages.append("ComputerTerminal is executing commands.")
+    state.task_ledger["execution_result"] = "Commands executed successfully."
+    return state
+
+"""
+
+### 4. Final Reporting and Termination
+
+The final report will summarize the gathered information and results.
+
+"""
+
+def finalize_task(state: TaskState):
+    """
+    Generates a final report based on the Task Ledger.
+    """
+    state.final_report = (
+        f"Task ID: {state.task_ledger.get('task_id')}\n"
+        f"Known Facts: {state.task_ledger.get('known_facts')}\n"
+        f"Web Data: {state.task_ledger.get('web_data')}\n"
+        f"File Data: {state.task_ledger.get('file_data')}\n"
+        f"Code Analysis: {state.task_ledger.get('code_analysis')}\n"
+        f"Execution Result: {state.task_ledger.get('execution_result')}\n"
+        f"Uncertainties: {state.task_ledger.get('guesses')}\n"
+    )
+    state.messages.append("Final report generated.")
+    return state
+
+"""
+
+### 5. Workflow Graph Definition
+
+Creating the workflow graph by defining nodes and transitions based on the above agent functions.
+"""
+
+# Create the task execution graph
+graph = StateGraph(TaskState)
+
+# Add nodes (agents and orchestrator) to the graph
+graph.add_node("Orchestrator", orchestrator_agent)
+graph.add_node("WebSurfer", web_surfer_agent)
+graph.add_node("FileSurfer", file_surfer_agent)
+graph.add_node("Coder", coder_agent)
+graph.add_node("ComputerTerminal", computer_terminal_agent)
+graph.add_node("FinalReview", finalize_task)
+
+# Define transitions
+graph.add_edge("Orchestrator", "WebSurfer")        # Start with web data gathering
+graph.add_edge("WebSurfer", "FileSurfer")          # Move to file reading
+graph.add_edge("FileSurfer", "Coder")              # Move to code analysis
+graph.add_edge("Coder", "ComputerTerminal")        # Move to terminal execution
+graph.add_edge("ComputerTerminal", "FinalReview")  # Final review after all steps
+
+# Add start and end nodes
+graph.add_edge(START, "Orchestrator")              # Initial task setup by orchestrator
+graph.add_edge("FinalReview", END)                 # End after final review
+
+# Compile the graph
+compiled_graph = graph.compile()
+
+"""
+
+### 6. Execution Flow Function
+
+This function will run the task system, beginning from the initial task description.
+"""
+
+def run_task_system(task_description: str):
+    """
+    Execute the task system starting from the initial description.
+    """
+    task_state = TaskState()
+    task_state.messages.append(f"Task started: {task_description}")
+
+    for state in compiled_graph.stream(task_state):
+        if "__end__" not in state:
+            print(state.messages[-1])
+        else:
+            print("Task Complete")
+            print(state.final_report)
+            break
+
+# Run the task system with an example description
+run_task_system("Analyze new market trends and compile a report.")
+
+

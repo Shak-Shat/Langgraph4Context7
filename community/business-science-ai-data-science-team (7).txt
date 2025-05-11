@@ -1,0 +1,397 @@
+Directory structure:
+└── utils/
+    ├── __init__.py
+    ├── html.py
+    ├── logging.py
+    ├── matplotlib.py
+    ├── messages.py
+    ├── plotly.py
+    └── regex.py
+
+================================================
+FILE: ai_data_science_team/utils/__init__.py
+================================================
+
+
+
+================================================
+FILE: ai_data_science_team/utils/html.py
+================================================
+
+
+import webbrowser
+import os
+
+def open_html_file_in_browser(file_path: str):
+    """
+    Opens an HTML file in the default web browser.
+    
+    Parameters:
+    -----------
+    file_path : str
+        The file path or URL of the HTML file to open.
+        
+    Returns:
+    --------
+    None
+    """
+    # Check if the file exists if a local path is provided.
+    if os.path.isfile(file_path):
+        # Convert file path to a file URL
+        file_url = 'file://' + os.path.abspath(file_path)
+    else:
+        # If the file doesn't exist locally, assume it's a URL
+        file_url = file_path
+
+    webbrowser.open(file_url)
+
+
+
+================================================
+FILE: ai_data_science_team/utils/logging.py
+================================================
+
+import os
+
+def log_ai_function(response: str, file_name: str, log: bool = True, log_path: str = './logs/', overwrite: bool = True):
+    """
+    Logs the response of an AI function to a file.
+    
+    Parameters
+    ----------
+    response : str
+        The response of the AI function.
+    file_name : str
+        The name of the file to save the response to.
+    log : bool, optional
+        Whether to log the response or not. The default is True.
+    log_path : str, optional
+        The path to save the log file. The default is './logs/'.
+    overwrite : bool, optional
+        Whether to overwrite the file if it already exists. The default is True.
+        - If True, the file will be overwritten. 
+        - If False, a unique file name will be created.
+    
+    Returns
+    -------
+    tuple
+        The path and name of the log file.    
+    """
+    
+    if log:
+        # Ensure the directory exists
+        os.makedirs(log_path, exist_ok=True)
+
+        # file_name = 'data_wrangler.py'
+        file_path = os.path.join(log_path, file_name)
+
+        if not overwrite:
+            # If file already exists and we're NOT overwriting, we create a new name
+            if os.path.exists(file_path):
+                # Use an incremental suffix (e.g., data_wrangler_1.py, data_wrangler_2.py, etc.)
+                # or a time-based suffix if you prefer.
+                base_name, ext = os.path.splitext(file_name)
+                i = 1
+                while True:
+                    new_file_name = f"{base_name}_{i}{ext}"
+                    new_file_path = os.path.join(log_path, new_file_name)
+                    if not os.path.exists(new_file_path):
+                        file_path = new_file_path
+                        file_name = new_file_name
+                        break
+                    i += 1
+
+        # Write the file
+        with open(file_path, 'w', encoding='utf-8') as file:
+            file.write(response)
+
+        print(f"      File saved to: {file_path}")
+        
+        return (file_path, file_name)
+    
+    else:
+        return (None, None)
+
+
+================================================
+FILE: ai_data_science_team/utils/matplotlib.py
+================================================
+import base64
+from io import BytesIO
+import matplotlib.pyplot as plt
+from PIL import Image
+
+def matplotlib_from_base64(encoded: str, title: str = None, figsize: tuple = (8, 6)):
+    """
+    Convert a base64-encoded image to a matplotlib plot and display it.
+    
+    Parameters:
+    -----------
+    encoded : str
+        The base64-encoded image string.
+    title : str, optional
+        A title for the plot. Default is None.
+    figsize : tuple, optional
+        Figure size (width, height) for the plot. Default is (8, 6).
+    
+    Returns:
+    --------
+    fig, ax : tuple
+        The matplotlib figure and axes objects.
+    """
+    # Decode the base64 string to bytes
+    img_data = base64.b64decode(encoded)
+    
+    # Load the bytes data into a BytesIO buffer
+    buf = BytesIO(img_data)
+    
+    # Open the image using Pillow
+    img = Image.open(buf)
+    
+    # Create a matplotlib figure and axis
+    fig, ax = plt.subplots(figsize=figsize)
+    
+    # Display the image
+    ax.imshow(img)
+    ax.axis('off')  # Hide the axis
+    
+    if title:
+        ax.set_title(title)
+    
+    # Show the plot
+    plt.show()
+    
+    return fig, ax
+
+
+================================================
+FILE: ai_data_science_team/utils/messages.py
+================================================
+
+
+
+def get_tool_call_names(messages):
+    """
+    Method to extract the tool call names from a list of LangChain messages.
+    
+    Parameters:
+    ----------
+    messages : list
+        A list of LangChain messages.
+        
+    Returns:
+    -------
+    tool_calls : list
+        A list of tool call names.
+    
+    """
+    tool_calls = []
+    for message in messages:
+        try: 
+            if "tool_call_id" in list(dict(message).keys()):
+                tool_calls.append(message.name)
+        except:
+            pass
+    return tool_calls
+
+
+
+
+================================================
+FILE: ai_data_science_team/utils/plotly.py
+================================================
+
+
+import json
+import plotly.io as pio
+
+def plotly_from_dict(plotly_graph_dict: dict):
+    """
+    Convert a Plotly graph dictionary to a Plotly graph object.
+    
+    Parameters:
+    -----------
+    plotly_graph_dict: dict
+        A Plotly graph dictionary.
+        
+    Returns:
+    --------
+    plotly_graph: plotly.graph_objs.graph_objs.Figure
+        A Plotly graph object.
+    """
+    
+    if plotly_from_dict is None:
+        return None
+    
+    return pio.from_json(json.dumps(plotly_graph_dict))
+
+
+================================================
+FILE: ai_data_science_team/utils/regex.py
+================================================
+import re
+from datetime import datetime
+
+
+def relocate_imports_inside_function(code_text):
+    """
+    Relocates all import statements in a given Python function and moves them inside the function definition.
+
+    Parameters
+    ----------
+    code_text : str
+        The Python code as a string.
+
+    Returns
+    -------
+    str
+        The modified Python code with imports relocated inside the function.
+    """
+    # Match all import statements
+    import_pattern = r'^\s*(import\s+[^\n]+|from\s+\S+\s+import\s+[^\n]+)\s*$'
+    imports = re.findall(import_pattern, code_text, re.MULTILINE)
+
+    # Remove imports from the top-level code
+    code_without_imports = re.sub(import_pattern, '', code_text, flags=re.MULTILINE).strip()
+
+    # Find the function definition and insert the imports inside it
+    function_pattern = r'(def\s+\w+\s*\(.*?\):)'
+    match = re.search(function_pattern, code_without_imports)
+
+    if match:
+        function_start = match.end()
+        # Insert the imports right after the function definition
+        imports_code = '\n    ' + '\n    '.join(imports)  # Indent imports
+        modified_code = (
+            code_without_imports[:function_start]
+            + imports_code
+            + code_without_imports[function_start:]
+        )
+        return modified_code
+
+    # If no function is found, return the original code
+    return code_text
+
+def add_comments_to_top(code_text, agent_name="data_wrangler"):
+    """
+    Adds AI-generated metadata comments to the top of the Python code.
+
+    Parameters
+    ----------
+    code_text : str
+        The Python code to be commented.
+    agent_name : str, optional
+        The agent name to include in the comments, by default "data_wrangler".
+
+    Returns
+    -------
+    str
+        The Python code with the added comments at the top.
+    """
+    # Generate timestamp
+    time_created = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    # Construct the header comments
+    header_comments = [
+        "# Disclaimer: This function was generated by AI. Please review before using.",
+        f"# Agent Name: {agent_name}",
+        f"# Time Created: {time_created}\n",        
+        ""
+    ]
+
+    # Join the header with newlines, then prepend to the existing code_text
+    header_block = "\n".join(header_comments)
+    return header_block + code_text
+
+def format_agent_name(agent_name: str) -> str:
+    
+    formatted_name = agent_name.strip().replace("_", " ").upper()
+    
+    return f"---{formatted_name}----"
+
+def format_recommended_steps(raw_text: str, heading: str = "# Recommended Steps:") -> str:
+    # Split text by newline and strip leading/trailing whitespace
+    lines = raw_text.strip().split('\n')
+    
+    # Remove empty lines from the start
+    while lines and not lines[0].strip():
+        lines.pop(0)
+
+    seen_heading = False
+    new_lines = []
+
+    for line in lines:
+        # If this line *is exactly* the heading, check if we've seen it already
+        if line.strip() == heading:
+            if seen_heading:
+                # Skip duplicates
+                continue
+            else:
+                seen_heading = True
+        new_lines.append(line)
+
+    # If heading was never seen, prepend it
+    if not seen_heading:
+        new_lines.insert(0, heading)
+
+    return "\n".join(new_lines)
+
+def get_generic_summary(report_dict: dict, code_lang = "python") -> str:
+    """
+    Takes a dictionary of unknown structure (e.g., from json.loads(...)) 
+    and returns a textual summary. It assumes:
+      1) 'report_title' (if present) should be displayed first.
+      2) If a key includes 'code' or 'function', 
+         the value is treated as a code block.
+      3) Otherwise, key-value pairs are displayed as text.
+
+    Parameters
+    ----------
+    report_dict : dict
+        The dictionary holding the agent output or user report.
+
+    Returns
+    -------
+    str
+        A formatted summary string.
+    """
+    # 1) Grab the report title (or default)
+    title = report_dict.get("report_title", "Untitled Report")
+
+    lines = []
+    lines.append(f"# {title}")
+
+    # 2) Iterate over all other keys
+    for key, value in report_dict.items():
+        # Skip the title key, since we already displayed it
+        if key == "report_title":
+            continue
+
+        # 3) Check if it's code or function
+        # (You can tweak this logic if you have different rules)
+        key_lower = key.lower()
+        if "code" in key_lower or "function" in key_lower:
+            # Treat as code
+            lines.append(f"\n## {format_agent_name(key).upper()}")
+            lines.append(f"```{code_lang}\n" + str(value) + "\n```")
+        else:
+            # 4) Otherwise, just display the key-value as text
+            lines.append(f"\n## {format_agent_name(key).upper()}")
+            lines.append(str(value))
+
+    return "\n".join(lines)
+
+def remove_consecutive_duplicates(messages):
+    unique_messages = []
+    prev_message = None
+
+    for msg in messages:
+        if msg.content != prev_message:
+            unique_messages.append(msg)
+        prev_message = msg.content  # Update previous message to current
+
+    return unique_messages
+
+
+
+

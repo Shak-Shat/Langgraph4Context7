@@ -1,0 +1,1971 @@
+Directory structure:
+└── kaymen99-personal-ai-assistant/
+    ├── README.md
+    ├── app.py
+    ├── app_whatsapp.py
+    ├── requirements.txt
+    ├── .env.example
+    ├── db/
+    │   ├── checkpoints.sqlite
+    │   ├── checkpoints.sqlite-shm
+    │   └── checkpoints.sqlite-wal
+    └── src/
+        ├── utils.py
+        ├── agents/
+        │   ├── personal_assistant.py
+        │   └── base/
+        │       ├── __init__.py
+        │       ├── agent.py
+        │       └── agents_orchestrator.py
+        ├── channels/
+        │   ├── slack.py
+        │   ├── telegram.py
+        │   └── whatsapp.py
+        ├── prompts/
+        │   ├── __init__.py
+        │   ├── calendar_agent.py
+        │   ├── email_agent.py
+        │   ├── manager_agent.py
+        │   ├── notion_agent.py
+        │   ├── researcher_agent.py
+        │   └── slack_agent.py
+        └── tools/
+            ├── send_message.py
+            ├── calendar/
+            │   ├── __init__.py
+            │   ├── create_event.py
+            │   └── get_events.py
+            ├── email/
+            │   ├── __init__.py
+            │   ├── find_contacts.py
+            │   ├── read_emails.py
+            │   └── send_email.py
+            ├── notion/
+            │   ├── __init__.py
+            │   ├── add_task.py
+            │   └── get_tasks.py
+            ├── research/
+            │   ├── __init__.py
+            │   ├── scrape_website.py
+            │   ├── search_linkedin.py
+            │   └── search_web.py
+            └── slack/
+                ├── __init__.py
+                ├── get_messages.py
+                └── send_messages.py
+
+================================================
+FILE: README.md
+================================================
+# AI Personal Assistant
+
+**Imagine a personal assistant in your pocket 📱 that handles your emails 📧, schedule 📅, to-do lists ✅, keeps you updated on Slack messages 💬, and performs online research for you 🔍—all through your favorite messaging app.**
+
+**That's EXACTLY what this AI Personal Assistant does! 🤖✨**
+
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/c284eb2d-1909-48cd-9ab7-b0fbe4709308" alt="personal_assistant">
+</p>
+
+This project provides a personal assistant agent that manages tasks related to your email inbox, calendar, Notion to-do list, Slack interactions, and handles any research you may have. The assistant communicates with you via your preferred communication channel **(Telegram, Slack, or WhatsApp)**, keeping you informed about your schedule, tasks, emails, messages, and helping with research topics, people, or even companies.
+
+The personal assistant is a **hierarchical multi-agents** system with a **supervisor agent** (manager) and several sub-agents that handle specific tasks and tools for efficient task management.
+
+## Overview
+
+### Main Agent: Assistant Manager
+
+The Assistant Manager is your personal assistant that orchestrates the tasks and communication between you and the sub-agents. The manager is responsible for:
+
+- Receiving and analyzing your messages from your chosen communication channel.
+- Delegating tasks to the appropriate sub-agent (Email, Calendar, Notion, Slack, or Researcher).
+- Communicating updates, messages, and any queries back to you via your preferred channel.
+
+### Sub-Agents
+
+The manager agent can communicate with five specialized sub-agents:
+
+1.  **Email Agent:** Can handle all your email-related tasks, including sending emails, retrieving specific emails, and checking for important messages from your contacts list.
+2.  **Calendar Agent:** Can manage your calendar by creating new events and retrieving and checking your scheduled events.
+3.  **Notion Agent:** Can manage your to-do list in Notion, helping you add, remove, or check tasks as needed.
+4.  **Slack Agent:** Can manage your Slack interactions by reading messages from channels or DMs and sending messages on your behalf.
+5.  **Researcher Agent:** Can perform web research, scrape websites, and gather information from LinkedIn profiles to assist with research tasks.
+
+All the sub-agents report back to the Assistant Manager after completing their respective tasks.
+
+## Tech Stack
+
+-   **LangGraph & LangChain**: Frameworks used for building the AI agents and interacting with LLMs (GPT-4, Llama 3, Gemini).
+-   **LangSmith**: For monitoring the different LLM calls and AI agents' interactions.
+-   **Google APIs**: Provides access to Google services like Calendar, Contacts, and Gmail.
+-   **Notion Client**: Interface for interacting with Notion to manage and update to-do lists.
+-   **Slack SDK**: For interacting with Slack, sending and receiving messages.
+-   **Tavily Search API**: For performing web searches.
+-   **Telegram API**: Depending on your choice of communication channel.
+-   **WhatsApp API via Twilio Sandbox (for testing)**: A way to integrate WhatsApp communication.
+
+## How to Run
+
+### Prerequisites
+
+-   Python 3.9+
+-   Your preferred LLM provider API keys (OpenAI, Claude, Gemini, Groq,...)
+-   Google API credentials (for Calendar, Contacts, and Gmail access)
+-   Notion API key
+-   Tavily API key (for web research)
+-   Slack Bot User OAuth Token and App Token
+-   Telegram Bot Token (If you want to use telegram)
+-   Twilio Account SID and Auth Token (If you want to test with WhatsApp)
+-   Necessary Python libraries (listed in `requirements.txt`)
+
+### Setup
+
+1.  **Clone the repository:**
+
+    ```sh
+    git clone https://github.com/kaymen99/AI-personal-assistant
+    cd AI-personal-assistant
+    ```
+
+2.  **Create and activate a virtual environment:**
+
+    ```sh
+    python -m venv venv
+    source venv/bin/activate  # On Windows use `venv\Scripts\activate`
+    ```
+
+3.  **Install the required packages:**
+
+    ```sh
+    pip install -r requirements.txt
+    ```
+
+4.  **Set up environment variables:**
+
+    Create a `.env` file in the root directory of the project and add your API keys, see `.env.example` to know all the parameters you will need.
+
+5.  **Configure Google API credentials:**
+
+    Follow Google's documentation to set up credentials for Calendar, Contacts, and Gmail APIs. Save the credentials file in your project folder.
+
+6.  **Set up Communication Channel:**
+
+    -   **Telegram:**
+        -   Create a Telegram Bot: To interact with the assistant via Telegram, you will need to create a Telegram bot and obtain the bot token. Follow this [guide](https://www.youtube.com/watch?v=ozQfKhdNjJU) to create your bot and get the necessary information.
+    -   **Slack:**
+        -   Create a Slack App: Follow the official Slack documentation to create a new Slack app, add the necessary OAuth scopes (refer to the provided code and documentation for the required scopes).
+        -   Install the app to your workspace and obtain your Bot User OAuth Token and App-Level Token.
+    -   **WhatsApp (via Twilio Sandbox for Testing):**
+        - **Important Note:** Normally, interacting with the **WhatsApp Business API** requires a **Meta Business Account**. However, for **testing purposes only**, this project utilizes the Twilio WhatsApp Sandbox.
+        - **Twilio Sandbox Limitations:**  As stated in the [Twilio documentation](https://www.twilio.com/docs/whatsapp/sandbox), "Use the Twilio Sandbox for WhatsApp for testing and discovery purposes only. You should not use it in production."
+        - **Setup:**
+          1.  Create a Twilio account and obtain your Account SID and Auth Token.
+          2.  Follow Twilio's tutorial to set up the WhatsApp Sandbox: [Twilio WhatsApp Sandbox Setup](https://www.twilio.com/docs/whatsapp/sandbox).
+          3.  Save your Twilio Account SID, Auth Token and Sandbox number in your `.env` file.
+
+7.  **Run the project**:
+    - For running the personal assistant on **Slack or Telegram** you'll only need to run:
+
+      ```bash
+      python app.py
+      ```
+
+    - For running the personal assistant on **whatsApp** you'll need to run:
+
+      ```bash
+      python run app_whatsapp.py
+      ```
+
+      This will spin out a local fastAPI server, to enable the communication with the Twilio servers you need to make it public using **Ngrok**:
+
+      1. Expose the Webhook URL Using ngrok
+
+         ```bash
+         ngrok http 5000
+         ```
+      2. Configure Twilio Webhook
+
+         1. Go to the Twilio Console > Messaging > Sandbox for WhatsApp.
+         2. In the Sandbox settings section: Set the "WHEN A MESSAGE COMES IN" URL to your ngrok URL and save your configuration.
+      
+      **You're done now you can talk with your assistant via whatsApp**
+
+### Usage
+
+**Communicating with the Assistant**: Simply send a message to your configured communication channel (Telegram, Slack channel, or WhatsApp), and the assistant will analyze the message, delegate the tasks to the appropriate sub-agents, and report back to you with the results.
+
+## Contribution
+
+Feel free to fork the repository, create a branch, and submit a pull request if you'd like to contribute to the project.
+
+## Contact
+
+For any queries or suggestions, please reach out to [aymenMir1001@gmail.com](mailto:aymenMir1001@gmail.com)
+
+
+================================================
+FILE: app.py
+================================================
+import time
+import sqlite3
+from dotenv import load_dotenv
+from src.channels.telegram import TelegramChannel
+from src.agents.personal_assistant import PersonalAssistant
+
+# Load .env variables
+load_dotenv()
+
+# Initialize sqlite3 DB for saving agent memory
+conn = sqlite3.connect("db/checkpoints.sqlite", check_same_thread=False)
+
+# Use telegram for communicating with the agent
+telegram = TelegramChannel()
+# Use Slack for communicating with the agent
+# slack = SlackChannel()
+
+# Initiate personal assistant
+personal_assistant = PersonalAssistant(conn)
+
+# Configuration for the Langgraph checkpoints, specifying thread ID
+config = {"configurable": {"thread_id": "1"}}
+
+
+def monitor_channel(after_timestamp, config):
+    while True:
+        new_messages = telegram.receive_messages(after_timestamp)
+        if new_messages:
+            for message in new_messages:
+                sent_message = (
+                    f"Message: {message['text']}\n"
+                    f"Current Date/time: {message['date']}"
+                )
+                answer = personal_assistant.invoke(sent_message, config=config)
+                telegram.send_message(answer)
+        after_timestamp = int(time.time())
+        time.sleep(5)  # Sleep for 5 seconds before checking again
+        
+
+if __name__ == "__main__":
+    print("Personal Assistant Manager is running")
+    monitor_channel(int(time.time()), config)
+
+
+================================================
+FILE: app_whatsapp.py
+================================================
+import uvicorn
+import asyncio
+import sqlite3
+from fastapi import FastAPI, Form
+from dotenv import load_dotenv
+from src.channels.whatsapp import WhatsAppChannel
+from src.agents.personal_assistant import PersonalAssistant
+from src.utils import get_current_date_time
+
+# Load .env variables from the environment file
+load_dotenv()
+
+# Initiate FastAPI app
+app = FastAPI()
+
+# Initialize sqlite3 DB for saving agent memory
+conn = sqlite3.connect("db/checkpoints.sqlite", check_same_thread=False)
+
+# Initiate personal assistant instance
+personal_assistant = PersonalAssistant()
+
+# Configuration for the Langgraph agent, specifying thread ID
+config = {"configurable": {"thread_id": "1"}}
+
+async def process_message_async(to_whatsapp_number, incoming_message):
+    """
+    Processes the incoming message asynchronously:
+    1. Formats the message with the current date and time.
+    2. Invokes the personal assistant to get a response.
+    3. Sends the response to the provided WhatsApp number.
+    """
+    # Format the message with current date/time
+    message = (
+        f"Message: {incoming_message}\n"
+        f"Current Date/time: {get_current_date_time()}"
+    )
+    
+    # Invoke the personal assistant to generate a response
+    answer = personal_assistant.invoke(message, config=config)
+
+    # Send the response via Twilio WhatsApp
+    whatsapp = WhatsAppChannel()
+    await asyncio.to_thread(
+        whatsapp.send_message,
+        to_number=to_whatsapp_number,
+        body=answer
+    )
+
+@app.post("/whatsapp/webhook")
+async def whatsapp_webhook(Body: str = Form(...), From: str = Form(...)):
+    """
+    Webhook endpoint that handles incoming messages from WhatsApp.
+    Receives the message and triggers an asynchronous task to process it.
+    """
+    incoming_message = Body
+    from_number = From
+    print(f"Message received from {from_number}: {incoming_message}")
+
+    # Create an asynchronous task to process the message without blocking
+    asyncio.create_task(process_message_async(from_number, incoming_message))
+
+    # Respond with a status indicating that the message was received
+    return "Message received", 200
+
+if __name__ == "__main__":
+    # Start the FastAPI application on the specified host and port
+    uvicorn.run(app, host="0.0.0.0", port=5000)
+
+
+
+================================================
+FILE: requirements.txt
+================================================
+langgraph 
+langgraph-checkpoint-sqlite
+langchain_community 
+langchain-openai
+langchain-google-genai 
+langchain-groq 
+langsmith
+tavily-python
+notion-client
+slack_sdk
+python-telegram-bot
+twilio
+google-auth
+google-auth-oauthlib
+google-auth-httplib2
+google-api-python-client
+fastapi
+uvicorn
+python-multipart
+python-dotenv
+selenium
+webdriver_manager
+html2text
+bs4
+
+
+================================================
+FILE: .env.example
+================================================
+# API keys for various services
+OPENAI_API_KEY=""            # OpenAI API key for accessing OpenAI's models and services
+GOOGLE_API_KEY=""            # Google Cloud API key for accessing Google Cloud services
+GROQ_API_KEY=""              # GROQ platform API key for using GROQ's services
+
+# LangChain configuration
+LANGCHAIN_TRACING_V2="true"  # Enable LangSmith tracing for debugging and monitoring LangChain flows
+LANGCHAIN_API_KEY=""         # LangSmith API key for interacting with LangChain services
+LANGCHAIN_PROJECT="Telegram assistant"  # The name of the LangChain project (used for organizational purposes)
+
+# Search tool keys
+TAVILY_API_KEY="tvly-"       # Tavily API key for using Tavily search services
+SERPER_API_KEY=""            # Serper search API key for web search integration
+
+# Gmail integration
+GMAIL_MAIL=""                # Gmail address for sending/receiving emails
+GMAIL_APP_PASSWORD=""        # App-specific password for Gmail (used instead of regular Gmail password)
+
+# LinkedIn username and password for scraping
+LINKEDIN_USERNAME=""         # LinkedIn username for scraping LinkedIn profiles
+LINKEDIN_PASSWORD=""         # LinkedIn password for scraping LinkedIn profiles
+
+# Notion integration
+NOTION_TOKEN=""              # Notion API token for accessing Notion data
+NOTION_DATABASE_ID=""        # Notion database ID for accessing a specific Notion database
+
+# Telegram bot setup
+TELEGRAM_TOKEN=""            # Telegram bot token for Telegram Bot API authentication
+CHAT_ID=""                   # Telegram chat ID for targeting specific conversations with the bot
+
+# Slack bot setup
+SLACK_BOT_TOKEN=""           # Slack bot token for Slack API authentication
+SLACK_CHANNEL_ID=""          # Slack channel ID for targeting a specific channel with the bot
+
+# WhatsApp Twilio setup
+TWILIO_ACCOUNT_SID=""        # Twilio Account SID for WhatsApp API authentication
+TWILIO_AUTH_TOKEN=""         # Twilio Auth Token for WhatsApp API authentication
+FROM_WHATSAPP_NUMBER="whatsapp:+"  # Twilio WhatsApp number for sending messages (in the format 'whatsapp:+<number>')
+
+
+
+================================================
+FILE: db/checkpoints.sqlite
+================================================
+[Non-text file]
+
+
+================================================
+FILE: db/checkpoints.sqlite-shm
+================================================
+[Non-text file]
+
+
+================================================
+FILE: db/checkpoints.sqlite-wal
+================================================
+[Non-text file]
+
+
+================================================
+FILE: src/utils.py
+================================================
+import os 
+from datetime import datetime
+from google.oauth2.credentials import Credentials
+from google.auth.transport.requests import Request
+from google_auth_oauthlib.flow import InstalledAppFlow
+
+SCOPES = [
+    "https://www.googleapis.com/auth/calendar.events",
+    "https://www.googleapis.com/auth/contacts.readonly",
+    'https://www.googleapis.com/auth/gmail.readonly'
+]
+
+def get_current_date_time():
+    return datetime.now().strftime("%Y-%m-%d %H:%M")
+        
+def get_credentials():
+    """
+    Get and refresh Google Contacts API credentials
+    """
+    creds = None
+    if os.path.exists('token.json'):
+        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(
+                'credentials.json', SCOPES)
+            creds = flow.run_local_server(port=0)
+        with open('token.json', 'w') as token:
+            token.write(creds.to_json())
+    return creds
+
+def extract_provider_and_model(model_string: str):
+    return model_string.split("/", 1)
+
+def get_llm_by_provider(model_string, temperature=0.1):
+    llm_provider, model = extract_provider_and_model(model_string)
+    # Else find provider
+    if llm_provider == "openai":
+        from langchain_openai import ChatOpenAI
+        llm = ChatOpenAI(model=model, temperature=temperature)
+    elif llm_provider == "anthropic":
+        from langchain_anthropic import ChatAnthropic
+        llm = ChatAnthropic(model=model, temperature=temperature)  # Use the correct model name
+    elif llm_provider == "google":
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        llm = ChatGoogleGenerativeAI(model=model, temperature=temperature)  # Correct model name
+    elif llm_provider == "groq":
+        from langchain_groq import ChatGroq
+        llm = ChatGroq(model=model, temperature=temperature)
+    # ... add elif blocks for other providers ...
+    else:
+        raise ValueError(f"Unsupported LLM provider: {llm_provider}")
+    return llm
+
+
+================================================
+FILE: src/agents/personal_assistant.py
+================================================
+from langgraph.checkpoint.sqlite import SqliteSaver
+from src.agents.base import Agent, AgentsOrchestrator
+from src.prompts import *
+from src.tools.calendar import *
+from src.tools.email import *
+from src.tools.notion import *
+from src.tools.slack import *
+from src.tools.research import *
+from src.utils import get_current_date_time
+
+class PersonalAssistant:
+    def __init__(self, db_connection):
+        # Create sqlite checkpointer for managing manager memory
+        self.checkpointer = SqliteSaver(db_connection)
+        
+        # Initialize individual agents
+        self.email_agent = Agent(
+            name="email_agent",
+            description="Email agent can manage GMAIL inbox including read and send emails",
+            model="openai/gpt-4o-mini",
+            system_prompt=EMAIL_AGENT_PROMPT.format(date_time=get_current_date_time()),
+            tools=[read_emails, send_email, find_contact_email],
+            sub_agents=[],
+            temperature=0.1
+        )
+
+        self.calendar_agent = Agent(
+            name="calendar_agent",
+            description="Calendar agent can manage Google Calendar including get events and create events",
+            model="openai/gpt-4o-mini",
+            system_prompt=CALENDAR_AGENT_PROMPT.format(date_time=get_current_date_time()),
+            tools=[get_calendar_events, add_event_to_calendar, find_contact_email],
+            sub_agents=[],
+            temperature=0.1
+        )
+
+        self.notion_agent = Agent(
+            name="notion_agent",
+            description="Notion agent can manage Notion including get my todo list and add task in todo list",
+            model="openai/gpt-4o-mini",
+            system_prompt=NOTION_AGENT_PROMPT.format(date_time=get_current_date_time()),
+            tools=[get_my_todo_list, add_task_in_todo_list],
+            sub_agents=[],
+            temperature=0.1
+        )
+
+        self.slack_agent = Agent(
+            name="slack_agent",
+            description="Slack agent can read and send messages through Slack",
+            model="openai/gpt-4o-mini",
+            system_prompt=SLACK_AGENT_PROMPT.format(date_time=get_current_date_time()),
+            tools=[get_slack_messages, send_slack_message],
+            sub_agents=[],
+            temperature=0.1
+        )
+
+        self.researcher_agent = Agent(
+            name="researcher_agent",
+            description="Researcher agent can search the web, scrape websites or LinkedIn profiles",
+            model="openai/gpt-4o-mini",
+            system_prompt=RESEARCHER_AGENT_PROMPT.format(date_time=get_current_date_time()),
+            tools=[search_web, scrape_website_to_markdown, search_linkedin_tool],
+            sub_agents=[],
+            temperature=0.1
+        )
+
+        # Initialize the manager agent
+        self.manager_agent = Agent(
+            name="manager_agent",
+            description="Manager agent",
+            model="openai/gpt-4o",
+            system_prompt=ASSISTANT_MANAGER_PROMPT.format(date_time=get_current_date_time()),
+            tools=[],
+            sub_agents=[
+                self.email_agent,
+                self.calendar_agent,
+                self.notion_agent,
+                self.slack_agent,
+                self.researcher_agent
+            ],
+            temperature=0.1,
+            memory=self.checkpointer # only manager has memory feature
+        )
+
+        # Initialize the orchestrator
+        self.assistant_orchestrator = AgentsOrchestrator(
+            main_agent=self.manager_agent,
+            agents=[
+                self.manager_agent,
+                self.email_agent,
+                self.calendar_agent,
+                self.notion_agent,
+                self.slack_agent,
+                self.researcher_agent
+            ]
+        )
+
+    def __getattr__(self, name):
+        return getattr(self.assistant_orchestrator, name)
+
+
+
+================================================
+FILE: src/agents/base/__init__.py
+================================================
+from .agent import Agent
+from .agents_orchestrator import AgentsOrchestrator
+
+__all__ = ['Agent', 'AgentsOrchestrator']
+
+
+
+================================================
+FILE: src/agents/base/agent.py
+================================================
+from typing import List
+from langgraph.prebuilt import create_react_agent
+from src.utils import get_llm_by_provider
+
+class Agent:
+    def __init__(
+        self, 
+        name: str,  # Name of the agent
+        description: str,  # Description of the agent (a brief explanation of its function or purpose)
+        system_prompt: str,  # The instructions for the agent
+        tools: List[str],  # List of tools that the agent can use
+        sub_agents: List['Agent'],  # List of sub-agents that the main agent can sned message to
+        model: str,  # LLM model (in provider/model format e.g., "openai/gpt-4o", "gemini/gemini-1.5-flash")
+        temperature: float,  # Temperature setting for the LLM (affects creativity/randomness),
+        memory=None # Agent memory storage (Optional)
+
+    ):
+        self.name = name
+        self.description = description
+        self.system_prompt = system_prompt
+        self.tools = tools
+        self.sub_agents = sub_agents
+        self.model = model
+        self.temperature = temperature
+        self.agent = None 
+        self.memory = memory
+
+    def invoke(self, *args, **kwargs):
+        if not self.agent:
+            self.initiat_agent()
+        
+        print(f"--- Calling {self.name} ---")
+        response = self.agent.invoke(*args, **kwargs)
+        return response
+    
+    def stream(self, *args, **kwargs):
+        if not self.agent:
+            self.initiat_agent()
+        
+        print(f"--- Calling {self.name} ---")
+        for chunk in self.agent.stream(*args, **kwargs):
+            yield chunk
+
+    def initiat_agent(self):
+        llm = get_llm_by_provider(self.model, self.temperature)
+        self.agent = create_react_agent(
+            llm, 
+            tools=self.tools, 
+            state_modifier=self.system_prompt,
+            **({"checkpointer": self.memory} if self.memory else {"checkpointer": False}) # set to False to avoid "MULTIPLE_SUBGRAPHS" error
+        )
+
+
+
+================================================
+FILE: src/agents/base/agents_orchestrator.py
+================================================
+from pydantic import Field, create_model
+from .agent import Agent
+from src.tools.send_message import SendMessage
+
+class AgentsOrchestrator:
+    def __init__(self, main_agent: Agent, agents: list[Agent]):
+        self.main_agent = main_agent
+        self.agents = agents
+        self.agent_mapping = {}
+
+        # Set up the communication framework
+        self._populate_agent_mapping()
+        self._add_send_message_tool()
+        
+    def invoke(self, message, **kwargs):
+        messages = {"messages": [("human", message)]}
+        response = self.main_agent.invoke(messages, **kwargs)
+        return response["messages"][-1].content
+
+    def stream(self, message, **kwargs):
+        messages = {"messages": [("human", message)]}
+        for chunk in self.main_agent.stream(messages, **kwargs):
+            yield chunk
+
+    def _populate_agent_mapping(self):
+        """
+        Populates the agent mapping with agent names as keys and agent objects as values.
+        """
+        for agent in self.agents:
+            self.agent_mapping[agent.name] = agent
+
+    def _create_dynamic_send_message_tool(self, agent: "Agent") -> "SendMessage":
+        """
+        Creates a dynamic send message tool for agents with sub-agents.
+        """
+        # Generate a description for the recipients
+        recipients_description = "\n".join(
+            f"{sub_agent.name}: {sub_agent.description}"
+            for sub_agent in agent.sub_agents
+            if sub_agent.description
+        )
+
+        # Create a dynamic input schema
+        DynamicSendMessageInput = create_model(
+            f"{agent.name}SendMessageInput",
+            recipient=(str, Field(..., description=recipients_description)),
+            message=(str, Field(..., description="Message to send to sub-agent.")),
+        )
+
+        # Create the SendMessage tool instance
+        send_message_tool = SendMessage(args_schema=DynamicSendMessageInput)
+        send_message_tool.agent_mapping = self.agent_mapping  # Dynamically bind agent_mapping
+        return send_message_tool
+
+    def _add_send_message_tool(self):
+        """
+        Adds the send message tool to agents with sub-agents.
+        """
+        for agent in self.agents:
+            if hasattr(agent, "sub_agents") and agent.sub_agents:
+                send_message_tool = self._create_dynamic_send_message_tool(agent)
+                agent.tools.append(send_message_tool)
+
+                # Bind the new tool to the agent's LLM model
+                agent.initiat_agent()
+
+    def get_agent(self, name: str) -> "Agent":
+        """
+        Retrieves an agent from the mapping by name.
+        """
+        return self.agent_mapping.get(name)
+
+
+
+================================================
+FILE: src/channels/slack.py
+================================================
+import os
+import requests
+from datetime import datetime
+
+class SlackChannel():
+    def __init__(self):
+        self.token = os.getenv("SLACK_BOT_TOKEN")
+        self.channel_id = os.getenv("SLACK_CHANNEL_ID")
+
+    def send_message(self, text):
+        url = "https://slack.com/api/chat.postMessage"
+        headers = {
+            "Authorization": f"Bearer {self.token}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "channel": self.channel_id,
+            "text": text
+        }
+        response = requests.post(url, json=payload, headers=headers).json()
+        if not response.get("ok"):
+            return "Failed to send message"
+        return "Message sent successfully on Slack"
+
+    def receive_messages(self, after_timestamp):
+        url = "https://slack.com/api/conversations.history"
+        headers = {
+            "Authorization": f"Bearer {self.token}"
+        }
+        params = {
+            "channel": self.channel_id,
+            "oldest": after_timestamp
+        }
+        response = requests.get(url, headers=headers, params=params).json()
+        if not response.get("ok"):
+            return []
+
+        new_messages = []
+        for message in response.get("messages", []):
+            if float(message["ts"]) > after_timestamp:
+                new_messages.append({
+                    "text": message["text"],
+                    "date": datetime.fromtimestamp(float(message["ts"])).strftime("%Y-%m-%d %H:%M")
+                })
+
+        return new_messages
+
+
+================================================
+FILE: src/channels/telegram.py
+================================================
+import os
+import asyncio
+from telegram import Bot, Update
+from telegram.constants import ParseMode
+from telegram.error import TelegramError
+
+
+class TelegramChannel:
+    def __init__(self):
+        self.token = os.getenv("TELEGRAM_TOKEN")
+        self.chat_id = os.getenv("CHAT_ID")
+        self.bot = Bot(token=self.token)
+
+    def send_message(self, text):
+        try:
+            loop = asyncio.get_event_loop()
+            loop.run_until_complete(
+                self.bot.send_message(chat_id=self.chat_id, text=text, parse_mode=ParseMode.MARKDOWN)
+            )
+            return "Message sent successfully on Telegram"
+        except TelegramError as e:
+            return f"Failed to send message: {str(e)}"
+
+    def receive_messages(self, after_timestamp):
+        try:
+            loop = asyncio.get_event_loop()
+            updates = loop.run_until_complete(self.bot.get_updates())
+            new_messages = []
+            for update in updates:
+                if isinstance(update, Update) and update.message:
+                    message = update.message
+                    if message.date.timestamp() > after_timestamp:
+                        new_messages.append({
+                            "text": message.text,
+                            "date": message.date.strftime("%Y-%m-%d %H:%M"),
+                        })
+            return new_messages
+        except TelegramError as e:
+            return f"Failed to retrieve messages: {str(e)}"
+
+
+
+================================================
+FILE: src/channels/whatsapp.py
+================================================
+import os
+from twilio.rest import Client
+
+
+class WhatsAppChannel:
+    def __init__(self):
+        """
+        Initializes the WhatsAppChannel with Twilio client.
+        """
+        self.client = Client(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN"))
+
+    def send_message(self, to_number, body):
+        """
+        Sends a WhatsApp message.
+        """
+        try:
+            message = self.client.messages.create(
+                body=body,
+                from_=os.getenv('FROM_WHATSAPP_NUMBER'),  # Should be your Twilio WhatsApp number with 'whatsapp:' prefix
+                to=to_number # Ensure to prefix the number with 'whatsapp:'
+            )
+            return f"Message sent successfully with SID: {message.sid}"
+        except Exception as e:
+            return f"Failed to send message: {e}"
+
+    def receive_messages(self):
+        """
+        Receiving messages is handled via webhooks.
+
+        This method is not implemented because incoming WhatsApp messages are typically received through a webhook configured in the Twilio account. 
+        The webhook sends an HTTP request to our server when a message is received.
+        """
+        pass 
+
+
+================================================
+FILE: src/prompts/__init__.py
+================================================
+from .manager_agent import ASSISTANT_MANAGER_PROMPT
+from .email_agent import EMAIL_AGENT_PROMPT
+from .notion_agent import NOTION_AGENT_PROMPT
+from .calendar_agent import CALENDAR_AGENT_PROMPT
+from .slack_agent import SLACK_AGENT_PROMPT
+from .researcher_agent import RESEARCHER_AGENT_PROMPT
+
+__all__ = [
+    'ASSISTANT_MANAGER_PROMPT',
+    'CALENDAR_AGENT_PROMPT', 
+    'EMAIL_AGENT_PROMPT', 
+    'NOTION_AGENT_PROMPT', 
+    'RESEARCHER_AGENT_PROMPT',
+    'SLACK_AGENT_PROMPT' 
+]
+
+
+
+================================================
+FILE: src/prompts/calendar_agent.py
+================================================
+CALENDAR_AGENT_PROMPT = """
+**# Role**
+
+You are my expert calender manager agent, responsible for managing my full calender, you can access all my events, you can create new event
+on my behalf. You are a subagent of my personal assistant agent.
+
+**# Task**
+
+- You will be triggered when the assistant manager agent delegate a task to you, and your job as my calender manager agent is to perform actions on
+my behalf such as checking my availability, creating events, and getting my calendar events for a specific time frame.
+- Dependign on the task given to you by your manager, you will identify the right tools to use and in what order to achieve the task.
+- After accomplishing the task you will always report back to the manager agent.
+- Some examples of tasks that could be delegated to you: "check if I have any meetings today", "Book a meeting with Emily tomorrow at 11am".
+
+**# SOP**
+
+Depending on the task that is delegated to you, you must analyze its content and think step by step to identify the right tools to use and in
+what order, and to ensure that you achieve the desire outcome.
+
+**# Tools **
+
+You have the following tools to assist you in managing my email inbox:
+
+* **FindContactEmail:** Use this tool to get the email of one of my contact when you only have his name. You must use this tool when you need
+to read or write emails to my contacts.
+
+* **GetCalendarEvents:** Use this tool to retrieve all calendars events between 2 time periods from my calendar.
+
+* **AddEventToCalendar:** Use this tool to add a new event in my calendar.
+
+**# Notes**
+
+* You will always report back to your manager agent in as much detail as possible..
+* You must always use the FindContactEmail tool to get my contacts email given their names.
+* NEVER make up an email for one of my contacts.
+- **Today’s date is: {date_time}**
+"""
+
+
+================================================
+FILE: src/prompts/email_agent.py
+================================================
+EMAIL_AGENT_PROMPT = """
+**# Role**
+
+You are my expert email manager agent, responsible for managing my full email inbox, you can access all my email, writing and sending emails on
+my behalf. You are a subagent of my personal assistant agent.
+
+**# Task**
+
+- You will be triggered when the assistant manager agent delegate a task to you, and your job as my email manager agent is to perform actions on
+my behalf such as reading emails, sending emails, and writing emails from my inbox.
+- Depending on the task given to you by your manager, you will identify the right tools to use and in what order to achieve the task.
+- After accomplishing the task you will always report back to the manager agent.
+- Some examples of tasks that could be delegated to you: "please send en email to Emily saying I'll be 30 min late for our meeting today".
+Or: "check if I have received any important emails today".
+
+**# SOP**
+
+Depending on the task that is delegated to you, you must analyze its content and think step by step to identify the right tools to use and in
+what order, and to ensure that you achieve the desire outcome.
+
+**# Tools **
+
+You have the following tools to assist you in managing my email inbox:
+
+* **FindContactEmail:** Use this tool to get the email of one of my contact when you only have his name. You must use this tool when you need
+to read or write emails to my contacts.
+
+* **ReadEmails:** Use this tool to retrieve emails from my inbox.
+
+  * You can get ALL emails from a specific time window by JUST using the Start and End time inputs. In this case you will leave the Email option EMPTY.
+
+  * You can retrieve a specific email of a specific contact by using the email option in the email field. You will only use the email option if you have been explicitly provided with an email to check.
+
+* **SendEmail:** Use this tool to send emails to my contacts on my behalf.
+
+**# Notes**
+
+* My Name is Aymen, include it if needed when writing emails.
+* You will always report back to the manager agent.
+* You must always use the FindContactEmail tool first when you are only provided with a contact name.
+- **Today’s date is: {date_time}**
+"""
+
+
+================================================
+FILE: src/prompts/manager_agent.py
+================================================
+ASSISTANT_MANAGER_PROMPT = """
+# **Role**
+
+You are my **Executive Personal Assistant**, responsible for overseeing and managing tasks related to my email inbox, calendar, and Notion to-do lists. You also coordinate workflows with subagents for specific task execution.
+
+# **Objective**
+
+Your primary responsibilities include:
+1. **Delegation and Orchestration**: Analyze the tasks I send you via Telegram and decide the correct subagent to delegate them to. Ensure that all task details are specific, actionable, and achievable.
+2. **Quality Assurance**: Verify the outputs provided by subagents to ensure they align with the task instructions and my expectations.
+3. **Reporting to Me**: Compile and send clear, concise updates or summaries of completed tasks and their outcomes through Telegram messages.
+
+# **SOP (Standard Operating Procedure)**
+
+## 1. Evaluating Task Requirements:
+- **Step 1**: Analyze the message I send and determine which tools or subagents are required for task completion.
+- **Step 2**: Break down complex tasks into smaller subtasks and assign them to the appropriate subagents.
+- **Step 3**: Ensure task instructions are clear, with all necessary details like deadlines, expected outcomes, and supporting information.
+
+## 2. Delegation and Communication:
+- Use the **SendMessage** tool to delegate tasks to the appropriate subagents:
+  - **email_agent**: Manages emails (retrieving, composing, and sending emails).
+  - **calendar_agent**: Manages the calendar (checking availability, creating, or retrieving events).
+  - **notion_agent**: Manages Notion to-do lists (adding, retrieving, or updating tasks).
+  - **slack_agent**: Can read or send messages through my Slack
+  - **researcher_agent**: Can research information on the web, scrape websites or collect LinkedIn data about people or companies.
+
+## 3. Verifying Task Completion:
+- Check the outputs from subagents.
+- Provide feedback or request revisions if the outputs don’t meet expectations.
+
+## 4. Reporting Back to Me:
+- For every task or update, summarize the results in a **clear and structured message**.
+
+# **Instructions**
+
+- **Be proactive**: If a task seems unclear, ask for clarification before proceeding.
+- **Be detailed and specific**: Avoid vague instructions, always clearly communicate tasks to subagents, providing all necessary details.
+- **Be efficient**: When delegating tasks to subagents, group similar or related tasks into a single message whenever possible to minimize multiple communications.
+- **Verify** the accuracy and quality of outputs from subagents before reporting back to me.
+- Report to me all the updates in clear, well structured format using simple tone.
+
+# **Examples of Input Messages**
+1. "Please tell me all the meetings I have scheduled today."
+   - Action: Send a message to the **calendar_agent**: *"Retrieve all events scheduled for today and summarize them."*
+
+2. "Add 'Finish client project' as a high-priority task to my Notion to-do list."
+   - Action: Send a message to the **notion_agent**: *"Add a new task: 'Finish client project' to the to-do list with priority marked as high."*
+
+3. "Cancel my meeting with Emily today and email her to reschedule for another time"
+   - Actions: 
+     - Send a message to the **calendar_agent**: *"Cancel today's meeting."*
+     - Send a message to the **email_agent**: *"Send an email to Emily informing her that today's meeting is canceled and propose her a rescheduling."*
+
+# **IMPORTANT**
+
+- ALWAYS COMMUNICATE WITH ME IN A CLEAR, CONSICE, WELL-FORMATTED MESSAGE USING SIMPLE and FAMILIAR TONE.
+- Avoid **lengthy** messages or paragraphs.
+- **Today’s date is: {date_time}**
+"""
+
+
+
+================================================
+FILE: src/prompts/notion_agent.py
+================================================
+NOTION_AGENT_PROMPT = """
+**# Role**
+
+You are my expert notion manager agent, responsible for managing my full notion todo list, you can access all my tasks, you can add new tasks on my behalf. You are a subagent of my personal assistant agent.
+
+**# Task**
+
+- You will be triggered when the assistant manager agent delegate a task to you, and your job as my notion manager agent is to perform actions on
+my behalf such as getting tasks from my todo list, adding new tasks on my behalf.
+- Dependign on the task given to you by your manager, you will identify the right tools to use and in what order to achieve the task.
+- After accomplishing the task you will always report back to the manager agent.
+- Some examples of tasks that could be delegated to you: "check my todo list for tomorrow", "add a this 'task' to my todo list".
+
+**# SOP**
+
+Depending on the task that is delegated to you, you must analyze its content and think step by step to identify the right tools to use and in
+what order, and to ensure that you achieve the desire outcome.
+
+**# Tools **
+
+You have the following tools to assist you in managing my email inbox:
+
+* **GetMyTodoList:** Use this tool to get all tasks from my todo list.
+
+* **AddTaskInTodoList:** Use this tool to add a new task to my todo list.
+
+**# Notes**
+
+* You will always report back to your manager agent in as much detail as possible.
+* NEVER make up aa task on your own, ALWAYS follow the instructions given to you by your manager.
+* **Today date is: {date_time}**
+"""
+
+
+================================================
+FILE: src/prompts/researcher_agent.py
+================================================
+RESEARCHER_AGENT_PROMPT = """
+**# Role**
+You are a specialized AI Research Agent, part of a broader personal assistant AI team. 
+Your primary responsibility is to perform detailed research on the web, gather valuable information, and deliver concise summaries along with the relevant sources.
+
+**# Objectives**
+Your key objectives are to:
+1. Accurately research topics as requested by the Assistant Manager Agent using available web search and scraping tools.
+2. Provide clear, concise, and informative summaries that highlight key findings from reliable sources.
+3. Report all findings exclusively to the Assistant Manager Agent and include relevant links and sources used during your research.
+
+## Instructions:
+1. Carefully review the message from the Assistant Manager Agent to fully understand the research topic and any specific requirements.
+2. Identify key queries based on the provided details and determine the most efficient approach for gathering information.
+3. Perform a web search using the `SearchWeb` tool to collect general information on the research topic.
+4. If the topic requires deeper investigation of specific websites, use the `ScrapeWebsite` tool to extract relevant data from those sources.
+5. If researching a person or company, consider using the `SearchLinkedin` tool to gather additional insights.
+6. Synthesize all collected information into a concise, easy-to-understand summary.
+7. Include the most relevant links and sources to support your findings in your final report.
+
+## Notes:
+* Always report your findings back to the Assistant Manager Agent.
+* Your summary should be clear and concise; avoid being too lengthy.
+* Ensure to include the most reliable and relevant links and sources to support your findings.
+* If data is insufficient or conflicting, report the gaps and suggest alternative sources.
+* **Today date is: {date_time}**
+"""
+
+
+================================================
+FILE: src/prompts/slack_agent.py
+================================================
+SLACK_AGENT_PROMPT = """
+**# Role**
+You are a Slack Communication Agent, part of a broader personal assistant AI team.
+Your primary responsibility is to manage my Slack interactions, ensuring I am informed of important messages and can respond promptly when necessary.
+
+**# Objectives**
+Your key objectives are to:
+1. Get any unread messages from my Slack workspace. 
+2. Prioritize and summarize important messages, particularly direct messages and mentions.
+3. Facilitate sending messages on my behalf when instructed.
+
+## Instructions:
+1. Use the `get_messages` tool to get unread messages in my Slack workspace.
+2. Prioritize direct messages and mentions, providing concise summaries when appropriate.
+3. If a response is requested, draft a suitable reply and confirm with the Assistant Manager Agent before sending.
+4. Use the `send_slack_message` tool to send messages on my behalf, only after receiving explicit confirmation.
+
+## Notes:
+* Always report relevant messages and summaries back to the Assistant Manager Agent.
+* Keep summaries brief and focused on the essential information.
+* Only send messages after receiving explicit approval.
+* If message context is unclear, ask for clarification before taking any action.
+"""
+
+
+================================================
+FILE: src/tools/send_message.py
+================================================
+from typing import Optional, Type, Dict
+from langchain_core.callbacks import CallbackManagerForToolRun
+from langsmith import traceable
+from pydantic import BaseModel
+from langchain.tools import BaseTool
+from src.agents.base import Agent
+
+
+class SendMessage(BaseTool):
+    name: str = "SendMessage"
+    description: str = "Use this to send a message to one of your sub-agents"
+    args_schema: Type[BaseModel]
+    agent_mapping: Dict[str, "Agent"] = None 
+
+    def send_message(self, recipient: str, message: str) -> str:
+        agent = self.agent_mapping.get(recipient)
+        if agent:
+            response = agent.invoke({"messages": [("human", message)]})
+            return response["messages"][-1].content
+        else:
+            return f"Invalid recipient: {recipient}"
+
+    @traceable(run_type="tool", name="SendMessage")
+    def _run(
+        self,
+        recipient: str,
+        message: str,
+        run_manager: Optional[CallbackManagerForToolRun] = None,
+    ) -> str:
+        return self.send_message(recipient, message)
+
+
+================================================
+FILE: src/tools/calendar/__init__.py
+================================================
+from .create_event import add_event_to_calendar
+from .get_events import get_calendar_events
+
+__all__ = ['add_event_to_calendar', 'get_calendar_events']
+
+
+
+================================================
+FILE: src/tools/calendar/create_event.py
+================================================
+from datetime import datetime, timedelta
+from langsmith import traceable
+from pydantic import BaseModel, Field
+from langchain_core.tools import tool
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+from src.utils import get_credentials
+
+class AddEventToCalendarInput(BaseModel):
+    title: str = Field(description="Title of the event")
+    description: str = Field(description="Description of the event")
+    start_time: str = Field(description="Start time of the event")
+
+@tool("AddEventToCalendar", args_schema=AddEventToCalendarInput)
+@traceable(run_type="tool", name="AddEventToCalendar")
+def add_event_to_calendar(title: str, description: str, start_time: str):
+    "Use this to create a new event in my calendar"
+    try:
+        creds = get_credentials()
+        service = build("calendar", "v3", credentials=creds)
+
+        # Convert the string to a datetime object
+        event_datetime = datetime.fromisoformat(start_time)
+
+        event = {
+            'summary': title,
+            'description': description,
+            'start': {
+                'dateTime': event_datetime.isoformat(),
+                'timeZone': 'UTC',
+            },
+            'end': {
+                'dateTime': (event_datetime + timedelta(hours=1)).isoformat(),
+                'timeZone': 'UTC',
+            },
+        }
+
+        event = service.events().insert(calendarId='primary', body=event).execute()
+        return f"Event created successfully. Event ID: {event.get('id')}"
+
+    except HttpError as error:
+        return f"An error occurred: {error}"
+
+
+================================================
+FILE: src/tools/calendar/get_events.py
+================================================
+from datetime import datetime, timezone
+from langsmith import traceable
+from pydantic import BaseModel, Field
+from langchain_core.tools import tool
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+from src.utils import get_credentials
+
+class GetCalendarEventsInput(BaseModel):
+    start_date: str = Field(description="Start date for fetching events")
+    end_date: str = Field(description="End date for fetching events")
+
+@tool("GetCalendarEvents", args_schema=GetCalendarEventsInput)
+@traceable(run_type="tool", name="GetCalendarEvents")
+def get_calendar_events(start_date: str, end_date: str):
+    "Use this to get all calendars events between 2 time periods"
+    try:
+        creds = get_credentials()
+        service = build("calendar", "v3", credentials=creds)
+
+        # Convert string times to datetime objects and ensure they're in UTC
+        start_datetime = datetime.fromisoformat(start_date).replace(tzinfo=timezone.utc)
+        end_datetime = datetime.fromisoformat(end_date).replace(tzinfo=timezone.utc)
+
+        # Format date-times in RFC3339 format
+        start_rfc3339 = start_datetime.isoformat().replace('+00:00', 'Z')
+        end_rfc3339 = end_datetime.isoformat().replace('+00:00', 'Z')
+
+        events = service.events().list(
+            calendarId='primary',
+            timeMin=start_rfc3339,
+            timeMax=end_rfc3339,
+            singleEvents=True,
+            orderBy='startTime'
+        ).execute()
+
+        if not events:
+            return "No events found in the specified time range."
+
+        event_list = []
+        for event in events['items']:
+            start = event['start'].get('dateTime', event['start'].get('date'))
+            event_list.append(f"Event: {event['summary']}, Description: {event['description']}, Start: {start}")
+
+        if event_list:
+            return "\n".join(event_list)
+        return "No event found for this dates"
+
+    except HttpError as error:
+        return f"An error occurred: {error}"
+
+
+================================================
+FILE: src/tools/email/__init__.py
+================================================
+from .find_contacts import find_contact_email
+from .read_emails import read_emails
+from .send_email import send_email
+
+__all__ = ['find_contact_email', 'read_emails', 'send_email']
+
+
+
+================================================
+FILE: src/tools/email/find_contacts.py
+================================================
+import re
+from langsmith import traceable
+from pydantic import BaseModel, Field
+from langchain_core.tools import tool
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+from src.utils import get_credentials
+
+class FindContactEmailInput(BaseModel):
+    name: str = Field(description="Name of the contact")
+
+@tool("FindContactEmail", args_schema=FindContactEmailInput)
+@traceable(run_type="tool", name="FindContactEmail")
+def find_contact_email(name: str):
+    "Use this to get the a contact email from his name"
+    try:
+        creds = get_credentials()
+        service = build('people', 'v1', credentials=creds)
+
+        # Search for the contact
+        results = service.people().searchContacts(
+            query=name,
+            readMask='names,phoneNumbers,emailAddresses'
+        ).execute()
+
+        connections = results.get('results', [])
+
+        if not connections:
+            return f"No contact found with the name: {name}"
+
+        matching_contacts = []
+
+        for connection in connections:
+            contact = connection['person']
+            names = contact.get('names', [])
+            if names:
+                unstructured_name = names[0].get('unstructuredName', '').lower()
+                # Prepare regex to identify first and last names
+                first_name_pattern = r'^(\w+)'  # Match first word
+                last_name_pattern = r'(\w+)$'   # Match last word
+                first_match = re.search(first_name_pattern, unstructured_name)
+                last_match = re.search(last_name_pattern, unstructured_name)
+
+                if (first_match and name.lower() == first_match.group(1)) or \
+                    (last_match and name.lower() == last_match.group(1)) or \
+                    (name.lower() == unstructured_name):
+                    full_name = names[0].get('displayName', 'N/A')
+                    phone_numbers = [phone.get('value', 'N/A') for phone in contact.get('phoneNumbers', [])]
+                    emails = [email.get('value', 'N/A') for email in contact.get('emailAddresses', [])]
+
+                    matching_contacts.append({
+                        'name': full_name,
+                        'phone_numbers': phone_numbers,
+                        'emails': emails
+                    })
+
+        if not matching_contacts:
+            return f"No contact found with the matching criteria: {name}"
+
+        return str(matching_contacts)
+
+    except HttpError as error:
+        return f"An error occurred: {error}"
+
+
+================================================
+FILE: src/tools/email/read_emails.py
+================================================
+from datetime import datetime, timezone
+from typing import Optional
+from langsmith import traceable
+from langchain_core.tools import tool
+from pydantic import BaseModel, Field
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+from email.utils import parsedate_to_datetime
+from src.utils import get_credentials
+
+class ReadEmailsInput(BaseModel):
+    from_date: str = Field(description="From date for reading emails")
+    to_date: str = Field(description="To date for reading emails. Always after from_date.")
+    email: Optional[str] = Field(description="Email of the contact to read emails from")
+
+@tool("ReadEmails", args_schema=ReadEmailsInput)
+@traceable(run_type="tool", name="ReadEmails")
+def read_emails(from_date: str, to_date: str, email: Optional[str] = None):
+    "Use this to read emails from my inbox"
+    try:
+        creds = get_credentials()
+        service = build('gmail', 'v1', credentials=creds)
+
+        # Convert datetime objects to timestamps
+        from_date = int(datetime.fromisoformat(from_date).timestamp())
+        to_date = int(datetime.fromisoformat(to_date).timestamp())
+
+        query = f'after:{from_date} before:{to_date}'
+        if email:
+            query += f' from:{email}'
+
+        results = service.users().messages().list(userId='me', q=query).execute()
+        messages = results.get('messages', [])
+
+        if not messages:
+            return "No emails found in the specified time range."
+
+        email_list = []
+        for message in messages:
+            msg = service.users().messages().get(userId='me', id=message['id']).execute()
+
+            subject = next((header['value'] for header in msg['payload']['headers'] if header['name'] == 'Subject'), 'No Subject')
+            from_email = next((header['value'] for header in msg['payload']['headers'] if header['name'] == 'From'), 'Unknown Sender')
+            date = next((header['value'] for header in msg['payload']['headers'] if header['name'] == 'Date'), '')
+            date_obj = parsedate_to_datetime(date)
+            if date_obj.tzinfo is None:
+                date_obj = date_obj.replace(tzinfo=timezone.utc)
+
+
+            snippet = msg['snippet']
+            email_list.append(f"From: {from_email}\nSubject: {subject}\nDate: {date}\nSnippet: {snippet}\n")
+
+        return "\n".join(email_list)
+
+    except HttpError as error:
+        return f"An error occurred: {error}"
+
+
+================================================
+FILE: src/tools/email/send_email.py
+================================================
+import os
+import smtplib
+from langsmith import traceable
+from langchain_core.tools import tool
+from pydantic import BaseModel, Field
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
+class SendEmailInput(BaseModel):
+    to: str = Field(description="Email of the recipient")
+    subject: str = Field(description="Subject of the email")
+    body: str = Field(description="Body of the email")
+
+@tool("SendEmail", args_schema=SendEmailInput)
+@traceable(run_type="tool", name="SendEmail")
+def send_email(to: str, subject: str, body: str):
+    "Use this to send an email to my contacts"
+    try:
+        sender_email = os.getenv("GMAIL_MAIL")
+        app_password = os.getenv("GMAIL_APP_PASSWORD")
+
+        msg = MIMEMultipart()
+        msg['From'] = sender_email
+        msg['To'] = to
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body, 'plain'))
+
+        server = smtplib.SMTP_SSL('smtp.gmail.com', 465)
+        server.login(sender_email, app_password)
+        text = msg.as_string()
+        server.sendmail(sender_email, to, text)
+        server.quit()
+        return "Email sent successfully."
+    except Exception as e:
+        return f"Email was not sent successfully, error: {e}"
+
+
+================================================
+FILE: src/tools/notion/__init__.py
+================================================
+from .add_task import add_task_in_todo_list
+from .get_tasks import get_my_todo_list
+
+__all__ = ['add_task_in_todo_list', 'get_my_todo_list']
+
+
+
+================================================
+FILE: src/tools/notion/add_task.py
+================================================
+import os
+from enum import Enum
+from langsmith import traceable
+from pydantic import BaseModel, Field
+from langchain_core.tools import tool
+from notion_client import Client
+
+class TaskStatus(Enum):
+    NOT_STARTED = "Not started"
+    IN_PROGRESS = "In progress"
+    COMPLETED = "Done"
+
+class AddTaskInTodoListInput(BaseModel):
+    task: str = Field(description="Task to be added")
+    date: str = Field(description="Date and time for the task (YYYY-MM-DD) (HH:MM)")
+
+@tool("AddTaskInTodoList", args_schema=AddTaskInTodoListInput)
+@traceable(run_type="tool", name="AddTaskInTodoList")
+def add_task_in_todo_list(task: str, date: str):
+    "Use this to add a new task to my todo list"
+    try:
+        # Initialize the Notion client
+        notion = Client(auth=os.getenv("NOTION_TOKEN"))
+
+        # Create new task
+        new_task = {
+            "Title": {"title": [{"text": {"content": task}}]},
+            "Status": {"status": {"name": TaskStatus.NOT_STARTED.value}},
+        }
+        if date:
+            new_task["Date"] = {"date": {"start": date}}
+
+        # Add task to Notion
+        notion.pages.create(
+            parent={"database_id": os.getenv("NOTION_DATABASE_ID")}, # Your database ID
+            properties=new_task
+        )
+
+        return f"Task '{task}' added successfully to Todo list for {date}."
+    except Exception as e:
+        return f"An error occurred: {str(e)}"
+
+
+================================================
+FILE: src/tools/notion/get_tasks.py
+================================================
+import os
+from datetime import datetime
+from langsmith import traceable
+from pydantic import BaseModel, Field
+from langchain_core.tools import tool
+from notion_client import Client
+
+
+class GetMyTodoListInput(BaseModel):
+    date: str = Field(description="Date for which to retrieve tasks (YYYY-MM-DD)")
+
+@tool("GetMyTodoList", args_schema=GetMyTodoListInput)
+@traceable(run_type="tool", name="GetMyTodoList")
+def get_my_todo_list(date: str):
+    "Use this to get all tasks from my todo list"
+    try:
+        # Parse the target date string into a datetime object
+        try:
+            target_datetime = datetime.strptime(date, "%Y-%m-%d")
+        except ValueError:
+            print(f"Error: Invalid date format. Please use YYYY-MM-DD format.")
+            return []
+
+        # Set up the filter to get tasks due on the target date
+        filter_params = {
+            "filter": {
+                "property": "Date",
+                "date": {
+                    "equals": date
+                }
+            }
+        }
+        
+        # Initialize the Notion client
+        notion = Client(auth=os.getenv("NOTION_TOKEN"))
+        results = notion.databases.query(
+            database_id=os.getenv("NOTION_DATABASE_ID"), # Your database ID
+            **filter_params
+        )
+        tasks = []
+
+        for page in results["results"]:
+            due_date = page["properties"]["Date"]["date"]["start"]
+
+            # Parse the due date from Notion
+            due_datetime = datetime.fromisoformat(due_date.replace("Z", "+00:00"))
+
+            # Check if the task is due on the target date
+            if due_datetime.date() == target_datetime.date():
+                task = {
+                    "id": page["id"],
+                    "title": page["properties"]["Title"]["title"][0]["text"]["content"],
+                    "status": page["properties"]["Status"]["status"]["name"],
+                    "due_date": due_date
+                }
+                tasks.append(task)
+
+        if tasks:
+            return f"Todo list for {target_datetime}:\n" + "\n".join([str(task) for task in tasks])
+        else:
+            return f"No tasks found in Todo list for {target_datetime}."
+
+    except Exception as e:
+        return f"An error occurred: {str(e)}"
+
+
+================================================
+FILE: src/tools/research/__init__.py
+================================================
+from .search_web import search_web
+from .scrape_website import scrape_website_to_markdown
+from .search_linkedin import search_linkedin_tool
+
+__all__ = ['search_web', 'scrape_website_to_markdown', 'search_linkedin_tool']
+
+
+
+================================================
+FILE: src/tools/research/scrape_website.py
+================================================
+import re
+import html2text
+import requests
+from bs4 import BeautifulSoup
+from langsmith import traceable
+from pydantic import BaseModel, Field
+from langchain_core.tools import tool
+
+class ScrapeWebsiteInput(BaseModel):
+    url: str = Field(description="The URL of the website to scrape.")
+
+@tool("ScrapeWebsite", args_schema=ScrapeWebsiteInput)
+@traceable(run_type="tool", name="ScrapeWebsite")
+def scrape_website_to_markdown(url: str) -> str:
+    """
+    Use this tool to scrape a website based on its URL.
+    """
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.77 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.5",
+        "Accept-Encoding": "gzip, deflate"
+    }
+
+    # Make the HTTP request
+    response = requests.get(url, headers=headers)
+    if response.status_code != 200:
+        raise Exception(f"Failed to fetch the URL. Status code: {response.status_code}")
+
+    # Parse the HTML
+    soup = BeautifulSoup(response.text, "html.parser")
+    html_content = soup.prettify() 
+
+    # Convert HTML to markdown
+    h = html2text.HTML2Text()
+    h.ignore_links = False
+    h.ignore_images = True
+    h.ignore_tables = True
+    markdown_content = h.handle(html_content)
+
+    # Clean up excess newlines
+    markdown_content = re.sub(r"\n{3,}", "\n\n", markdown_content)
+    markdown_content = markdown_content.strip()
+
+    return markdown_content
+
+
+================================================
+FILE: src/tools/research/search_linkedin.py
+================================================
+import json
+import os
+import re
+import requests
+import html2text
+import time
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from langsmith import traceable
+from pydantic import BaseModel, Field
+from langchain_core.tools import tool
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.prompts import ChatPromptTemplate
+from src.utils import get_llm_by_provider
+
+def invoke_llm(system_prompt, user_message, model="openai/gpt-4o-mini"):
+    # Get the LLM instance by provider
+    llm = get_llm_by_provider(model, temperature=0.1)
+    
+    # Define the prompt template
+    prompt_template = ChatPromptTemplate.from_messages([
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=user_message),
+    ])
+    
+    # Create and run the LLM chain
+    chain = prompt_template | llm
+    response = chain.invoke({})
+    return response.content
+
+def google_search(query):
+    """
+    Performs a Google search using the provided query.
+    """
+    url = "https://google.serper.dev/search"
+    payload = json.dumps({"q": query})
+    headers = {
+        'X-API-KEY': os.environ['SERPER_API_KEY'],
+        'content-type': 'application/json'
+    }
+    response = requests.request("POST", url, headers=headers, data=payload)
+    results = response.json().get('organic', [])[:5] # Keep only 5 results
+    
+    # Extract only the title and link
+    return [{"title": result["title"], "link": result["link"]} for result in results]
+
+def extract_linkedin_url(search_results):
+    EXTRACT_LINKEDIN_URL_PROMPT = """
+    **Role:**  
+    You are an expert in extracting LinkedIn URLs from Google search results, specializing in finding the correct personal LinkedIn URL.
+
+    **Instructions:** 
+    1. Find the LinkedIn URL of a specific person working at a specific company. 
+    2. Output **only** the correct LinkedIn URL if found, nothing else.  
+    3. If no valid URL exists, output **only** an empty string.  
+    4. Only consider URLs with `"/in"`. Ignore those with `"/posts"` or `"/company"`.  
+    """
+    
+    result = invoke_llm(
+        system_prompt=EXTRACT_LINKEDIN_URL_PROMPT, 
+        user_message=str(search_results)
+    )
+    return result
+
+def scrape_linkedin(linkedin_url):
+    """
+    Scrapes the LinkedIn profile page and returns the HTML content.
+    """
+    # Set up the Chrome WebDriver with headless mode
+    service = Service(ChromeDriverManager().install())
+    options = webdriver.ChromeOptions()
+    options.add_argument("--headless")
+    
+    # Launch Chrome
+    driver = webdriver.Chrome(service=service, options=options)
+    
+    # Log in to LinkedIn
+    driver.get("https://www.linkedin.com/login")
+    time.sleep(5)
+    username = driver.find_element(By.ID, "username")
+    password = driver.find_element(By.ID, "password")
+    username.send_keys(os.getenv("LINKEDIN_USERNAME"))  # Replace with your email
+    password.send_keys(os.getenv("LINKEDIN_PASSWORD"))  # Replace with your password
+    password.send_keys(Keys.RETURN)
+    time.sleep(5)  # Wait for the login to complete
+
+    # Go to a person's profile
+    driver.get(linkedin_url)
+    driver.implicitly_wait(5)
+    
+    # Get the page source
+    html_content = driver.page_source
+    
+    driver.quit()
+    
+    # Convert HTML to markdown
+    h = html2text.HTML2Text()
+    h.ignore_links = True
+    h.ignore_images = True
+    h.ignore_tables = True
+    markdown_content = h.handle(html_content)
+
+    # Clean up excess newlines
+    markdown_content = re.sub(r"\n{3,}", "\n\n", markdown_content)
+    markdown_content = markdown_content.strip()
+    
+    SUMMARIZE_LINKEDIN_PROFILE_PROMPT = """
+    **Role:**  
+    You are an expert at summarizing LinkedIn profiles, extracting the most relevant information.
+    **Instructions:** 
+    From the provided LinkedIn profile content, extract the following information: 
+    1. Extract the information and summarize it in a clear and concise format.
+    2. If some information is not available, omit it from the summary.
+    """
+    
+    summary = invoke_llm(
+        system_prompt=SUMMARIZE_LINKEDIN_PROFILE_PROMPT, 
+        user_message=markdown_content
+    )
+    return summary
+
+class SearchLinkedinInput(BaseModel):
+    person_name: str = Field(
+        default=None,
+        description="The name of the person to search for on LinkedIn. Optional."
+    )
+    company_name: str = Field(
+        description="The company name to search on LinkedIn."
+    )
+
+@tool("SearchLinkedin", args_schema=SearchLinkedinInput)
+@traceable(run_type="tool", name="SearchLinkedin")
+def search_linkedin_tool(person_name: str = None, company_name: str = ""):
+    """
+    Use this tool to search for a person or a company on LinkedIn.
+    """
+    if person_name:
+        search_query = f"{person_name} {company_name} site:linkedin.com"
+    else:
+        search_query = f"{company_name} site:linkedin.com"
+
+    search_results = google_search(search_query)
+    linkedin_url = extract_linkedin_url(search_results)
+
+    if linkedin_url:
+        return scrape_linkedin(linkedin_url)
+    else:
+        return "LinkedIn profile not found."
+
+
+================================================
+FILE: src/tools/research/search_web.py
+================================================
+import os
+from langsmith import traceable
+from langchain_core.tools import tool
+from pydantic import BaseModel, Field
+from tavily import TavilyClient
+
+class SearchWebInput(BaseModel):
+    query: str = Field(description="The search query string")
+
+@tool("SearchWeb", args_schema=SearchWebInput)
+@traceable(run_type="tool", name="SearchWeb")
+def search_web(query: str, search_type: str = "basic", max_results: int = 5):
+    """
+    Use this tool to perform a web search based on the given query.
+    """
+    try:
+        client = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
+        search_response = client.search(query=query, search_depth=search_type, max_results=max_results)
+        results = search_response["results"]
+
+        if not results:
+            return "No results found."
+
+        formatted_output = ""
+        for result in results:
+            title = result.get('title', result.get('url', 'No Title'))
+            url = result.get('url', 'No URL')
+            content = result.get('content', 'No Content')
+
+            formatted_output += f"Title: {title}\n"
+            formatted_output += f"URL: {url}\n"
+            formatted_output += f"Content: {content}\n"
+            formatted_output += "-" * 20 + "\n"
+
+        return formatted_output
+
+    except Exception as e:
+        return f"An error occurred: {e}"
+
+
+================================================
+FILE: src/tools/slack/__init__.py
+================================================
+from .send_messages import send_slack_message
+from .get_messages import get_slack_messages
+
+__all__ = ['send_slack_message', 'get_slack_messages']
+
+
+
+================================================
+FILE: src/tools/slack/get_messages.py
+================================================
+import os
+import re
+from langsmith import traceable
+from pydantic import BaseModel
+from langchain_core.tools import tool
+from slack_sdk import WebClient
+from slack_sdk.errors import SlackApiError
+
+class GetMessagesInput(BaseModel):
+    """Input schema for get_messages tool."""
+    pass  # No input needed for this tool
+
+@tool("GetSlackMessages", args_schema=GetMessagesInput)
+@traceable(run_type="tool", name="GetSlackMessages")
+def get_slack_messages():
+    """
+    Use this tool to retrieve unread messages from Slack.
+    """
+    try:
+        messages = []
+        # Get unread DMs
+        client = WebClient(token=os.getenv("SLACK_BOT_TOKEN"))
+        dms_response = client.conversations_list(types="im", exclude_archived=True)
+        for channel in dms_response["channels"]:
+          try:
+            history = client.conversations_history(channel=channel["id"], unreads_only=True, include_all_metadata=True, limit=10)
+            for message in history["messages"]:
+              if message.get("unread_count", 0) > 0 or message.get("reply_count", 0) > 0:
+                # Fetch user details including real name
+                user_info = client.users_info(user=message["user"])
+                user_name = user_info["user"]["real_name"] if user_info["user"]["real_name"] else user_info["user"]["name"]
+
+                messages.append(
+                  {
+                      "channel": channel["id"],
+                      "channel_type": "DM",
+                      "user": user_name,
+                      "user_id": message["user"],
+                      "message": message["text"]
+                  }
+                )
+          except SlackApiError as e:
+            if e.response["error"] == "not_in_channel":
+              pass
+            else:
+              print(f"Error fetching history for channel {channel['id']}: {e}")
+
+        # Get unread mentions in channels
+        channels_response = client.conversations_list(types="public_channel,private_channel", exclude_archived=True)
+        for channel in channels_response["channels"]:
+          try:
+            history = client.conversations_history(channel=channel["id"], unreads_only=True, include_all_metadata=True, limit=10)
+            for message in history["messages"]:
+                if "unread_count" in message or "reply_count" in message:
+                    mentions = re.findall(r"<@(\w+)>", message["text"])  # Find all mentions in the message
+                    if mentions:
+                        # Fetch user details including real name
+                        user_info = client.users_info(user=message["user"])
+                        user_name = user_info["user"]["real_name"] if user_info["user"]["real_name"] else user_info["user"]["name"]
+                        messages.append(
+                            {
+                                "channel": channel["name"],
+                                "channel_type": "channel",
+                                "user": user_name,
+                                "user_id": message["user"],
+                                "message": message["text"],
+                            }
+                        )
+          except SlackApiError as e:
+            if e.response["error"] == "not_in_channel":
+              pass
+            else:
+              print(f"Error fetching history for channel {channel['name'] or channel['id']}: {e}")
+              
+        if not messages:
+          return "No messages found."
+
+        return messages
+
+    except SlackApiError as e:
+        print(f"Error fetching messages: {e}")
+        return f"Error fetching messages: {e}"
+
+
+================================================
+FILE: src/tools/slack/send_messages.py
+================================================
+import os
+from langsmith import traceable
+from pydantic import BaseModel, Field
+from langchain_core.tools import tool
+from slack_sdk import WebClient
+from slack_sdk.errors import SlackApiError
+
+class SendSlackMessageInput(BaseModel):
+    channel: str = Field(..., description="The ID or name of the channel to send the message to.")
+    message: str = Field(..., description="The message to send.")
+
+@tool("SendSlackMessage", args_schema=SendSlackMessageInput)
+@traceable(run_type="tool", name="SendSlackMessage")
+def send_slack_message(channel: str, message: str):
+    """
+    Use this tool to send a message to a specific Slack channel.
+    """
+    try:
+        client = WebClient(token=os.getenv("SLACK_BOT_TOKEN"))
+        response = client.chat_postMessage(channel=channel, text=message)
+        if response["ok"]:
+            return f"Message sent to #{channel} successfully."
+        else:
+            return f"Error sending message: {response['error']}"
+    except SlackApiError as e:
+        print(f"Error sending message: {e}")
+        return f"Error sending message: {e}"
+

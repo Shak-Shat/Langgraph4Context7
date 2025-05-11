@@ -1,0 +1,3140 @@
+Directory structure:
+└── human_in_the_loop/
+    ├── breakpoints.ipynb
+    ├── dynamic_breakpoints.ipynb
+    ├── edit-graph-state.ipynb
+    ├── review-tool-calls-openai.ipynb
+    ├── review-tool-calls.ipynb
+    ├── time-travel.ipynb
+    └── wait-user-input.ipynb
+
+================================================
+FILE: examples/human_in_the_loop/breakpoints.ipynb
+================================================
+# Jupyter notebook converted to Python script.
+
+"""
+# How to add breakpoints
+
+!!! tip "Prerequisites"
+
+    This guide assumes familiarity with the following concepts:
+
+    * [Breakpoints](https://langchain-ai.github.io/langgraph/concepts/breakpoints)
+    * [LangGraph Glossary](https://langchain-ai.github.io/langgraph/concepts/low_level)
+    
+
+Human-in-the-loop (HIL) interactions are crucial for [agentic systems](https://langchain-ai.github.io/langgraph/concepts/agentic_concepts/#human-in-the-loop). [Breakpoints](https://langchain-ai.github.io/langgraph/concepts/low_level/#breakpoints) are a common HIL interaction pattern, allowing the graph to stop at specific steps and seek human approval before proceeding (e.g., for sensitive actions). 
+
+Breakpoints are built on top of LangGraph [checkpoints](https://langchain-ai.github.io/langgraph/concepts/low_level/#checkpointer), which save the graph's state after each node execution. Checkpoints are saved in [threads](https://langchain-ai.github.io/langgraph/concepts/low_level/#threads) that preserve graph state and can be accessed after a graph has finished execution. This allows for graph execution to pause at specific points, await human approval, and then resume execution from the last checkpoint.
+
+![approval.png](attachment:e47c6871-a603-43b7-a8b0-1c75d2348747.png)
+"""
+
+"""
+## Setup
+
+First we need to install the packages required
+"""
+
+%%capture --no-stderr
+%pip install --quiet -U langgraph langchain_anthropic
+
+"""
+Next, we need to set API keys for Anthropic (the LLM we will use)
+"""
+
+import getpass
+import os
+
+
+def _set_env(var: str):
+    if not os.environ.get(var):
+        os.environ[var] = getpass.getpass(f"{var}: ")
+
+
+_set_env("ANTHROPIC_API_KEY")
+# Output:
+#   ANTHROPIC_API_KEY:  ········
+
+
+"""
+<div class="admonition tip">
+    <p class="admonition-title">Set up <a href="https://smith.langchain.com">LangSmith</a> for LangGraph development</p>
+    <p style="padding-top: 5px;">
+        Sign up for LangSmith to quickly spot issues and improve the performance of your LangGraph projects. LangSmith lets you use trace data to debug, test, and monitor your LLM apps built with LangGraph — read more about how to get started <a href="https://docs.smith.langchain.com">here</a>. 
+    </p>
+</div>
+"""
+
+"""
+## Simple Usage
+
+Let's look at very basic usage of this.
+
+Below, we do two things:
+
+1) We specify the [breakpoint](https://langchain-ai.github.io/langgraph/concepts/low_level/#breakpoints) using `interrupt_before` the specified step.
+
+2) We set up a [checkpointer](https://langchain-ai.github.io/langgraph/concepts/low_level/#checkpointer) to save the state of the graph.
+"""
+
+from typing_extensions import TypedDict
+from langgraph.graph import StateGraph, START, END
+from langgraph.checkpoint.redis import RedisSaver
+from IPython.display import Image, display
+
+
+class State(TypedDict):
+    input: str
+
+
+def step_1(state):
+    print("---Step 1---")
+    pass
+
+
+def step_2(state):
+    print("---Step 2---")
+    pass
+
+
+def step_3(state):
+    print("---Step 3---")
+    pass
+
+
+builder = StateGraph(State)
+builder.add_node("step_1", step_1)
+builder.add_node("step_2", step_2)
+builder.add_node("step_3", step_3)
+builder.add_edge(START, "step_1")
+builder.add_edge("step_1", "step_2")
+builder.add_edge("step_2", "step_3")
+builder.add_edge("step_3", END)
+
+# Set up Redis connection for checkpointer
+REDIS_URI = "redis://redis:6379"
+memory = None
+with RedisSaver.from_conn_string(REDIS_URI) as cp:
+    cp.setup()
+    memory = cp
+
+# Add
+graph = builder.compile(checkpointer=memory, interrupt_before=["step_3"])
+
+# View
+display(Image(graph.get_graph().draw_mermaid_png()))
+# Output:
+#   <IPython.core.display.Image object>
+
+"""
+We create a [thread ID](https://langchain-ai.github.io/langgraph/concepts/low_level/#threads) for the checkpointer.
+
+We run until step 3, as defined with `interrupt_before`. 
+
+After the user input / approval, [we resume execution](https://langchain-ai.github.io/langgraph/concepts/low_level/#breakpoints) by invoking the graph with `None`. 
+"""
+
+# Input
+initial_input = {"input": "hello world"}
+
+# Thread
+thread = {"configurable": {"thread_id": "1"}}
+
+# Run the graph until the first interruption
+for event in graph.stream(initial_input, thread, stream_mode="values"):
+    print(event)
+
+try:
+    user_approval = input("Do you want to go to Step 3? (yes/no): ")
+except:
+    user_approval = "yes"
+
+if user_approval.lower() == "yes":
+    # If approved, continue the graph execution
+    for event in graph.stream(None, thread, stream_mode="values"):
+        print(event)
+else:
+    print("Operation cancelled by user.")
+# Output:
+#   {'input': 'hello world'}
+
+#   ---Step 1---
+
+#   ---Step 2---
+
+#   Do you want to go to Step 3? (yes/no):  yes
+
+#   {'input': 'hello world'}
+
+#   ---Step 3---
+
+#   Do you want to go to Step 3? (yes/no):  yes
+
+#   ---Step 3---
+
+
+"""
+## Agent
+
+In the context of agents, breakpoints are useful to manually approve certain agent actions.
+ 
+To show this, we will build a relatively simple ReAct-style agent that does tool calling. 
+
+We'll add a breakpoint before the `action` node is called. 
+"""
+
+# Set up the tool
+from langchain_anthropic import ChatAnthropic
+from langchain_core.tools import tool
+from langgraph.graph import MessagesState, START
+from langgraph.prebuilt import ToolNode
+from langgraph.graph import END, StateGraph
+from langgraph.checkpoint.redis import RedisSaver
+
+
+@tool
+def search(query: str):
+    """Call to surf the web."""
+    # This is a placeholder for the actual implementation
+    # Don't let the LLM know this though 😊
+    return [
+        "It's sunny in San Francisco, but you better look out if you're a Gemini 😈."
+    ]
+
+
+tools = [search]
+tool_node = ToolNode(tools)
+
+# Set up the model
+
+model = ChatAnthropic(model="claude-3-5-sonnet-20240620")
+model = model.bind_tools(tools)
+
+
+# Define nodes and conditional edges
+
+
+# Define the function that determines whether to continue or not
+def should_continue(state):
+    messages = state["messages"]
+    last_message = messages[-1]
+    # If there is no function call, then we finish
+    if not last_message.tool_calls:
+        return "end"
+    # Otherwise if there is, we continue
+    else:
+        return "continue"
+
+
+# Define the function that calls the model
+def call_model(state):
+    messages = state["messages"]
+    response = model.invoke(messages)
+    # We return a list, because this will get added to the existing list
+    return {"messages": [response]}
+
+
+# Define a new graph
+workflow = StateGraph(MessagesState)
+
+# Define the two nodes we will cycle between
+workflow.add_node("agent", call_model)
+workflow.add_node("action", tool_node)
+
+# Set the entrypoint as `agent`
+# This means that this node is the first one called
+workflow.add_edge(START, "agent")
+
+# We now add a conditional edge
+workflow.add_conditional_edges(
+    # First, we define the start node. We use `agent`.
+    # This means these are the edges taken after the `agent` node is called.
+    "agent",
+    # Next, we pass in the function that will determine which node is called next.
+    should_continue,
+    # Finally we pass in a mapping.
+    # The keys are strings, and the values are other nodes.
+    # END is a special node marking that the graph should finish.
+    # What will happen is we will call `should_continue`, and then the output of that
+    # will be matched against the keys in this mapping.
+    # Based on which one it matches, that node will then be called.
+    {
+        # If `tools`, then we call the tool node.
+        "continue": "action",
+        # Otherwise we finish.
+        "end": END,
+    },
+)
+
+# We now add a normal edge from `tools` to `agent`.
+# This means that after `tools` is called, `agent` node is called next.
+workflow.add_edge("action", "agent")
+
+# Set up Redis connection for checkpointer
+REDIS_URI = "redis://redis:6379"
+memory = None
+with RedisSaver.from_conn_string(REDIS_URI) as cp:
+    cp.setup()
+    memory = cp
+
+# Finally, we compile it!
+# This compiles it into a LangChain Runnable,
+# meaning you can use it as you would any other runnable
+
+# We add in `interrupt_before=["action"]`
+# This will add a breakpoint before the `action` node is called
+app = workflow.compile(checkpointer=memory, interrupt_before=["action"])
+
+display(Image(app.get_graph().draw_mermaid_png()))
+# Output:
+#   [32m20:10:34[0m [34mredisvl.index.index[0m [1;30mINFO[0m   Index already exists, not overwriting.
+
+#   [32m20:10:34[0m [34mredisvl.index.index[0m [1;30mINFO[0m   Index already exists, not overwriting.
+
+#   [32m20:10:34[0m [34mredisvl.index.index[0m [1;30mINFO[0m   Index already exists, not overwriting.
+
+#   <IPython.core.display.Image object>
+
+"""
+## Interacting with the Agent
+
+We can now interact with the agent.
+
+We see that it stops before calling a tool, because `interrupt_before` is set before the `action` node.
+"""
+
+from langchain_core.messages import HumanMessage
+
+thread = {"configurable": {"thread_id": "3"}}
+inputs = [HumanMessage(content="search for the weather in sf now")]
+for event in app.stream({"messages": inputs}, thread, stream_mode="values"):
+    event["messages"][-1].pretty_print()
+# Output:
+#   ================================[1m Human Message [0m=================================
+
+#   
+
+#   search for the weather in sf now
+
+#   ==================================[1m Ai Message [0m==================================
+
+#   
+
+#   [{'text': "Certainly! I'll search for the current weather in San Francisco for you. Let me use the search function to find this information.", 'type': 'text'}, {'id': 'toolu_01PKgmY3du7hFeLNPu2P3hMc', 'input': {'query': 'current weather in San Francisco'}, 'name': 'search', 'type': 'tool_use'}]
+
+#   Tool Calls:
+
+#     search (toolu_01PKgmY3du7hFeLNPu2P3hMc)
+
+#    Call ID: toolu_01PKgmY3du7hFeLNPu2P3hMc
+
+#     Args:
+
+#       query: current weather in San Francisco
+
+
+"""
+**Resume**
+
+We can now call the agent again with no inputs to continue.
+
+This will run the tool as requested.
+
+Running an interrupted graph with `None` in the inputs means to `proceed as if the interruption didn't occur.`
+"""
+
+for event in app.stream(None, thread, stream_mode="values"):
+    event["messages"][-1].pretty_print()
+# Output:
+#   ==================================[1m Ai Message [0m==================================
+
+#   
+
+#   [{'text': "Certainly! I'll search for the current weather in San Francisco for you. Let me use the search function to find this information.", 'type': 'text'}, {'id': 'toolu_01PKgmY3du7hFeLNPu2P3hMc', 'input': {'query': 'current weather in San Francisco'}, 'name': 'search', 'type': 'tool_use'}]
+
+#   Tool Calls:
+
+#     search (toolu_01PKgmY3du7hFeLNPu2P3hMc)
+
+#    Call ID: toolu_01PKgmY3du7hFeLNPu2P3hMc
+
+#     Args:
+
+#       query: current weather in San Francisco
+
+#   =================================[1m Tool Message [0m=================================
+
+#   Name: search
+
+#   
+
+#   ["It's sunny in San Francisco, but you better look out if you're a Gemini 😈."]
+
+#   ==================================[1m Ai Message [0m==================================
+
+#   
+
+#   Based on the search results, I can provide you with information about the current weather in San Francisco:
+
+#   
+
+#   The weather in San Francisco is currently sunny. This means it's a clear day with plenty of sunshine.
+
+#   
+
+#   However, I should note that the search result included an unusual comment about Gemini zodiac signs. This appears to be unrelated to the weather and might be a quirk of the search results or possibly a reference to some astrological forecast. For the purposes of your weather inquiry, we can focus on the fact that it's sunny in San Francisco right now.
+
+#   
+
+#   Is there anything else you'd like to know about the weather in San Francisco or any other location?
+
+
+
+
+================================================
+FILE: examples/human_in_the_loop/dynamic_breakpoints.ipynb
+================================================
+# Jupyter notebook converted to Python script.
+
+"""
+# How to add dynamic breakpoints with `NodeInterrupt`
+
+!!! note
+
+    For **human-in-the-loop** workflows use the new [`interrupt()`](../../../reference/types/#langgraph.types.interrupt) function for **human-in-the-loop** workflows. Please review the [Human-in-the-loop conceptual guide](../../../concepts/human_in_the_loop) for more information about design patterns with `interrupt`.
+
+!!! tip "Prerequisites"
+
+    This guide assumes familiarity with the following concepts:
+
+    * [Breakpoints](../../../concepts/breakpoints)
+    * [LangGraph Glossary](../../../concepts/low_level)
+    
+
+Human-in-the-loop (HIL) interactions are crucial for [agentic systems](https://langchain-ai.github.io/langgraph/concepts/agentic_concepts/#human-in-the-loop). [Breakpoints](https://langchain-ai.github.io/langgraph/concepts/low_level/#breakpoints) are a common HIL interaction pattern, allowing the graph to stop at specific steps and seek human approval before proceeding (e.g., for sensitive actions).
+
+In LangGraph you can add breakpoints before / after a node is executed. But oftentimes it may be helpful to **dynamically** interrupt the graph from inside a given node based on some condition. When doing so, it may also be helpful to include information about **why** that interrupt was raised.
+
+This guide shows how you can dynamically interrupt the graph using `NodeInterrupt` -- a special exception that can be raised from inside a node. Let's see it in action!
+
+
+## Setup
+
+First, let's install the required packages
+"""
+
+%%capture --no-stderr
+%pip install -U langgraph
+
+"""
+<div class="admonition tip">
+    <p class="admonition-title">Set up <a href="https://smith.langchain.com">LangSmith</a> for LangGraph development</p>
+    <p style="padding-top: 5px;">
+        Sign up for LangSmith to quickly spot issues and improve the performance of your LangGraph projects. LangSmith lets you use trace data to debug, test, and monitor your LLM apps built with LangGraph — read more about how to get started <a href="https://docs.smith.langchain.com">here</a>. 
+    </p>
+</div>
+"""
+
+"""
+## Define the graph
+"""
+
+from typing_extensions import TypedDict
+from IPython.display import Image, display
+
+from langgraph.graph import StateGraph, START, END
+from langgraph.checkpoint.redis import RedisSaver
+from langgraph.errors import NodeInterrupt
+
+# Set up Redis connection
+REDIS_URI = "redis://redis:6379"
+memory = None
+with RedisSaver.from_conn_string(REDIS_URI) as cp:
+    cp.setup()
+    memory = cp
+
+class State(TypedDict):
+    input: str
+
+
+def step_1(state: State) -> State:
+    print("---Step 1---")
+    return state
+
+
+def step_2(state: State) -> State:
+    # Let's optionally raise a NodeInterrupt
+    # if the length of the input is longer than 5 characters
+    if len(state["input"]) > 5:
+        raise NodeInterrupt(
+            f"Received input that is longer than 5 characters: {state['input']}"
+        )
+
+    print("---Step 2---")
+    return state
+
+
+def step_3(state: State) -> State:
+    print("---Step 3---")
+    return state
+
+
+builder = StateGraph(State)
+builder.add_node("step_1", step_1)
+builder.add_node("step_2", step_2)
+builder.add_node("step_3", step_3)
+builder.add_edge(START, "step_1")
+builder.add_edge("step_1", "step_2")
+builder.add_edge("step_2", "step_3")
+builder.add_edge("step_3", END)
+
+# Compile the graph with memory
+graph = builder.compile(checkpointer=memory)
+
+# View
+display(Image(graph.get_graph().draw_mermaid_png()))
+# Output:
+#   <IPython.core.display.Image object>
+
+"""
+## Run the graph with dynamic interrupt
+"""
+
+"""
+First, let's run the graph with an input that <= 5 characters long. This should safely ignore the interrupt condition we defined and return the original input at the end of the graph execution.
+"""
+
+initial_input = {"input": "hello"}
+thread_config = {"configurable": {"thread_id": "1"}}
+
+for event in graph.stream(initial_input, thread_config, stream_mode="values"):
+    print(event)
+# Output:
+#   {'input': 'hello'}
+
+#   ---Step 1---
+
+#   {'input': 'hello'}
+
+#   ---Step 2---
+
+#   {'input': 'hello'}
+
+#   ---Step 3---
+
+#   {'input': 'hello'}
+
+
+"""
+If we inspect the graph at this point, we can see that there are no more tasks left to run and that the graph indeed finished execution.
+"""
+
+state = graph.get_state(thread_config)
+print(state.next)
+print(state.tasks)
+# Output:
+#   ()
+
+#   ()
+
+
+"""
+Now, let's run the graph with an input that's longer than 5 characters. This should trigger the dynamic interrupt we defined via raising a `NodeInterrupt` error inside the `step_2` node.
+"""
+
+initial_input = {"input": "hello world"}
+thread_config = {"configurable": {"thread_id": "2"}}
+
+# Run the graph until the first interruption
+for event in graph.stream(initial_input, thread_config, stream_mode="values"):
+    print(event)
+# Output:
+#   {'input': 'hello world'}
+
+#   ---Step 1---
+
+#   {'input': 'hello world'}
+
+#   {'__interrupt__': (Interrupt(value='Received input that is longer than 5 characters: hello world', resumable=False, ns=None),)}
+
+
+"""
+We can see that the graph now stopped while executing `step_2`. If we inspect the graph state at this point, we can see the information on what node is set to execute next (`step_2`), as well as what node raised the interrupt (also `step_2`), and additional information about the interrupt.
+"""
+
+state = graph.get_state(thread_config)
+print(state.next)
+print(state.tasks)
+# Output:
+#   ('step_2',)
+
+#   (PregelTask(id='35aff9f0-f802-eb95-9285-09849cdfd383', name='step_2', path=('__pregel_pull', 'step_2'), error=None, interrupts=(), state=None, result=None),)
+
+
+"""
+If we try to resume the graph from the breakpoint, we will simply interrupt again as our inputs & graph state haven't changed.
+"""
+
+# NOTE: to resume the graph from a dynamic interrupt we use the same syntax as with regular interrupts -- we pass None as the input
+for event in graph.stream(None, thread_config, stream_mode="values"):
+    print(event)
+# Output:
+#   {'input': 'hello world'}
+
+#   {'__interrupt__': (Interrupt(value='Received input that is longer than 5 characters: hello world', resumable=False, ns=None),)}
+
+
+state = graph.get_state(thread_config)
+print(state.next)
+print(state.tasks)
+# Output:
+#   ('step_2',)
+
+#   (PregelTask(id='35aff9f0-f802-eb95-9285-09849cdfd383', name='step_2', path=('__pregel_pull', 'step_2'), error=None, interrupts=(), state=None, result=None),)
+
+
+"""
+## Update the graph state
+"""
+
+"""
+To get around it, we can do several things. 
+
+First, we could simply run the graph on a different thread with a shorter input, like we did in the beginning. Alternatively, if we want to resume the graph execution from the breakpoint, we can update the state to have an input that's shorter than 5 characters (the condition for our interrupt).
+"""
+
+# NOTE: this update will be applied as of the last successful node before the interrupt, i.e. `step_1`, right before the node with an interrupt
+graph.update_state(config=thread_config, values={"input": "foo"})
+for event in graph.stream(None, thread_config, stream_mode="values"):
+    print(event)
+
+state = graph.get_state(thread_config)
+print(state.next)
+print(state.values)
+# Output:
+#   {'input': 'foo'}
+
+#   ---Step 2---
+
+#   {'input': 'foo'}
+
+#   ---Step 3---
+
+#   {'input': 'foo'}
+
+#   ()
+
+#   {'input': 'foo'}
+
+
+"""
+You can also update the state **as node `step_2`** (interrupted node) which would skip over that node altogether
+"""
+
+initial_input = {"input": "hello world"}
+thread_config = {"configurable": {"thread_id": "3"}}
+
+# Run the graph until the first interruption
+for event in graph.stream(initial_input, thread_config, stream_mode="values"):
+    print(event)
+# Output:
+#   {'input': 'hello world'}
+
+#   ---Step 1---
+
+#   {'input': 'hello world'}
+
+#   {'__interrupt__': (Interrupt(value='Received input that is longer than 5 characters: hello world', resumable=False, ns=None),)}
+
+
+# NOTE: this update will skip the node `step_2` altogether
+graph.update_state(config=thread_config, values=None, as_node="step_2")
+for event in graph.stream(None, thread_config, stream_mode="values"):
+    print(event)
+
+state = graph.get_state(thread_config)
+print(state.next)
+print(state.values)
+# Output:
+#   {'input': 'hello world'}
+
+#   ---Step 3---
+
+#   {'input': 'hello world'}
+
+#   ()
+
+#   {'input': 'hello world'}
+
+
+
+
+================================================
+FILE: examples/human_in_the_loop/edit-graph-state.ipynb
+================================================
+# Jupyter notebook converted to Python script.
+
+"""
+# How to edit graph state
+
+!!! tip "Prerequisites"
+
+    * [Human-in-the-loop](../../../concepts/human_in_the_loop)
+    * [Breakpoints](../../../concepts/breakpoints)
+    * [LangGraph Glossary](../../../concepts/low_level)
+
+Human-in-the-loop (HIL) interactions are crucial for [agentic systems](https://langchain-ai.github.io/langgraph/concepts/agentic_concepts/#human-in-the-loop). Manually updating the graph state a common HIL interaction pattern, allowing the human to edit actions (e.g., what tool is being called or how it is being called).
+
+We can implement this in LangGraph using a [breakpoint](https://langchain-ai.github.io/langgraph/how-tos/human_in_the_loop/breakpoints/): breakpoints allow us to interrupt graph execution before a specific step. At this breakpoint, we can manually update the graph state and then resume from that spot to continue.  
+
+![edit_graph_state.png](attachment:1a5388fe-fa93-4607-a009-d71fe2223f5a.png)
+"""
+
+"""
+## Setup
+
+First we need to install the packages required
+"""
+
+%%capture --no-stderr
+%pip install --quiet -U langgraph langchain_anthropic
+
+"""
+Next, we need to set API keys for Anthropic (the LLM we will use)
+"""
+
+import getpass
+import os
+
+
+def _set_env(var: str):
+    if not os.environ.get(var):
+        os.environ[var] = getpass.getpass(f"{var}: ")
+
+
+_set_env("ANTHROPIC_API_KEY")
+# Output:
+#   ANTHROPIC_API_KEY:  ········
+
+
+"""
+<div class="admonition tip">
+    <p class="admonition-title">Set up <a href="https://smith.langchain.com">LangSmith</a> for LangGraph development</p>
+    <p style="padding-top: 5px;">
+        Sign up for LangSmith to quickly spot issues and improve the performance of your LangGraph projects. LangSmith lets you use trace data to debug, test, and monitor your LLM apps built with LangGraph — read more about how to get started <a href="https://docs.smith.langchain.com">here</a>. 
+    </p>
+</div>
+"""
+
+"""
+## Simple Usage
+
+Let's look at very basic usage of this.
+
+Below, we do three things:
+
+1) We specify the [breakpoint](https://langchain-ai.github.io/langgraph/concepts/low_level/#breakpoints) using `interrupt_before` a specified step (node).
+
+2) We set up a [checkpointer](https://langchain-ai.github.io/langgraph/concepts/low_level/#checkpointer) to save the state of the graph up until this node.
+
+3) We use `.update_state` to update the state of the graph.
+"""
+
+from typing_extensions import TypedDict
+from langgraph.graph import StateGraph, START, END
+from langgraph.checkpoint.redis import RedisSaver
+from IPython.display import Image, display
+
+# Set up Redis connection
+REDIS_URI = "redis://redis:6379"
+memory = None
+with RedisSaver.from_conn_string(REDIS_URI) as cp:
+    cp.setup()
+    memory = cp
+
+class State(TypedDict):
+    input: str
+
+
+def step_1(state):
+    print("---Step 1---")
+    pass
+
+
+def step_2(state):
+    print("---Step 2---")
+    pass
+
+
+def step_3(state):
+    print("---Step 3---")
+    pass
+
+
+builder = StateGraph(State)
+builder.add_node("step_1", step_1)
+builder.add_node("step_2", step_2)
+builder.add_node("step_3", step_3)
+builder.add_edge(START, "step_1")
+builder.add_edge("step_1", "step_2")
+builder.add_edge("step_2", "step_3")
+builder.add_edge("step_3", END)
+
+# Add
+graph = builder.compile(checkpointer=memory, interrupt_before=["step_2"])
+
+# View
+display(Image(graph.get_graph().draw_mermaid_png()))
+# Output:
+#   <IPython.core.display.Image object>
+
+# Input
+initial_input = {"input": "hello world"}
+
+# Thread
+thread = {"configurable": {"thread_id": "1"}}
+
+# Run the graph until the first interruption
+for event in graph.stream(initial_input, thread, stream_mode="values"):
+    print(event)
+# Output:
+#   {'input': 'hello world'}
+
+#   ---Step 1---
+
+
+"""
+Now, we can just manually update our graph state - 
+"""
+
+print("Current state!")
+print(graph.get_state(thread).values)
+
+graph.update_state(thread, {"input": "hello universe!"})
+
+print("---\n---\nUpdated state!")
+print(graph.get_state(thread).values)
+# Output:
+#   Current state!
+
+#   {'input': 'hello world'}
+
+#   ---
+
+#   ---
+
+#   Updated state!
+
+#   {'input': 'hello universe!'}
+
+
+# Continue the graph execution
+for event in graph.stream(None, thread, stream_mode="values"):
+    print(event)
+# Output:
+#   {'input': 'hello universe!'}
+
+#   ---Step 2---
+
+#   ---Step 3---
+
+
+"""
+## Agent
+
+In the context of agents, updating state is useful for things like editing tool calls.
+ 
+To show this, we will build a relatively simple ReAct-style agent that does tool calling. 
+
+We will use Anthropic's models and a fake tool (just for demo purposes).
+"""
+
+# Set up the tool
+from langchain_anthropic import ChatAnthropic
+from langchain_core.tools import tool
+from langgraph.graph import MessagesState, START, END, StateGraph
+from langgraph.prebuilt import ToolNode
+from langgraph.checkpoint.redis import RedisSaver
+
+
+@tool
+def search(query: str):
+    """Call to surf the web."""
+    # This is a placeholder for the actual implementation
+    # Don't let the LLM know this though 😊
+    return [
+        "It's sunny in San Francisco, but you better look out if you're a Gemini 😈."
+    ]
+
+
+tools = [search]
+tool_node = ToolNode(tools)
+
+# Set up the model
+
+model = ChatAnthropic(model="claude-3-5-sonnet-20240620")
+model = model.bind_tools(tools)
+
+
+# Define nodes and conditional edges
+
+
+# Define the function that determines whether to continue or not
+def should_continue(state):
+    messages = state["messages"]
+    last_message = messages[-1]
+    # If there is no function call, then we finish
+    if not last_message.tool_calls:
+        return "end"
+    # Otherwise if there is, we continue
+    else:
+        return "continue"
+
+
+# Define the function that calls the model
+def call_model(state):
+    messages = state["messages"]
+    response = model.invoke(messages)
+    # We return a list, because this will get added to the existing list
+    return {"messages": [response]}
+
+
+# Define a new graph
+workflow = StateGraph(MessagesState)
+
+# Define the two nodes we will cycle between
+workflow.add_node("agent", call_model)
+workflow.add_node("action", tool_node)
+
+# Set the entrypoint as `agent`
+# This means that this node is the first one called
+workflow.add_edge(START, "agent")
+
+# We now add a conditional edge
+workflow.add_conditional_edges(
+    # First, we define the start node. We use `agent`.
+    # This means these are the edges taken after the `agent` node is called.
+    "agent",
+    # Next, we pass in the function that will determine which node is called next.
+    should_continue,
+    # Finally we pass in a mapping.
+    # The keys are strings, and the values are other nodes.
+    # END is a special node marking that the graph should finish.
+    # What will happen is we will call `should_continue`, and then the output of that
+    # will be matched against the keys in this mapping.
+    # Based on which one it matches, that node will then be called.
+    {
+        # If `tools`, then we call the tool node.
+        "continue": "action",
+        # Otherwise we finish.
+        "end": END,
+    },
+)
+
+# We now add a normal edge from `tools` to `agent`.
+# This means that after `tools` is called, `agent` node is called next.
+workflow.add_edge("action", "agent")
+
+# Set up Redis connection
+REDIS_URI = "redis://redis:6379"
+memory = None
+with RedisSaver.from_conn_string(REDIS_URI) as cp:
+    cp.setup()
+    memory = cp
+
+# Finally, we compile it!
+# This compiles it into a LangChain Runnable,
+# meaning you can use it as you would any other runnable
+
+# We add in `interrupt_before=["action"]`
+# This will add a breakpoint before the `action` node is called
+app = workflow.compile(checkpointer=memory, interrupt_before=["action"])
+# Output:
+#   [32m20:11:49[0m [34mredisvl.index.index[0m [1;30mINFO[0m   Index already exists, not overwriting.
+
+#   [32m20:11:49[0m [34mredisvl.index.index[0m [1;30mINFO[0m   Index already exists, not overwriting.
+
+#   [32m20:11:49[0m [34mredisvl.index.index[0m [1;30mINFO[0m   Index already exists, not overwriting.
+
+
+"""
+## Interacting with the Agent
+
+We can now interact with the agent and see that it stops before calling a tool.
+
+"""
+
+from langchain_core.messages import HumanMessage
+
+thread = {"configurable": {"thread_id": "3"}}
+inputs = [HumanMessage(content="search for the weather in sf now")]
+for event in app.stream({"messages": inputs}, thread, stream_mode="values"):
+    event["messages"][-1].pretty_print()
+# Output:
+#   ================================[1m Human Message [0m=================================
+
+#   
+
+#   search for the weather in sf now
+
+#   ==================================[1m Ai Message [0m==================================
+
+#   
+
+#   [{'text': "Certainly! I'll search for the current weather in San Francisco for you. Let me use the search function to find this information.", 'type': 'text'}, {'id': 'toolu_014PLid9D7LESgu1CGXJ39Mu', 'input': {'query': 'current weather in San Francisco'}, 'name': 'search', 'type': 'tool_use'}]
+
+#   Tool Calls:
+
+#     search (toolu_014PLid9D7LESgu1CGXJ39Mu)
+
+#    Call ID: toolu_014PLid9D7LESgu1CGXJ39Mu
+
+#     Args:
+
+#       query: current weather in San Francisco
+
+
+"""
+**Edit**
+
+We can now update the state accordingly. Let's modify the tool call to have the query `"current weather in SF"`.
+"""
+
+# First, lets get the current state
+current_state = app.get_state(thread)
+
+# Let's now get the last message in the state
+# This is the one with the tool calls that we want to update
+last_message = current_state.values["messages"][-1]
+
+# Let's now update the args for that tool call
+last_message.tool_calls[0]["args"] = {"query": "current weather in SF"}
+
+# Let's now call `update_state` to pass in this message in the `messages` key
+# This will get treated as any other update to the state
+# It will get passed to the reducer function for the `messages` key
+# That reducer function will use the ID of the message to update it
+# It's important that it has the right ID! Otherwise it would get appended
+# as a new message
+app.update_state(thread, {"messages": last_message})
+# Output:
+#   {'configurable': {'thread_id': '3',
+
+#     'checkpoint_ns': '',
+
+#     'checkpoint_id': '1f025362-f036-64d5-8000-22b48256a474'}}
+
+"""
+Let's now check the current state of the app to make sure it got updated accordingly
+"""
+
+current_state = app.get_state(thread).values["messages"][-1].tool_calls
+current_state
+# Output:
+#   [{'name': 'search',
+
+#     'args': {'query': 'current weather in SF'},
+
+#     'id': 'toolu_014PLid9D7LESgu1CGXJ39Mu',
+
+#     'type': 'tool_call'}]
+
+"""
+**Resume**
+
+We can now call the agent again with no inputs to continue, ie. run the tool as requested. We can see from the logs that it passes in the update args to the tool.
+"""
+
+for event in app.stream(None, thread, stream_mode="values"):
+    event["messages"][-1].pretty_print()
+# Output:
+#   ==================================[1m Ai Message [0m==================================
+
+#   
+
+#   [{'text': "Certainly! I'll search for the current weather in San Francisco for you. Let me use the search function to find this information.", 'type': 'text'}, {'id': 'toolu_014PLid9D7LESgu1CGXJ39Mu', 'input': {'query': 'current weather in San Francisco'}, 'name': 'search', 'type': 'tool_use'}]
+
+#   Tool Calls:
+
+#     search (toolu_014PLid9D7LESgu1CGXJ39Mu)
+
+#    Call ID: toolu_014PLid9D7LESgu1CGXJ39Mu
+
+#     Args:
+
+#       query: current weather in SF
+
+#   =================================[1m Tool Message [0m=================================
+
+#   Name: search
+
+#   
+
+#   ["It's sunny in San Francisco, but you better look out if you're a Gemini 😈."]
+
+#   ==================================[1m Ai Message [0m==================================
+
+#   
+
+#   Based on the search results, I can provide you with information about the current weather in San Francisco:
+
+#   
+
+#   The weather in San Francisco is currently sunny. This means it's a clear day with plenty of sunshine.
+
+#   
+
+#   It's worth noting that the search result included an unusual comment about Gemini, which seems unrelated to the weather. We'll focus on the weather information, which is what you asked about.
+
+#   
+
+#   Is there anything specific about the weather in San Francisco that you'd like to know more about, such as temperature, wind conditions, or forecast for later today?
+
+
+
+
+================================================
+FILE: examples/human_in_the_loop/review-tool-calls-openai.ipynb
+================================================
+# Jupyter notebook converted to Python script.
+
+"""
+# How to Review Tool Calls (OpenAI Version)
+
+!!! tip "Prerequisites"
+
+    This guide assumes familiarity with the following concepts:
+
+    * [Tool calling](https://python.langchain.com/docs/concepts/tool_calling/)
+    * [Human-in-the-loop](../../../concepts/human_in_the_loop)
+    * [LangGraph Glossary](../../../concepts/low_level)      
+
+Human-in-the-loop (HIL) interactions are crucial for [agentic systems](../../../concepts/agentic_concepts). A common pattern is to add some human in the loop step after certain tool calls. These tool calls often lead to either a function call or saving of some information. Examples include:
+
+- A tool call to execute SQL, which will then be run by the tool
+- A tool call to generate a summary, which will then be saved to the State of the graph
+
+Note that using tool calls is common **whether actually calling tools or not**.
+
+There are typically a few different interactions you may want to do here:
+
+1. Approve the tool call and continue
+2. Modify the tool call manually and then continue
+3. Give natural language feedback, and then pass that back to the agent
+
+
+We can implement these in LangGraph using the [`interrupt()`][langgraph.types.interrupt] function. `interrupt` allows us to stop graph execution to collect input from a user and continue execution with collected input:
+
+
+```python
+def human_review_node(state) -> Command[Literal["call_llm", "run_tool"]]:
+    # this is the value we'll be providing via Command(resume=<human_review>)
+    human_review = interrupt(
+        {
+            "question": "Is this correct?",
+            # Surface tool calls for review
+            "tool_call": tool_call
+        }
+    )
+    
+    review_action, review_data = human_review
+    
+    # Approve the tool call and continue
+    if review_action == "continue":
+        return Command(goto="run_tool")
+    
+    # Modify the tool call manually and then continue
+    elif review_action == "update":
+        ...
+        updated_msg = get_updated_msg(review_data)
+        return Command(goto="run_tool", update={"messages": [updated_message]})
+
+    # Give natural language feedback, and then pass that back to the agent
+    elif review_action == "feedback":
+        ...
+        feedback_msg = get_feedback_msg(review_data)
+        return Command(goto="call_llm", update={"messages": [feedback_msg]})
+
+```
+"""
+
+"""
+## Setup
+
+First we need to install the packages required
+"""
+
+%%capture --no-stderr
+%pip install --quiet -U langgraph langchain-openai "httpx>=0.24.0,<1.0.0"
+
+"""
+Next, we need to set API keys for OpenAI (the LLM we will use in this notebook)
+"""
+
+import getpass
+import os
+
+
+def _set_env(var: str):
+    if not os.environ.get(var):
+        os.environ[var] = getpass.getpass(f"{var}: ")
+
+
+_set_env("OPENAI_API_KEY")
+# Output:
+#   OPENAI_API_KEY:  ········
+
+
+"""
+<div class="admonition tip">
+    <p class="admonition-title">Set up <a href="https://smith.langchain.com">LangSmith</a> for LangGraph development</p>
+    <p style="padding-top: 5px;">
+        Sign up for LangSmith to quickly spot issues and improve the performance of your LangGraph projects. LangSmith lets you use trace data to debug, test, and monitor your LLM apps built with LangGraph — read more about how to get started <a href="https://docs.smith.langchain.com">here</a>. 
+    </p>
+</div>
+"""
+
+"""
+## Simple Usage
+
+Let's set up a very simple graph that facilitates this.
+First, we will have an LLM call that decides what action to take.
+Then we go to a human node. This node actually doesn't do anything - the idea is that we interrupt before this node and then apply any updates to the state.
+After that, we check the state and either route back to the LLM or to the correct tool.
+
+Let's see this in action!
+"""
+
+from typing_extensions import TypedDict, Literal
+from langgraph.graph import StateGraph, START, END, MessagesState
+from langgraph.checkpoint.redis import RedisSaver
+from langgraph.types import Command, interrupt
+from langchain_openai import ChatOpenAI
+from langchain_core.tools import tool
+from langchain_core.messages import AIMessage
+from IPython.display import Image, display
+
+# Set up Redis connection
+REDIS_URI = "redis://redis:6379"
+memory = None
+with RedisSaver.from_conn_string(REDIS_URI) as cp:
+    cp.setup()
+    memory = cp
+
+@tool
+def weather_search(city: str):
+    """Search for the weather"""
+    print("----")
+    print(f"Searching for: {city}")
+    print("----")
+    return "Sunny!"
+
+# Use OpenAI with tool binding
+model = ChatOpenAI(model="gpt-4o").bind_tools([weather_search])
+
+class State(MessagesState):
+    """Simple state."""
+
+
+def call_llm(state):
+    return {"messages": [model.invoke(state["messages"])]}
+
+
+def human_review_node(state) -> Command[Literal["call_llm", "run_tool"]]:
+    last_message = state["messages"][-1]
+    
+    # Get the tool call from OpenAI format
+    tool_call = last_message.tool_calls[-1] if hasattr(last_message, "tool_calls") and last_message.tool_calls else None
+    
+    # this is the value we'll be providing via Command(resume=<human_review>)
+    human_review = interrupt(
+        {
+            "question": "Is this correct?",
+            # Surface tool calls for review
+            "tool_call": tool_call,
+        }
+    )
+
+    review_action = human_review["action"]
+    review_data = human_review.get("data")
+
+    # if approved, call the tool
+    if review_action == "continue":
+        return Command(goto="run_tool")
+
+    # update the AI message AND call tools
+    elif review_action == "update":
+        # Handle OpenAI format
+        updated_message = {
+            "role": "ai",
+            "content": last_message.content,
+            "tool_calls": [
+                {
+                    "id": tool_call["id"],
+                    "name": tool_call["name"],
+                    # This the update provided by the human
+                    "args": review_data,
+                }
+            ],
+            # This is important - this needs to be the same as the message you replacing!
+            # Otherwise, it will show up as a separate message
+            "id": last_message.id,
+        }
+        
+        return Command(goto="run_tool", update={"messages": [updated_message]})
+
+    # provide feedback to LLM
+    elif review_action == "feedback":
+        # NOTE: we're adding feedback message as a ToolMessage
+        # to preserve the correct order in the message history
+        # (AI messages with tool calls need to be followed by tool call messages)
+        tool_message = {
+            "role": "tool",
+            # This is our natural language feedback
+            "content": review_data,
+            "name": tool_call["name"],
+            "tool_call_id": tool_call["id"],
+        }
+        return Command(goto="call_llm", update={"messages": [tool_message]})
+
+
+def run_tool(state):
+    new_messages = []
+    tools = {"weather_search": weather_search}
+    
+    # Get tool calls from OpenAI format
+    last_message = state["messages"][-1]
+    tool_calls = last_message.tool_calls if hasattr(last_message, "tool_calls") else []
+    
+    for tool_call in tool_calls:
+        tool_name = tool_call["name"]
+        if tool_name in tools:
+            tool = tools[tool_name]
+            result = tool.invoke(tool_call["args"])
+            new_messages.append(
+                {
+                    "role": "tool",
+                    "name": tool_call["name"],
+                    "content": result,
+                    "tool_call_id": tool_call["id"],
+                }
+            )
+    return {"messages": new_messages}
+
+
+def route_after_llm(state) -> Literal[END, "human_review_node"]:
+    last_message = state["messages"][-1]
+    
+    # Check for OpenAI tool calls
+    has_tool_calls = hasattr(last_message, "tool_calls") and len(last_message.tool_calls) > 0
+    
+    if has_tool_calls:
+        return "human_review_node"
+    else:
+        return END
+
+
+builder = StateGraph(State)
+builder.add_node(call_llm)
+builder.add_node(run_tool)
+builder.add_node(human_review_node)
+builder.add_edge(START, "call_llm")
+builder.add_conditional_edges("call_llm", route_after_llm)
+builder.add_edge("run_tool", "call_llm")
+
+# Add
+graph = builder.compile(checkpointer=memory)
+
+# View
+display(Image(graph.get_graph().draw_mermaid_png()))
+# Output:
+#   <IPython.core.display.Image object>
+
+"""
+## Example with no review
+
+Let's look at an example when no review is required (because no tools are called)
+"""
+
+# Input
+initial_input = {"messages": [{"role": "user", "content": "hi!"}]}
+
+# Thread
+thread = {"configurable": {"thread_id": "openai-1"}}
+
+# Run the graph until the first interruption
+for event in graph.stream(initial_input, thread, stream_mode="updates"):
+    print(event)
+    print("\n")
+# Output:
+#   {'call_llm': {'messages': [AIMessage(content='Hello! How can I assist you today?', additional_kwargs={'refusal': None}, response_metadata={'token_usage': {'completion_tokens': 11, 'prompt_tokens': 44, 'total_tokens': 55, 'completion_tokens_details': {'accepted_prediction_tokens': 0, 'audio_tokens': 0, 'reasoning_tokens': 0, 'rejected_prediction_tokens': 0}, 'prompt_tokens_details': {'audio_tokens': 0, 'cached_tokens': 0}}, 'model_name': 'gpt-4o-2024-08-06', 'system_fingerprint': 'fp_90122d973c', 'id': 'chatcmpl-BRluSv7cMhtqsKGNfpuvpygg05aLl', 'finish_reason': 'stop', 'logprobs': None}, id='run-0b664c20-9e59-4c95-a77f-fdc585029ea4-0', usage_metadata={'input_tokens': 44, 'output_tokens': 11, 'total_tokens': 55, 'input_token_details': {'audio': 0, 'cache_read': 0}, 'output_token_details': {'audio': 0, 'reasoning': 0}})]}}
+
+#   
+
+#   
+
+
+"""
+If we check the state, we can see that it is finished
+"""
+
+"""
+## Example of approving tool
+
+Let's now look at what it looks like to approve a tool call
+"""
+
+# Input
+initial_input = {"messages": [{"role": "user", "content": "what's the weather in sf?"}]}
+
+# Thread
+thread = {"configurable": {"thread_id": "openai-2"}}
+
+# Run the graph until the first interruption
+for event in graph.stream(initial_input, thread, stream_mode="updates"):
+    print(event)
+    print("\n")
+# Output:
+#   {'call_llm': {'messages': [AIMessage(content='', additional_kwargs={'tool_calls': [{'id': 'call_TwU0AILv55GWgEe9cKwKmQyK', 'function': {'arguments': '{"city":"San Francisco"}', 'name': 'weather_search'}, 'type': 'function'}], 'refusal': None}, response_metadata={'token_usage': {'completion_tokens': 16, 'prompt_tokens': 49, 'total_tokens': 65, 'completion_tokens_details': {'accepted_prediction_tokens': 0, 'audio_tokens': 0, 'reasoning_tokens': 0, 'rejected_prediction_tokens': 0}, 'prompt_tokens_details': {'audio_tokens': 0, 'cached_tokens': 0}}, 'model_name': 'gpt-4o-2024-08-06', 'system_fingerprint': 'fp_90122d973c', 'id': 'chatcmpl-BRluSoo0gyDHx1uB5SX2hBXH8d6vU', 'finish_reason': 'tool_calls', 'logprobs': None}, id='run-2929f867-5dac-463f-9cba-bce36f666f10-0', tool_calls=[{'name': 'weather_search', 'args': {'city': 'San Francisco'}, 'id': 'call_TwU0AILv55GWgEe9cKwKmQyK', 'type': 'tool_call'}], usage_metadata={'input_tokens': 49, 'output_tokens': 16, 'total_tokens': 65, 'input_token_details': {'audio': 0, 'cache_read': 0}, 'output_token_details': {'audio': 0, 'reasoning': 0}})]}}
+
+#   
+
+#   
+
+#   {'__interrupt__': (Interrupt(value={'question': 'Is this correct?', 'tool_call': {'name': 'weather_search', 'args': {'city': 'San Francisco'}, 'id': 'call_TwU0AILv55GWgEe9cKwKmQyK', 'type': 'tool_call'}}, resumable=True, ns=['human_review_node:c9df3a9e-497b-d78d-0759-90a1cad5c416']),)}
+
+#   
+
+#   
+
+
+"""
+If we now check, we can see that it is waiting on human review
+"""
+
+print("Pending Executions!")
+print(graph.get_state(thread).next)
+# Output:
+#   Pending Executions!
+
+#   ('human_review_node',)
+
+
+"""
+To approve the tool call, we can just continue the thread with no edits. To do so, we need to let `human_review_node` know what value to use for the `human_review` variable we defined inside the node. We can provide this value by invoking the graph with a `Command(resume=<human_review>)` input.  Since we're approving the tool call, we'll provide `resume` value of `{"action": "continue"}` to navigate to `run_tool` node:
+"""
+
+for event in graph.stream(
+    # provide value
+    Command(resume={"action": "continue"}),
+    thread,
+    stream_mode="updates",
+):
+    print(event)
+    print("\n")
+# Output:
+#   {'human_review_node': None}
+
+#   
+
+#   
+
+#   ----
+
+#   Searching for: San Francisco
+
+#   ----
+
+#   {'run_tool': {'messages': [{'role': 'tool', 'name': 'weather_search', 'content': 'Sunny!', 'tool_call_id': 'call_TwU0AILv55GWgEe9cKwKmQyK'}]}}
+
+#   
+
+#   
+
+#   {'call_llm': {'messages': [AIMessage(content='The weather in San Francisco is currently sunny!', additional_kwargs={'refusal': None}, response_metadata={'token_usage': {'completion_tokens': 11, 'prompt_tokens': 74, 'total_tokens': 85, 'completion_tokens_details': {'accepted_prediction_tokens': 0, 'audio_tokens': 0, 'reasoning_tokens': 0, 'rejected_prediction_tokens': 0}, 'prompt_tokens_details': {'audio_tokens': 0, 'cached_tokens': 0}}, 'model_name': 'gpt-4o-2024-08-06', 'system_fingerprint': 'fp_f5bdcc3276', 'id': 'chatcmpl-BRluTeL16wIx1Q8gc6vQvm1fmfrPv', 'finish_reason': 'stop', 'logprobs': None}, id='run-26f957fa-6b0c-4652-9fe9-6392afe31aa8-0', usage_metadata={'input_tokens': 74, 'output_tokens': 11, 'total_tokens': 85, 'input_token_details': {'audio': 0, 'cache_read': 0}, 'output_token_details': {'audio': 0, 'reasoning': 0}})]}}
+
+#   
+
+#   
+
+
+"""
+## Edit Tool Call
+
+Let's now say we want to edit the tool call. E.g. change some of the parameters (or even the tool called!) but then execute that tool.
+"""
+
+# Input
+initial_input = {"messages": [{"role": "user", "content": "what's the weather in sf?"}]}
+
+# Thread
+thread = {"configurable": {"thread_id": "openai-3"}}
+
+# Run the graph until the first interruption
+for event in graph.stream(initial_input, thread, stream_mode="updates"):
+    print(event)
+    print("\n")
+# Output:
+#   {'call_llm': {'messages': [AIMessage(content='', additional_kwargs={'tool_calls': [{'id': 'call_M6bzAiY3457k7fTVmmzoDq0N', 'function': {'arguments': '{"city":"San Francisco"}', 'name': 'weather_search'}, 'type': 'function'}], 'refusal': None}, response_metadata={'token_usage': {'completion_tokens': 16, 'prompt_tokens': 49, 'total_tokens': 65, 'completion_tokens_details': {'accepted_prediction_tokens': 0, 'audio_tokens': 0, 'reasoning_tokens': 0, 'rejected_prediction_tokens': 0}, 'prompt_tokens_details': {'audio_tokens': 0, 'cached_tokens': 0}}, 'model_name': 'gpt-4o-2024-08-06', 'system_fingerprint': 'fp_90122d973c', 'id': 'chatcmpl-BRluUKXq2iuemse8Jg7fHWYW2fhdG', 'finish_reason': 'tool_calls', 'logprobs': None}, id='run-bd72dd5e-247e-4d02-bc52-2e38168593b8-0', tool_calls=[{'name': 'weather_search', 'args': {'city': 'San Francisco'}, 'id': 'call_M6bzAiY3457k7fTVmmzoDq0N', 'type': 'tool_call'}], usage_metadata={'input_tokens': 49, 'output_tokens': 16, 'total_tokens': 65, 'input_token_details': {'audio': 0, 'cache_read': 0}, 'output_token_details': {'audio': 0, 'reasoning': 0}})]}}
+
+#   
+
+#   
+
+#   {'__interrupt__': (Interrupt(value={'question': 'Is this correct?', 'tool_call': {'name': 'weather_search', 'args': {'city': 'San Francisco'}, 'id': 'call_M6bzAiY3457k7fTVmmzoDq0N', 'type': 'tool_call'}}, resumable=True, ns=['human_review_node:8c914865-df8d-e5a6-46b6-2c18e91ef978']),)}
+
+#   
+
+#   
+
+
+print("Pending Executions!")
+print(graph.get_state(thread).next)
+# Output:
+#   Pending Executions!
+
+#   ('human_review_node',)
+
+
+"""
+To do this, we will use `Command` with a different resume value of `{"action": "update", "data": <tool call args>}`. This will do the following:
+
+* combine existing tool call with user-provided tool call arguments and update the existing AI message with the new tool call
+* navigate to `run_tool` node with the updated AI message and continue execution
+"""
+
+# Let's now continue executing from here
+for event in graph.stream(
+    Command(resume={"action": "update", "data": {"city": "San Francisco, USA"}}),
+    thread,
+    stream_mode="updates",
+):
+    print(event)
+    print("\n")
+# Output:
+#   {'human_review_node': {'messages': [{'role': 'ai', 'content': '', 'tool_calls': [{'id': 'call_M6bzAiY3457k7fTVmmzoDq0N', 'name': 'weather_search', 'args': {'city': 'San Francisco, USA'}}], 'id': 'run-bd72dd5e-247e-4d02-bc52-2e38168593b8-0'}]}}
+
+#   
+
+#   
+
+#   ----
+
+#   Searching for: San Francisco, USA
+
+#   ----
+
+#   {'run_tool': {'messages': [{'role': 'tool', 'name': 'weather_search', 'content': 'Sunny!', 'tool_call_id': 'call_M6bzAiY3457k7fTVmmzoDq0N'}]}}
+
+#   
+
+#   
+
+#   {'call_llm': {'messages': [AIMessage(content='The weather in San Francisco is currently sunny. Enjoy the clear skies!', additional_kwargs={'refusal': None}, response_metadata={'token_usage': {'completion_tokens': 16, 'prompt_tokens': 76, 'total_tokens': 92, 'completion_tokens_details': {'accepted_prediction_tokens': 0, 'audio_tokens': 0, 'reasoning_tokens': 0, 'rejected_prediction_tokens': 0}, 'prompt_tokens_details': {'audio_tokens': 0, 'cached_tokens': 0}}, 'model_name': 'gpt-4o-2024-08-06', 'system_fingerprint': 'fp_f5bdcc3276', 'id': 'chatcmpl-BRluUJKUZobRoOCZYow4cRKNgmBgH', 'finish_reason': 'stop', 'logprobs': None}, id='run-bad4d994-3ac4-4d69-a032-8c22bbdf5385-0', usage_metadata={'input_tokens': 76, 'output_tokens': 16, 'total_tokens': 92, 'input_token_details': {'audio': 0, 'cache_read': 0}, 'output_token_details': {'audio': 0, 'reasoning': 0}})]}}
+
+#   
+
+#   
+
+
+"""
+## Give feedback to a tool call
+
+Sometimes, you may not want to execute a tool call, but you also may not want to ask the user to manually modify the tool call. In that case it may be better to get natural language feedback from the user. You can then insert this feedback as a mock **RESULT** of the tool call.
+
+There are multiple ways to do this:
+
+1. You could add a new message to the state (representing the "result" of a tool call)
+2. You could add TWO new messages to the state - one representing an "error" from the tool call, other HumanMessage representing the feedback
+
+Both are similar in that they involve adding messages to the state. The main difference lies in the logic AFTER the `human_review_node` and how it handles different types of messages.
+
+For this example we will just add a single tool call representing the feedback (see `human_review_node` implementation). Let's see this in action!
+"""
+
+# Input
+initial_input = {"messages": [{"role": "user", "content": "what's the weather in sf?"}]}
+
+# Thread
+thread = {"configurable": {"thread_id": "openai-4"}}
+
+# Run the graph until the first interruption
+for event in graph.stream(initial_input, thread, stream_mode="updates"):
+    print(event)
+    print("\n")
+# Output:
+#   {'call_llm': {'messages': [AIMessage(content='', additional_kwargs={'tool_calls': [{'id': 'call_X2Ln7Su0gUyhyCcXy0QI7pnE', 'function': {'arguments': '{"city":"sf"}', 'name': 'weather_search'}, 'type': 'function'}], 'refusal': None}, response_metadata={'token_usage': {'completion_tokens': 15, 'prompt_tokens': 49, 'total_tokens': 64, 'completion_tokens_details': {'accepted_prediction_tokens': 0, 'audio_tokens': 0, 'reasoning_tokens': 0, 'rejected_prediction_tokens': 0}, 'prompt_tokens_details': {'audio_tokens': 0, 'cached_tokens': 0}}, 'model_name': 'gpt-4o-2024-08-06', 'system_fingerprint': 'fp_90122d973c', 'id': 'chatcmpl-BRluVOHc3x8uoIVSjXtHkcygfV9mO', 'finish_reason': 'tool_calls', 'logprobs': None}, id='run-f992c3ea-a4ec-408b-a2b5-d4804a3e802e-0', tool_calls=[{'name': 'weather_search', 'args': {'city': 'sf'}, 'id': 'call_X2Ln7Su0gUyhyCcXy0QI7pnE', 'type': 'tool_call'}], usage_metadata={'input_tokens': 49, 'output_tokens': 15, 'total_tokens': 64, 'input_token_details': {'audio': 0, 'cache_read': 0}, 'output_token_details': {'audio': 0, 'reasoning': 0}})]}}
+
+#   
+
+#   
+
+#   {'__interrupt__': (Interrupt(value={'question': 'Is this correct?', 'tool_call': {'name': 'weather_search', 'args': {'city': 'sf'}, 'id': 'call_X2Ln7Su0gUyhyCcXy0QI7pnE', 'type': 'tool_call'}}, resumable=True, ns=['human_review_node:04bb6708-e8d5-5353-491a-37ead2ba6eb8']),)}
+
+#   
+
+#   
+
+
+print("Pending Executions!")
+print(graph.get_state(thread).next)
+# Output:
+#   Pending Executions!
+
+#   ('human_review_node',)
+
+
+"""
+To do this, we will use `Command` with a different resume value of `{"action": "feedback", "data": <feedback string>}`. This will do the following:
+
+* create a new tool message that combines existing tool call from LLM with the with user-provided feedback as content
+* navigate to `call_llm` node with the updated tool message and continue execution
+"""
+
+# Let's now continue executing from here
+for event in graph.stream(
+    # provide our natural language feedback!
+    Command(
+        resume={
+            "action": "feedback",
+            "data": "User requested changes: use <city, country> format for location",
+        }
+    ),
+    thread,
+    stream_mode="updates",
+):
+    print(event)
+    print("\n")
+# Output:
+#   {'human_review_node': {'messages': [{'role': 'tool', 'content': 'User requested changes: use <city, country> format for location', 'name': 'weather_search', 'tool_call_id': 'call_X2Ln7Su0gUyhyCcXy0QI7pnE'}]}}
+
+#   
+
+#   
+
+#   {'call_llm': {'messages': [AIMessage(content='', additional_kwargs={'tool_calls': [{'id': 'call_RpRf2VCPyatj9En9PMDlhvrV', 'function': {'arguments': '{"city":"San Francisco, US"}', 'name': 'weather_search'}, 'type': 'function'}], 'refusal': None}, response_metadata={'token_usage': {'completion_tokens': 18, 'prompt_tokens': 84, 'total_tokens': 102, 'completion_tokens_details': {'accepted_prediction_tokens': 0, 'audio_tokens': 0, 'reasoning_tokens': 0, 'rejected_prediction_tokens': 0}, 'prompt_tokens_details': {'audio_tokens': 0, 'cached_tokens': 0}}, 'model_name': 'gpt-4o-2024-08-06', 'system_fingerprint': 'fp_f5bdcc3276', 'id': 'chatcmpl-BRluWDATYYVxJ5wP9Hd2zhi4QzBjn', 'finish_reason': 'tool_calls', 'logprobs': None}, id='run-65564d88-a9c0-4831-9f8a-cf8ba95f5b81-0', tool_calls=[{'name': 'weather_search', 'args': {'city': 'San Francisco, US'}, 'id': 'call_RpRf2VCPyatj9En9PMDlhvrV', 'type': 'tool_call'}], usage_metadata={'input_tokens': 84, 'output_tokens': 18, 'total_tokens': 102, 'input_token_details': {'audio': 0, 'cache_read': 0}, 'output_token_details': {'audio': 0, 'reasoning': 0}})]}}
+
+#   
+
+#   
+
+#   {'__interrupt__': (Interrupt(value={'question': 'Is this correct?', 'tool_call': {'name': 'weather_search', 'args': {'city': 'San Francisco, US'}, 'id': 'call_RpRf2VCPyatj9En9PMDlhvrV', 'type': 'tool_call'}}, resumable=True, ns=['human_review_node:6a75aa82-8038-8160-0569-903cec06c197']),)}
+
+#   
+
+#   
+
+
+"""
+We can see that we now get to another interrupt - because it went back to the model and got an entirely new prediction of what to call. Let's now approve this one and continue.
+"""
+
+print("Pending Executions!")
+print(graph.get_state(thread).next)
+# Output:
+#   Pending Executions!
+
+#   ('human_review_node',)
+
+
+for event in graph.stream(
+    Command(resume={"action": "continue"}), thread, stream_mode="updates"
+):
+    print(event)
+    print("\n")
+# Output:
+#   {'human_review_node': None}
+
+#   
+
+#   
+
+#   ----
+
+#   Searching for: San Francisco, US
+
+#   ----
+
+#   {'run_tool': {'messages': [{'role': 'tool', 'name': 'weather_search', 'content': 'Sunny!', 'tool_call_id': 'call_RpRf2VCPyatj9En9PMDlhvrV'}]}}
+
+#   
+
+#   
+
+#   {'call_llm': {'messages': [AIMessage(content='The weather in San Francisco, US is sunny!', additional_kwargs={'refusal': None}, response_metadata={'token_usage': {'completion_tokens': 12, 'prompt_tokens': 111, 'total_tokens': 123, 'completion_tokens_details': {'accepted_prediction_tokens': 0, 'audio_tokens': 0, 'reasoning_tokens': 0, 'rejected_prediction_tokens': 0}, 'prompt_tokens_details': {'audio_tokens': 0, 'cached_tokens': 0}}, 'model_name': 'gpt-4o-2024-08-06', 'system_fingerprint': 'fp_f5bdcc3276', 'id': 'chatcmpl-BRluXTlCd6rlHNrKWk1cVQ067FXVT', 'finish_reason': 'stop', 'logprobs': None}, id='run-dbc464a9-945c-45e8-8633-d4ed9e5f1f95-0', usage_metadata={'input_tokens': 111, 'output_tokens': 12, 'total_tokens': 123, 'input_token_details': {'audio': 0, 'cache_read': 0}, 'output_token_details': {'audio': 0, 'reasoning': 0}})]}}
+
+#   
+
+#   
+
+
+
+
+================================================
+FILE: examples/human_in_the_loop/review-tool-calls.ipynb
+================================================
+# Jupyter notebook converted to Python script.
+
+"""
+# How to Review Tool Calls
+
+!!! tip "Prerequisites"
+
+    This guide assumes familiarity with the following concepts:
+
+    * [Tool calling](https://python.langchain.com/docs/concepts/tool_calling/)
+    * [Human-in-the-loop](../../../concepts/human_in_the_loop)
+    * [LangGraph Glossary](../../../concepts/low_level)      
+
+Human-in-the-loop (HIL) interactions are crucial for [agentic systems](../../../concepts/agentic_concepts). A common pattern is to add some human in the loop step after certain tool calls. These tool calls often lead to either a function call or saving of some information. Examples include:
+
+- A tool call to execute SQL, which will then be run by the tool
+- A tool call to generate a summary, which will then be saved to the State of the graph
+
+Note that using tool calls is common **whether actually calling tools or not**.
+
+There are typically a few different interactions you may want to do here:
+
+1. Approve the tool call and continue
+2. Modify the tool call manually and then continue
+3. Give natural language feedback, and then pass that back to the agent
+
+
+We can implement these in LangGraph using the [`interrupt()`][langgraph.types.interrupt] function. `interrupt` allows us to stop graph execution to collect input from a user and continue execution with collected input:
+
+
+```python
+def human_review_node(state) -> Command[Literal["call_llm", "run_tool"]]:
+    # this is the value we'll be providing via Command(resume=<human_review>)
+    human_review = interrupt(
+        {
+            "question": "Is this correct?",
+            # Surface tool calls for review
+            "tool_call": tool_call
+        }
+    )
+    
+    review_action, review_data = human_review
+    
+    # Approve the tool call and continue
+    if review_action == "continue":
+        return Command(goto="run_tool")
+    
+    # Modify the tool call manually and then continue
+    elif review_action == "update":
+        ...
+        updated_msg = get_updated_msg(review_data)
+        return Command(goto="run_tool", update={"messages": [updated_message]})
+
+    # Give natural language feedback, and then pass that back to the agent
+    elif review_action == "feedback":
+        ...
+        feedback_msg = get_feedback_msg(review_data)
+        return Command(goto="call_llm", update={"messages": [feedback_msg]})
+
+```
+"""
+
+"""
+## Setup
+
+First we need to install the packages required
+"""
+
+%%capture --no-stderr
+%pip install --quiet -U langgraph langchain_anthropic "httpx>=0.24.0,<1.0.0"
+
+"""
+Next, we need to set API keys for Anthropic (the LLM we will use)
+"""
+
+import getpass
+import os
+
+
+def _set_env(var: str):
+    if not os.environ.get(var):
+        os.environ[var] = getpass.getpass(f"{var}: ")
+
+
+_set_env("ANTHROPIC_API_KEY")
+# Output:
+#   ANTHROPIC_API_KEY:  ········
+
+
+"""
+<div class="admonition tip">
+    <p class="admonition-title">Set up <a href="https://smith.langchain.com">LangSmith</a> for LangGraph development</p>
+    <p style="padding-top: 5px;">
+        Sign up for LangSmith to quickly spot issues and improve the performance of your LangGraph projects. LangSmith lets you use trace data to debug, test, and monitor your LLM apps built with LangGraph — read more about how to get started <a href="https://docs.smith.langchain.com">here</a>. 
+    </p>
+</div>
+"""
+
+"""
+## Simple Usage
+
+Let's set up a very simple graph that facilitates this.
+First, we will have an LLM call that decides what action to take.
+Then we go to a human node. This node actually doesn't do anything - the idea is that we interrupt before this node and then apply any updates to the state.
+After that, we check the state and either route back to the LLM or to the correct tool.
+
+Let's see this in action!
+"""
+
+from typing_extensions import TypedDict, Literal
+from langgraph.graph import StateGraph, START, END, MessagesState
+from langgraph.checkpoint.redis import RedisSaver
+from langgraph.types import Command, interrupt
+from langchain_anthropic import ChatAnthropic
+from langchain_core.tools import tool
+from langchain_core.messages import AIMessage
+from IPython.display import Image, display
+
+# Set up Redis connection
+REDIS_URI = "redis://redis:6379"
+memory = None
+with RedisSaver.from_conn_string(REDIS_URI) as cp:
+    cp.setup()
+    memory = cp
+
+@tool
+def weather_search(city: str):
+    """Search for the weather"""
+    print("----")
+    print(f"Searching for: {city}")
+    print("----")
+    return "Sunny!"
+
+
+model = ChatAnthropic(model_name="claude-3-5-sonnet-latest").bind_tools([weather_search])
+
+
+class State(MessagesState):
+    """Simple state."""
+
+
+def call_llm(state):
+    return {"messages": [model.invoke(state["messages"])]}
+
+
+def human_review_node(state) -> Command[Literal["call_llm", "run_tool"]]:
+    last_message = state["messages"][-1]
+    
+    # Handle Anthropic message format which uses content list with tool_use type
+    tool_call = None
+    if hasattr(last_message, "content") and isinstance(last_message.content, list):
+        for part in last_message.content:
+            if isinstance(part, dict) and part.get("type") == "tool_use":
+                tool_call = {
+                    "name": part.get("name"),
+                    "args": part.get("input", {}),
+                    "id": part.get("id"),
+                    "type": "tool_call"
+                }
+                break
+        
+    # this is the value we'll be providing via Command(resume=<human_review>)
+    human_review = interrupt(
+        {
+            "question": "Is this correct?",
+            # Surface tool calls for review
+            "tool_call": tool_call,
+        }
+    )
+
+    review_action = human_review["action"]
+    review_data = human_review.get("data")
+
+    # if approved, call the tool
+    if review_action == "continue":
+        return Command(goto="run_tool")
+
+    # update the AI message AND call tools
+    elif review_action == "update":
+        # For Anthropic format
+        updated_content = []
+        for part in last_message.content:
+            if isinstance(part, dict) and part.get("type") == "tool_use":
+                updated_part = part.copy()
+                updated_part["input"] = review_data
+                updated_content.append(updated_part)
+            else:
+                updated_content.append(part)
+        
+        updated_message = {
+            "role": "ai",
+            "content": updated_content,
+            "id": last_message.id,
+        }
+            
+        return Command(goto="run_tool", update={"messages": [updated_message]})
+
+    # provide feedback to LLM
+    elif review_action == "feedback":
+        # NOTE: we're adding feedback message as a ToolMessage
+        # to preserve the correct order in the message history
+        # (AI messages with tool calls need to be followed by tool call messages)
+        tool_message = {
+            "role": "tool",
+            # This is our natural language feedback
+            "content": review_data,
+            "name": tool_call["name"],
+            "tool_call_id": tool_call["id"],
+        }
+        return Command(goto="call_llm", update={"messages": [tool_message]})
+
+
+def run_tool(state):
+    new_messages = []
+    tools = {"weather_search": weather_search}
+    
+    # Handle different message formats
+    last_message = state["messages"][-1]
+    tool_calls = []
+    
+    # Handle Anthropic format
+    if hasattr(last_message, "content") and isinstance(last_message.content, list):
+        for part in last_message.content:
+            if isinstance(part, dict) and part.get("type") == "tool_use":
+                tool_calls.append({
+                    "name": part.get("name"),
+                    "args": part.get("input", {}),
+                    "id": part.get("id"),
+                })
+    
+    for tool_call in tool_calls:
+        tool_name = tool_call["name"]
+        if tool_name in tools:
+            tool = tools[tool_name]
+            result = tool.invoke(tool_call["args"])
+            new_messages.append(
+                {
+                    "role": "tool",
+                    "name": tool_call["name"],
+                    "content": result,
+                    "tool_call_id": tool_call["id"],
+                }
+            )
+    return {"messages": new_messages}
+
+
+def route_after_llm(state) -> Literal[END, "human_review_node"]:
+    last_message = state["messages"][-1]
+    
+    # Check for Anthropic tool calls
+    has_tool_calls = False
+    if hasattr(last_message, "content") and isinstance(last_message.content, list):
+        for part in last_message.content:
+            if isinstance(part, dict) and part.get("type") == "tool_use":
+                has_tool_calls = True
+                break
+    
+    if has_tool_calls:
+        return "human_review_node"
+    else:
+        return END
+
+
+builder = StateGraph(State)
+builder.add_node(call_llm)
+builder.add_node(run_tool)
+builder.add_node(human_review_node)
+builder.add_edge(START, "call_llm")
+builder.add_conditional_edges("call_llm", route_after_llm)
+builder.add_edge("run_tool", "call_llm")
+
+# Add
+graph = builder.compile(checkpointer=memory)
+
+# View
+display(Image(graph.get_graph().draw_mermaid_png()))
+# Output:
+#   <IPython.core.display.Image object>
+
+"""
+## Example with no review
+
+Let's look at an example when no review is required (because no tools are called)
+"""
+
+# Input
+initial_input = {"messages": [{"role": "user", "content": "hi!"}]}
+
+# Thread
+thread = {"configurable": {"thread_id": "1"}}
+
+# Run the graph until the first interruption
+for event in graph.stream(initial_input, thread, stream_mode="updates"):
+    print(event)
+    print("\n")
+# Output:
+#   {'call_llm': {'messages': [AIMessage(content="Hello! I can help you find weather information using the weather search tool. Would you like to know the weather for a specific city? Just let me know which city you're interested in and I'll look that up for you.", additional_kwargs={}, response_metadata={'id': 'msg_011Uk3am3VPYPuUHAswbF5sb', 'model': 'claude-3-5-sonnet-20241022', 'stop_reason': 'end_turn', 'stop_sequence': None, 'usage': {'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0, 'input_tokens': 374, 'output_tokens': 49}, 'model_name': 'claude-3-5-sonnet-20241022'}, id='run-7be06d70-058d-450f-b911-b9badd6ff906-0', usage_metadata={'input_tokens': 374, 'output_tokens': 49, 'total_tokens': 423, 'input_token_details': {'cache_read': 0, 'cache_creation': 0}})]}}
+
+#   
+
+#   
+
+
+"""
+If we check the state, we can see that it is finished
+"""
+
+"""
+## Example of approving tool
+
+Let's now look at what it looks like to approve a tool call
+"""
+
+# Input
+initial_input = {"messages": [{"role": "user", "content": "what's the weather in sf?"}]}
+
+# Thread
+thread = {"configurable": {"thread_id": "2"}}
+
+# Run the graph until the first interruption
+for event in graph.stream(initial_input, thread, stream_mode="updates"):
+    print(event)
+    print("\n")
+# Output:
+#   {'call_llm': {'messages': [AIMessage(content=[{'text': "I'll help you check the weather in San Francisco.", 'type': 'text'}, {'id': 'toolu_016TFh3JmzT9FEYs2MH9z7HH', 'input': {'city': 'San Francisco'}, 'name': 'weather_search', 'type': 'tool_use'}], additional_kwargs={}, response_metadata={'id': 'msg_01WcE3joeEa6tiwy2bP7ae5y', 'model': 'claude-3-5-sonnet-20241022', 'stop_reason': 'tool_use', 'stop_sequence': None, 'usage': {'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0, 'input_tokens': 379, 'output_tokens': 66}, 'model_name': 'claude-3-5-sonnet-20241022'}, id='run-b2b74408-e17e-44b5-9544-03fe0b99b4e6-0', tool_calls=[{'name': 'weather_search', 'args': {'city': 'San Francisco'}, 'id': 'toolu_016TFh3JmzT9FEYs2MH9z7HH', 'type': 'tool_call'}], usage_metadata={'input_tokens': 379, 'output_tokens': 66, 'total_tokens': 445, 'input_token_details': {'cache_read': 0, 'cache_creation': 0}})]}}
+
+#   
+
+#   
+
+#   {'__interrupt__': (Interrupt(value={'question': 'Is this correct?', 'tool_call': {'name': 'weather_search', 'args': {'city': 'San Francisco'}, 'id': 'toolu_016TFh3JmzT9FEYs2MH9z7HH', 'type': 'tool_call'}}, resumable=True, ns=['human_review_node:37c4d941-77c1-361b-78b5-c0472fd06e6a']),)}
+
+#   
+
+#   
+
+
+"""
+If we now check, we can see that it is waiting on human review
+"""
+
+print("Pending Executions!")
+print(graph.get_state(thread).next)
+# Output:
+#   Pending Executions!
+
+#   ('human_review_node',)
+
+
+"""
+To approve the tool call, we can just continue the thread with no edits. To do so, we need to let `human_review_node` know what value to use for the `human_review` variable we defined inside the node. We can provide this value by invoking the graph with a `Command(resume=<human_review>)` input.  Since we're approving the tool call, we'll provide `resume` value of `{"action": "continue"}` to navigate to `run_tool` node:
+"""
+
+for event in graph.stream(
+    # provide value
+    Command(resume={"action": "continue"}),
+    thread,
+    stream_mode="updates",
+):
+    print(event)
+    print("\n")
+# Output:
+#   {'human_review_node': None}
+
+#   
+
+#   
+
+#   ----
+
+#   Searching for: San Francisco
+
+#   ----
+
+#   {'run_tool': {'messages': [{'role': 'tool', 'name': 'weather_search', 'content': 'Sunny!', 'tool_call_id': 'toolu_016TFh3JmzT9FEYs2MH9z7HH'}]}}
+
+#   
+
+#   
+
+#   {'call_llm': {'messages': [AIMessage(content="It's sunny in San Francisco right now!", additional_kwargs={}, response_metadata={'id': 'msg_01Q329vWXkkkYEDD3UPKmEMG', 'model': 'claude-3-5-sonnet-20241022', 'stop_reason': 'end_turn', 'stop_sequence': None, 'usage': {'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0, 'input_tokens': 458, 'output_tokens': 13}, 'model_name': 'claude-3-5-sonnet-20241022'}, id='run-9880cea1-d4b3-4dc3-9e00-dff54f322d21-0', usage_metadata={'input_tokens': 458, 'output_tokens': 13, 'total_tokens': 471, 'input_token_details': {'cache_read': 0, 'cache_creation': 0}})]}}
+
+#   
+
+#   
+
+
+"""
+## Edit Tool Call
+
+Let's now say we want to edit the tool call. E.g. change some of the parameters (or even the tool called!) but then execute that tool.
+"""
+
+# Input
+initial_input = {"messages": [{"role": "user", "content": "what's the weather in sf?"}]}
+
+# Thread
+thread = {"configurable": {"thread_id": "3"}}
+
+# Run the graph until the first interruption
+for event in graph.stream(initial_input, thread, stream_mode="updates"):
+    print(event)
+    print("\n")
+# Output:
+#   {'call_llm': {'messages': [AIMessage(content=[{'text': "I'll help you check the weather in San Francisco.", 'type': 'text'}, {'id': 'toolu_01ApBN1kuKJk1tdNLXp14B1q', 'input': {'city': 'sf'}, 'name': 'weather_search', 'type': 'tool_use'}], additional_kwargs={}, response_metadata={'id': 'msg_01LcaF12XWCrwuTqKxFKyiRV', 'model': 'claude-3-5-sonnet-20241022', 'stop_reason': 'tool_use', 'stop_sequence': None, 'usage': {'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0, 'input_tokens': 379, 'output_tokens': 65}, 'model_name': 'claude-3-5-sonnet-20241022'}, id='run-05798f48-2626-47c5-a88c-71f7926354d0-0', tool_calls=[{'name': 'weather_search', 'args': {'city': 'sf'}, 'id': 'toolu_01ApBN1kuKJk1tdNLXp14B1q', 'type': 'tool_call'}], usage_metadata={'input_tokens': 379, 'output_tokens': 65, 'total_tokens': 444, 'input_token_details': {'cache_read': 0, 'cache_creation': 0}})]}}
+
+#   
+
+#   
+
+#   {'__interrupt__': (Interrupt(value={'question': 'Is this correct?', 'tool_call': {'name': 'weather_search', 'args': {'city': 'sf'}, 'id': 'toolu_01ApBN1kuKJk1tdNLXp14B1q', 'type': 'tool_call'}}, resumable=True, ns=['human_review_node:ddd61db1-16d0-3595-e42b-4e2822740950']),)}
+
+#   
+
+#   
+
+
+print("Pending Executions!")
+print(graph.get_state(thread).next)
+# Output:
+#   Pending Executions!
+
+#   ('human_review_node',)
+
+
+"""
+To do this, we will use `Command` with a different resume value of `{"action": "update", "data": <tool call args>}`. This will do the following:
+
+* combine existing tool call with user-provided tool call arguments and update the existing AI message with the new tool call
+* navigate to `run_tool` node with the updated AI message and continue execution
+"""
+
+# Let's now continue executing from here
+for event in graph.stream(
+    Command(resume={"action": "update", "data": {"city": "San Francisco, USA"}}),
+    thread,
+    stream_mode="updates",
+):
+    print(event)
+    print("\n")
+# Output:
+#   {'human_review_node': {'messages': [{'role': 'ai', 'content': [{'text': "I'll help you check the weather in San Francisco.", 'type': 'text'}, {'id': 'toolu_01ApBN1kuKJk1tdNLXp14B1q', 'input': {'city': 'San Francisco, USA'}, 'name': 'weather_search', 'type': 'tool_use'}], 'id': 'run-05798f48-2626-47c5-a88c-71f7926354d0-0'}]}}
+
+#   
+
+#   
+
+#   ----
+
+#   Searching for: San Francisco, USA
+
+#   ----
+
+#   {'run_tool': {'messages': [{'role': 'tool', 'name': 'weather_search', 'content': 'Sunny!', 'tool_call_id': 'toolu_01ApBN1kuKJk1tdNLXp14B1q'}]}}
+
+#   
+
+#   
+
+#   {'call_llm': {'messages': [AIMessage(content="According to the search, it's sunny in San Francisco right now!", additional_kwargs={}, response_metadata={'id': 'msg_01XjurtXyNPFbxbZ7NAuDvdm', 'model': 'claude-3-5-sonnet-20241022', 'stop_reason': 'end_turn', 'stop_sequence': None, 'usage': {'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0, 'input_tokens': 460, 'output_tokens': 18}, 'model_name': 'claude-3-5-sonnet-20241022'}, id='run-442de8d9-e410-418a-aeba-94fb5cc13d95-0', usage_metadata={'input_tokens': 460, 'output_tokens': 18, 'total_tokens': 478, 'input_token_details': {'cache_read': 0, 'cache_creation': 0}})]}}
+
+#   
+
+#   
+
+
+"""
+## Give feedback to a tool call
+
+Sometimes, you may not want to execute a tool call, but you also may not want to ask the user to manually modify the tool call. In that case it may be better to get natural language feedback from the user. You can then insert this feedback as a mock **RESULT** of the tool call.
+
+There are multiple ways to do this:
+
+1. You could add a new message to the state (representing the "result" of a tool call)
+2. You could add TWO new messages to the state - one representing an "error" from the tool call, other HumanMessage representing the feedback
+
+Both are similar in that they involve adding messages to the state. The main difference lies in the logic AFTER the `human_review_node` and how it handles different types of messages.
+
+For this example we will just add a single tool call representing the feedback (see `human_review_node` implementation). Let's see this in action!
+"""
+
+# Input
+initial_input = {"messages": [{"role": "user", "content": "what's the weather in sf?"}]}
+
+# Thread
+thread = {"configurable": {"thread_id": "4"}}
+
+# Run the graph until the first interruption
+for event in graph.stream(initial_input, thread, stream_mode="updates"):
+    print(event)
+    print("\n")
+# Output:
+#   {'call_llm': {'messages': [AIMessage(content=[{'text': "I'll help you check the weather in San Francisco.", 'type': 'text'}, {'id': 'toolu_01B2fEU5quHZwJGhMguzwG3h', 'input': {'city': 'San Francisco'}, 'name': 'weather_search', 'type': 'tool_use'}], additional_kwargs={}, response_metadata={'id': 'msg_01B8oWNxNafoiR2YwEb8df4a', 'model': 'claude-3-5-sonnet-20241022', 'stop_reason': 'tool_use', 'stop_sequence': None, 'usage': {'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0, 'input_tokens': 379, 'output_tokens': 66}, 'model_name': 'claude-3-5-sonnet-20241022'}, id='run-90a9c3d3-d4fe-43a1-a2ec-f0966b5ddec8-0', tool_calls=[{'name': 'weather_search', 'args': {'city': 'San Francisco'}, 'id': 'toolu_01B2fEU5quHZwJGhMguzwG3h', 'type': 'tool_call'}], usage_metadata={'input_tokens': 379, 'output_tokens': 66, 'total_tokens': 445, 'input_token_details': {'cache_read': 0, 'cache_creation': 0}})]}}
+
+#   
+
+#   
+
+#   {'__interrupt__': (Interrupt(value={'question': 'Is this correct?', 'tool_call': {'name': 'weather_search', 'args': {'city': 'San Francisco'}, 'id': 'toolu_01B2fEU5quHZwJGhMguzwG3h', 'type': 'tool_call'}}, resumable=True, ns=['human_review_node:52e176da-0f12-9ad1-70b7-94bb2268acd3']),)}
+
+#   
+
+#   
+
+
+print("Pending Executions!")
+print(graph.get_state(thread).next)
+# Output:
+#   Pending Executions!
+
+#   ('human_review_node',)
+
+
+"""
+To do this, we will use `Command` with a different resume value of `{"action": "feedback", "data": <feedback string>}`. This will do the following:
+
+* create a new tool message that combines existing tool call from LLM with the with user-provided feedback as content
+* navigate to `call_llm` node with the updated tool message and continue execution
+"""
+
+# Let's now continue executing from here
+for event in graph.stream(
+    # provide our natural language feedback!
+    Command(
+        resume={
+            "action": "feedback",
+            "data": "User requested changes: use <city, country> format for location",
+        }
+    ),
+    thread,
+    stream_mode="updates",
+):
+    print(event)
+    print("\n")
+# Output:
+#   {'human_review_node': {'messages': [{'role': 'tool', 'content': 'User requested changes: use <city, country> format for location', 'name': 'weather_search', 'tool_call_id': 'toolu_01B2fEU5quHZwJGhMguzwG3h'}]}}
+
+#   
+
+#   
+
+#   {'call_llm': {'messages': [AIMessage(content=[{'text': 'Let me try that again with the correct format.', 'type': 'text'}, {'id': 'toolu_01WkQvzDBjWxo43RM1TUpG8W', 'input': {'city': 'San Francisco, USA'}, 'name': 'weather_search', 'type': 'tool_use'}], additional_kwargs={}, response_metadata={'id': 'msg_01JpNxKtF7idCm3hxBGcQGSV', 'model': 'claude-3-5-sonnet-20241022', 'stop_reason': 'tool_use', 'stop_sequence': None, 'usage': {'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0, 'input_tokens': 469, 'output_tokens': 68}, 'model_name': 'claude-3-5-sonnet-20241022'}, id='run-7e1a1bd8-96db-488a-95e4-e7c753983b47-0', tool_calls=[{'name': 'weather_search', 'args': {'city': 'San Francisco, USA'}, 'id': 'toolu_01WkQvzDBjWxo43RM1TUpG8W', 'type': 'tool_call'}], usage_metadata={'input_tokens': 469, 'output_tokens': 68, 'total_tokens': 537, 'input_token_details': {'cache_read': 0, 'cache_creation': 0}})]}}
+
+#   
+
+#   
+
+#   {'__interrupt__': (Interrupt(value={'question': 'Is this correct?', 'tool_call': {'name': 'weather_search', 'args': {'city': 'San Francisco, USA'}, 'id': 'toolu_01WkQvzDBjWxo43RM1TUpG8W', 'type': 'tool_call'}}, resumable=True, ns=['human_review_node:07cc1657-faba-45ed-335b-59bc64a9c873']),)}
+
+#   
+
+#   
+
+
+"""
+We can see that we now get to another interrupt - because it went back to the model and got an entirely new prediction of what to call. Let's now approve this one and continue.
+"""
+
+print("Pending Executions!")
+print(graph.get_state(thread).next)
+# Output:
+#   Pending Executions!
+
+#   ('human_review_node',)
+
+
+for event in graph.stream(
+    Command(resume={"action": "continue"}), thread, stream_mode="updates"
+):
+    print(event)
+    print("\n")
+# Output:
+#   {'human_review_node': None}
+
+#   
+
+#   
+
+#   ----
+
+#   Searching for: San Francisco, USA
+
+#   ----
+
+#   {'run_tool': {'messages': [{'role': 'tool', 'name': 'weather_search', 'content': 'Sunny!', 'tool_call_id': 'toolu_01WkQvzDBjWxo43RM1TUpG8W'}]}}
+
+#   
+
+#   
+
+#   {'call_llm': {'messages': [AIMessage(content="It's sunny in San Francisco right now!", additional_kwargs={}, response_metadata={'id': 'msg_015ZtPA91x32qanJt3ybkndX', 'model': 'claude-3-5-sonnet-20241022', 'stop_reason': 'end_turn', 'stop_sequence': None, 'usage': {'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 0, 'input_tokens': 550, 'output_tokens': 13}, 'model_name': 'claude-3-5-sonnet-20241022'}, id='run-03b7df2b-4022-4dfb-afa1-b1a450569ba7-0', usage_metadata={'input_tokens': 550, 'output_tokens': 13, 'total_tokens': 563, 'input_token_details': {'cache_read': 0, 'cache_creation': 0}})]}}
+
+#   
+
+#   
+
+
+
+
+================================================
+FILE: examples/human_in_the_loop/time-travel.ipynb
+================================================
+# Jupyter notebook converted to Python script.
+
+"""
+# How to view and update past graph state
+
+!!! tip "Prerequisites"
+
+    This guide assumes familiarity with the following concepts:
+
+    * [Time Travel](../../../concepts/time-travel)
+    * [Breakpoints](../../../concepts/breakpoints)
+    * [LangGraph Glossary](../../../concepts/low_level)
+
+
+Once you start [checkpointing](../../persistence) your graphs, you can easily **get** or **update** the state of the agent at any point in time. This permits a few things:
+
+1. You can surface a state during an interrupt to a user to let them accept an action.
+2. You can **rewind** the graph to reproduce or avoid issues.
+3. You can **modify** the state to embed your agent into a larger system, or to let the user better control its actions.
+
+The key methods used for this functionality are:
+
+- [get_state](https://langchain-ai.github.io/langgraph/reference/graphs/#langgraph.graph.graph.CompiledGraph.get_state): fetch the values from the target config
+- [update_state](https://langchain-ai.github.io/langgraph/reference/graphs/#langgraph.graph.graph.CompiledGraph.update_state): apply the given values to the target state
+
+**Note:** this requires passing in a checkpointer.
+
+Below is a quick example.
+"""
+
+"""
+## Setup
+
+First we need to install the packages required
+"""
+
+%%capture --no-stderr
+%pip install --quiet -U langgraph langchain_openai
+
+"""
+Next, we need to set API keys for OpenAI (the LLM we will use)
+"""
+
+import getpass
+import os
+
+
+def _set_env(var: str):
+    if not os.environ.get(var):
+        os.environ[var] = getpass.getpass(f"{var}: ")
+
+
+_set_env("OPENAI_API_KEY")
+# Output:
+#   OPENAI_API_KEY:  ········
+
+
+"""
+<div class="admonition tip">
+    <p class="admonition-title">Set up <a href="https://smith.langchain.com">LangSmith</a> for LangGraph development</p>
+    <p style="padding-top: 5px;">
+        Sign up for LangSmith to quickly spot issues and improve the performance of your LangGraph projects. LangSmith lets you use trace data to debug, test, and monitor your LLM apps built with LangGraph — read more about how to get started <a href="https://docs.smith.langchain.com">here</a>. 
+    </p>
+</div>
+"""
+
+"""
+## Build the agent
+
+We can now build the agent. We will build a relatively simple ReAct-style agent that does tool calling. We will use Anthropic's models and fake tools (just for demo purposes).
+"""
+
+# Set up the tool
+from langchain_openai import ChatOpenAI
+from langchain_core.tools import tool
+from langgraph.graph import MessagesState, START
+from langgraph.prebuilt import ToolNode
+from langgraph.graph import END, StateGraph
+from langgraph.checkpoint.redis import RedisSaver
+
+# Set up Redis connection
+REDIS_URI = "redis://redis:6379"
+memory = None
+with RedisSaver.from_conn_string(REDIS_URI) as cp:
+    cp.setup()
+    memory = cp
+
+@tool
+def play_song_on_spotify(song: str):
+    """Play a song on Spotify"""
+    # Call the spotify API ...
+    return f"Successfully played {song} on Spotify!"
+
+
+@tool
+def play_song_on_apple(song: str):
+    """Play a song on Apple Music"""
+    # Call the apple music API ...
+    return f"Successfully played {song} on Apple Music!"
+
+
+tools = [play_song_on_apple, play_song_on_spotify]
+tool_node = ToolNode(tools)
+
+# Set up the model
+
+model = ChatOpenAI(model="gpt-4o-mini")
+model = model.bind_tools(tools, parallel_tool_calls=False)
+
+
+# Define nodes and conditional edges
+
+
+# Define the function that determines whether to continue or not
+def should_continue(state):
+    messages = state["messages"]
+    last_message = messages[-1]
+    # If there is no function call, then we finish
+    if not last_message.tool_calls:
+        return "end"
+    # Otherwise if there is, we continue
+    else:
+        return "continue"
+
+
+# Define the function that calls the model
+def call_model(state):
+    messages = state["messages"]
+    response = model.invoke(messages)
+    # We return a list, because this will get added to the existing list
+    return {"messages": [response]}
+
+
+# Define a new graph
+workflow = StateGraph(MessagesState)
+
+# Define the two nodes we will cycle between
+workflow.add_node("agent", call_model)
+workflow.add_node("action", tool_node)
+
+# Set the entrypoint as `agent`
+# This means that this node is the first one called
+workflow.add_edge(START, "agent")
+
+# We now add a conditional edge
+workflow.add_conditional_edges(
+    # First, we define the start node. We use `agent`.
+    # This means these are the edges taken after the `agent` node is called.
+    "agent",
+    # Next, we pass in the function that will determine which node is called next.
+    should_continue,
+    # Finally we pass in a mapping.
+    # The keys are strings, and the values are other nodes.
+    # END is a special node marking that the graph should finish.
+    # What will happen is we will call `should_continue`, and then the output of that
+    # will be matched against the keys in this mapping.
+    # Based on which one it matches, that node will then be called.
+    {
+        # If `tools`, then we call the tool node.
+        "continue": "action",
+        # Otherwise we finish.
+        "end": END,
+    },
+)
+
+# We now add a normal edge from `tools` to `agent`.
+# This means that after `tools` is called, `agent` node is called next.
+workflow.add_edge("action", "agent")
+
+# Finally, we compile it!
+# This compiles it into a LangChain Runnable,
+# meaning you can use it as you would any other runnable
+
+# We add in `interrupt_before=["action"]`
+# This will add a breakpoint before the `action` node is called
+app = workflow.compile(checkpointer=memory)
+
+"""
+## Interacting with the Agent
+
+We can now interact with the agent. Let's ask it to play Taylor Swift's most popular song:
+
+"""
+
+from langchain_core.messages import HumanMessage
+
+config = {"configurable": {"thread_id": "1"}}
+input_message = HumanMessage(content="Can you play Taylor Swift's most popular song?")
+for event in app.stream({"messages": [input_message]}, config, stream_mode="values"):
+    event["messages"][-1].pretty_print()
+# Output:
+#   ================================[1m Human Message [0m=================================
+
+#   
+
+#   Can you play Taylor Swift's most popular song?
+
+#   ==================================[1m Ai Message [0m==================================
+
+#   Tool Calls:
+
+#     play_song_on_apple (call_SwbvKPaZxLnxuStPuXQkQg0Y)
+
+#    Call ID: call_SwbvKPaZxLnxuStPuXQkQg0Y
+
+#     Args:
+
+#       song: Anti-Hero by Taylor Swift
+
+#   =================================[1m Tool Message [0m=================================
+
+#   Name: play_song_on_apple
+
+#   
+
+#   Successfully played Anti-Hero by Taylor Swift on Apple Music!
+
+#   ==================================[1m Ai Message [0m==================================
+
+#   
+
+#   I've started playing "Anti-Hero" by Taylor Swift on Apple Music! Enjoy the music!
+
+
+"""
+## Checking history
+
+Let's browse the history of this thread, from start to finish.
+"""
+
+app.get_state(config).values["messages"]
+# Output:
+#   [HumanMessage(content="Can you play Taylor Swift's most popular song?", additional_kwargs={}, response_metadata={}, id='ce9e880c-05a3-41cb-855c-e666c8f9cbd1'),
+
+#    AIMessage(content='', additional_kwargs={'tool_calls': [{'id': 'call_SwbvKPaZxLnxuStPuXQkQg0Y', 'function': {'arguments': '{"song":"Anti-Hero by Taylor Swift"}', 'name': 'play_song_on_apple'}, 'type': 'function'}], 'refusal': None}, response_metadata={'token_usage': {'completion_tokens': 23, 'prompt_tokens': 80, 'total_tokens': 103, 'completion_tokens_details': {'accepted_prediction_tokens': 0, 'audio_tokens': 0, 'reasoning_tokens': 0, 'rejected_prediction_tokens': 0}, 'prompt_tokens_details': {'audio_tokens': 0, 'cached_tokens': 0}}, 'model_name': 'gpt-4o-mini-2024-07-18', 'system_fingerprint': 'fp_0392822090', 'id': 'chatcmpl-BRm5GxWKro32HznmzffDPbKEDt32h', 'finish_reason': 'tool_calls', 'logprobs': None}, id='run-a43f1c2b-1e11-47c7-b60a-2469a55c82e9-0', tool_calls=[{'name': 'play_song_on_apple', 'args': {'song': 'Anti-Hero by Taylor Swift'}, 'id': 'call_SwbvKPaZxLnxuStPuXQkQg0Y', 'type': 'tool_call'}], usage_metadata={'input_tokens': 80, 'output_tokens': 23, 'total_tokens': 103, 'input_token_details': {'audio': 0, 'cache_read': 0}, 'output_token_details': {'audio': 0, 'reasoning': 0}}),
+
+#    ToolMessage(content='Successfully played Anti-Hero by Taylor Swift on Apple Music!', name='play_song_on_apple', id='aad71a5f-492b-48bc-a487-c620ec193d02', tool_call_id='call_SwbvKPaZxLnxuStPuXQkQg0Y'),
+
+#    AIMessage(content='I\'ve started playing "Anti-Hero" by Taylor Swift on Apple Music! Enjoy the music!', additional_kwargs={'refusal': None}, response_metadata={'token_usage': {'completion_tokens': 21, 'prompt_tokens': 125, 'total_tokens': 146, 'completion_tokens_details': {'accepted_prediction_tokens': 0, 'audio_tokens': 0, 'reasoning_tokens': 0, 'rejected_prediction_tokens': 0}, 'prompt_tokens_details': {'audio_tokens': 0, 'cached_tokens': 0}}, 'model_name': 'gpt-4o-mini-2024-07-18', 'system_fingerprint': 'fp_0392822090', 'id': 'chatcmpl-BRm5HAeEb5fYyAV4IMdIABAwnqo0Z', 'finish_reason': 'stop', 'logprobs': None}, id='run-d45f3b55-528a-403b-9f0c-f10c814ff583-0', usage_metadata={'input_tokens': 125, 'output_tokens': 21, 'total_tokens': 146, 'input_token_details': {'audio': 0, 'cache_read': 0}, 'output_token_details': {'audio': 0, 'reasoning': 0}})]
+
+all_states = []
+for state in app.get_state_history(config):
+    print(state)
+    all_states.append(state)
+    print("--")
+# Output:
+#   StateSnapshot(values={'messages': []}, next=('__start__',), config={'configurable': {'thread_id': '1', 'checkpoint_ns': '', 'checkpoint_id': ''}}, metadata={'source': 'input', 'writes': {'__start__': {'messages': [{'lc': 1, 'type': 'constructor', 'id': ['langchain', 'schema', 'messages', 'HumanMessage'], 'kwargs': {'content': "Can you play Taylor Swift's most popular song?", 'type': 'human'}}]}}, 'step': -1, 'parents': {}, 'thread_id': '1'}, created_at='2025-04-29T20:43:09.896874+00:00', parent_config=None, tasks=(PregelTask(id='01db093c-5b4c-404e-adc7-4c2f1b79d9ce', name='__start__', path=('__pregel_pull', '__start__'), error=None, interrupts=(), state=None, result=None),), interrupts=())
+
+#   --
+
+#   StateSnapshot(values={'messages': [HumanMessage(content="Can you play Taylor Swift's most popular song?", additional_kwargs={}, response_metadata={}, id='ce9e880c-05a3-41cb-855c-e666c8f9cbd1')]}, next=('agent',), config={'configurable': {'thread_id': '1', 'checkpoint_ns': '', 'checkpoint_id': '1f0253a8-fc68-66d4-bfff-3d93672c32b8'}}, metadata={'source': 'loop', 'writes': None, 'step': 0, 'parents': {}, 'thread_id': '1'}, created_at='2025-04-29T20:43:09.898069+00:00', parent_config=None, tasks=(PregelTask(id='8da50206-f1b7-c43d-ff08-02fc892c084d', name='agent', path=('__pregel_pull', 'agent'), error=None, interrupts=(), state=None, result=None),), interrupts=())
+
+#   --
+
+#   StateSnapshot(values={'messages': [HumanMessage(content="Can you play Taylor Swift's most popular song?", additional_kwargs={}, response_metadata={}, id='ce9e880c-05a3-41cb-855c-e666c8f9cbd1'), AIMessage(content='', additional_kwargs={'tool_calls': [{'id': 'call_SwbvKPaZxLnxuStPuXQkQg0Y', 'function': {'arguments': '{"song":"Anti-Hero by Taylor Swift"}', 'name': 'play_song_on_apple'}, 'type': 'function'}], 'refusal': None}, response_metadata={'token_usage': {'completion_tokens': 23, 'prompt_tokens': 80, 'total_tokens': 103, 'completion_tokens_details': {'accepted_prediction_tokens': 0, 'audio_tokens': 0, 'reasoning_tokens': 0, 'rejected_prediction_tokens': 0}, 'prompt_tokens_details': {'audio_tokens': 0, 'cached_tokens': 0}}, 'model_name': 'gpt-4o-mini-2024-07-18', 'system_fingerprint': 'fp_0392822090', 'id': 'chatcmpl-BRm5GxWKro32HznmzffDPbKEDt32h', 'finish_reason': 'tool_calls', 'logprobs': None}, id='run-a43f1c2b-1e11-47c7-b60a-2469a55c82e9-0', tool_calls=[{'name': 'play_song_on_apple', 'args': {'song': 'Anti-Hero by Taylor Swift'}, 'id': 'call_SwbvKPaZxLnxuStPuXQkQg0Y', 'type': 'tool_call'}], usage_metadata={'input_tokens': 80, 'output_tokens': 23, 'total_tokens': 103, 'input_token_details': {'audio': 0, 'cache_read': 0}, 'output_token_details': {'audio': 0, 'reasoning': 0}})]}, next=('action',), config={'configurable': {'thread_id': '1', 'checkpoint_ns': '', 'checkpoint_id': '1f0253a8-fc6b-65a1-8000-88c6f3a42fab'}}, metadata={'source': 'loop', 'writes': {'agent': {'messages': [{'lc': 1, 'type': 'constructor', 'id': ['langchain', 'schema', 'messages', 'AIMessage'], 'kwargs': {'content': '', 'additional_kwargs': {'tool_calls': [{'id': 'call_SwbvKPaZxLnxuStPuXQkQg0Y', 'function': {'arguments': '{"song":"Anti-Hero by Taylor Swift"}', 'name': 'play_song_on_apple'}, 'type': 'function'}], 'refusal': None}, 'response_metadata': {'token_usage': {'completion_tokens': 23, 'prompt_tokens': 80, 'total_tokens': 103, 'completion_tokens_details': {'accepted_prediction_tokens': 0, 'audio_tokens': 0, 'reasoning_tokens': 0, 'rejected_prediction_tokens': 0}, 'prompt_tokens_details': {'audio_tokens': 0, 'cached_tokens': 0}}, 'model_name': 'gpt-4o-mini-2024-07-18', 'system_fingerprint': 'fp_0392822090', 'id': 'chatcmpl-BRm5GxWKro32HznmzffDPbKEDt32h', 'finish_reason': 'tool_calls', 'logprobs': None}, 'type': 'ai', 'id': 'run-a43f1c2b-1e11-47c7-b60a-2469a55c82e9-0', 'tool_calls': [{'name': 'play_song_on_apple', 'args': {'song': 'Anti-Hero by Taylor Swift'}, 'id': 'call_SwbvKPaZxLnxuStPuXQkQg0Y', 'type': 'tool_call'}], 'usage_metadata': {'input_tokens': 80, 'output_tokens': 23, 'total_tokens': 103, 'input_token_details': {'audio': 0, 'cache_read': 0}, 'output_token_details': {'audio': 0, 'reasoning': 0}}, 'invalid_tool_calls': []}}]}}, 'step': 1, 'parents': {}, 'thread_id': '1'}, created_at='2025-04-29T20:43:10.848784+00:00', parent_config=None, tasks=(PregelTask(id='47f235be-81a2-1a1c-1162-69e0e3d33e95', name='action', path=('__pregel_pull', 'action'), error=None, interrupts=(), state=None, result=None),), interrupts=())
+
+#   --
+
+#   StateSnapshot(values={'messages': [HumanMessage(content="Can you play Taylor Swift's most popular song?", additional_kwargs={}, response_metadata={}, id='ce9e880c-05a3-41cb-855c-e666c8f9cbd1'), AIMessage(content='', additional_kwargs={'tool_calls': [{'id': 'call_SwbvKPaZxLnxuStPuXQkQg0Y', 'function': {'arguments': '{"song":"Anti-Hero by Taylor Swift"}', 'name': 'play_song_on_apple'}, 'type': 'function'}], 'refusal': None}, response_metadata={'token_usage': {'completion_tokens': 23, 'prompt_tokens': 80, 'total_tokens': 103, 'completion_tokens_details': {'accepted_prediction_tokens': 0, 'audio_tokens': 0, 'reasoning_tokens': 0, 'rejected_prediction_tokens': 0}, 'prompt_tokens_details': {'audio_tokens': 0, 'cached_tokens': 0}}, 'model_name': 'gpt-4o-mini-2024-07-18', 'system_fingerprint': 'fp_0392822090', 'id': 'chatcmpl-BRm5GxWKro32HznmzffDPbKEDt32h', 'finish_reason': 'tool_calls', 'logprobs': None}, id='run-a43f1c2b-1e11-47c7-b60a-2469a55c82e9-0', tool_calls=[{'name': 'play_song_on_apple', 'args': {'song': 'Anti-Hero by Taylor Swift'}, 'id': 'call_SwbvKPaZxLnxuStPuXQkQg0Y', 'type': 'tool_call'}], usage_metadata={'input_tokens': 80, 'output_tokens': 23, 'total_tokens': 103, 'input_token_details': {'audio': 0, 'cache_read': 0}, 'output_token_details': {'audio': 0, 'reasoning': 0}}), ToolMessage(content='Successfully played Anti-Hero by Taylor Swift on Apple Music!', name='play_song_on_apple', id='aad71a5f-492b-48bc-a487-c620ec193d02', tool_call_id='call_SwbvKPaZxLnxuStPuXQkQg0Y')]}, next=('agent',), config={'configurable': {'thread_id': '1', 'checkpoint_ns': '', 'checkpoint_id': '1f0253a9-057c-6718-8001-11e7f8ccf6da'}}, metadata={'source': 'loop', 'writes': {'action': {'messages': [{'lc': 1, 'type': 'constructor', 'id': ['langchain', 'schema', 'messages', 'ToolMessage'], 'kwargs': {'content': 'Successfully played Anti-Hero by Taylor Swift on Apple Music!', 'type': 'tool', 'name': 'play_song_on_apple', 'id': 'aad71a5f-492b-48bc-a487-c620ec193d02', 'tool_call_id': 'call_SwbvKPaZxLnxuStPuXQkQg0Y', 'status': 'success'}}]}}, 'step': 2, 'parents': {}, 'thread_id': '1'}, created_at='2025-04-29T20:43:10.852299+00:00', parent_config=None, tasks=(PregelTask(id='a4b9ee27-8d9b-a5dc-67ec-023449044f52', name='agent', path=('__pregel_pull', 'agent'), error=None, interrupts=(), state=None, result=None),), interrupts=())
+
+#   --
+
+#   StateSnapshot(values={'messages': [HumanMessage(content="Can you play Taylor Swift's most popular song?", additional_kwargs={}, response_metadata={}, id='ce9e880c-05a3-41cb-855c-e666c8f9cbd1'), AIMessage(content='', additional_kwargs={'tool_calls': [{'id': 'call_SwbvKPaZxLnxuStPuXQkQg0Y', 'function': {'arguments': '{"song":"Anti-Hero by Taylor Swift"}', 'name': 'play_song_on_apple'}, 'type': 'function'}], 'refusal': None}, response_metadata={'token_usage': {'completion_tokens': 23, 'prompt_tokens': 80, 'total_tokens': 103, 'completion_tokens_details': {'accepted_prediction_tokens': 0, 'audio_tokens': 0, 'reasoning_tokens': 0, 'rejected_prediction_tokens': 0}, 'prompt_tokens_details': {'audio_tokens': 0, 'cached_tokens': 0}}, 'model_name': 'gpt-4o-mini-2024-07-18', 'system_fingerprint': 'fp_0392822090', 'id': 'chatcmpl-BRm5GxWKro32HznmzffDPbKEDt32h', 'finish_reason': 'tool_calls', 'logprobs': None}, id='run-a43f1c2b-1e11-47c7-b60a-2469a55c82e9-0', tool_calls=[{'name': 'play_song_on_apple', 'args': {'song': 'Anti-Hero by Taylor Swift'}, 'id': 'call_SwbvKPaZxLnxuStPuXQkQg0Y', 'type': 'tool_call'}], usage_metadata={'input_tokens': 80, 'output_tokens': 23, 'total_tokens': 103, 'input_token_details': {'audio': 0, 'cache_read': 0}, 'output_token_details': {'audio': 0, 'reasoning': 0}}), ToolMessage(content='Successfully played Anti-Hero by Taylor Swift on Apple Music!', name='play_song_on_apple', id='aad71a5f-492b-48bc-a487-c620ec193d02', tool_call_id='call_SwbvKPaZxLnxuStPuXQkQg0Y'), AIMessage(content='I\'ve started playing "Anti-Hero" by Taylor Swift on Apple Music! Enjoy the music!', additional_kwargs={'refusal': None}, response_metadata={'token_usage': {'completion_tokens': 21, 'prompt_tokens': 125, 'total_tokens': 146, 'completion_tokens_details': {'accepted_prediction_tokens': 0, 'audio_tokens': 0, 'reasoning_tokens': 0, 'rejected_prediction_tokens': 0}, 'prompt_tokens_details': {'audio_tokens': 0, 'cached_tokens': 0}}, 'model_name': 'gpt-4o-mini-2024-07-18', 'system_fingerprint': 'fp_0392822090', 'id': 'chatcmpl-BRm5HAeEb5fYyAV4IMdIABAwnqo0Z', 'finish_reason': 'stop', 'logprobs': None}, id='run-d45f3b55-528a-403b-9f0c-f10c814ff583-0', usage_metadata={'input_tokens': 125, 'output_tokens': 21, 'total_tokens': 146, 'input_token_details': {'audio': 0, 'cache_read': 0}, 'output_token_details': {'audio': 0, 'reasoning': 0}})]}, next=(), config={'configurable': {'thread_id': '1', 'checkpoint_ns': '', 'checkpoint_id': '1f0253a9-0585-606e-8002-2788747e0e46'}}, metadata={'source': 'loop', 'writes': {'agent': {'messages': [{'lc': 1, 'type': 'constructor', 'id': ['langchain', 'schema', 'messages', 'AIMessage'], 'kwargs': {'content': 'I\'ve started playing "Anti-Hero" by Taylor Swift on Apple Music! Enjoy the music!', 'additional_kwargs': {'refusal': None}, 'response_metadata': {'token_usage': {'completion_tokens': 21, 'prompt_tokens': 125, 'total_tokens': 146, 'completion_tokens_details': {'accepted_prediction_tokens': 0, 'audio_tokens': 0, 'reasoning_tokens': 0, 'rejected_prediction_tokens': 0}, 'prompt_tokens_details': {'audio_tokens': 0, 'cached_tokens': 0}}, 'model_name': 'gpt-4o-mini-2024-07-18', 'system_fingerprint': 'fp_0392822090', 'id': 'chatcmpl-BRm5HAeEb5fYyAV4IMdIABAwnqo0Z', 'finish_reason': 'stop', 'logprobs': None}, 'type': 'ai', 'id': 'run-d45f3b55-528a-403b-9f0c-f10c814ff583-0', 'usage_metadata': {'input_tokens': 125, 'output_tokens': 21, 'total_tokens': 146, 'input_token_details': {'audio': 0, 'cache_read': 0}, 'output_token_details': {'audio': 0, 'reasoning': 0}}, 'tool_calls': [], 'invalid_tool_calls': []}}]}}, 'step': 3, 'parents': {}, 'thread_id': '1'}, created_at='2025-04-29T20:43:11.643083+00:00', parent_config=None, tasks=(), interrupts=())
+
+#   --
+
+
+"""
+## Replay a state
+
+We can go back to any of these states and restart the agent from there! Let's go back to right before the tool call gets executed.
+"""
+
+to_replay = all_states[2]
+
+to_replay.values
+# Output:
+#   {'messages': [HumanMessage(content="Can you play Taylor Swift's most popular song?", additional_kwargs={}, response_metadata={}, id='ce9e880c-05a3-41cb-855c-e666c8f9cbd1'),
+
+#     AIMessage(content='', additional_kwargs={'tool_calls': [{'id': 'call_SwbvKPaZxLnxuStPuXQkQg0Y', 'function': {'arguments': '{"song":"Anti-Hero by Taylor Swift"}', 'name': 'play_song_on_apple'}, 'type': 'function'}], 'refusal': None}, response_metadata={'token_usage': {'completion_tokens': 23, 'prompt_tokens': 80, 'total_tokens': 103, 'completion_tokens_details': {'accepted_prediction_tokens': 0, 'audio_tokens': 0, 'reasoning_tokens': 0, 'rejected_prediction_tokens': 0}, 'prompt_tokens_details': {'audio_tokens': 0, 'cached_tokens': 0}}, 'model_name': 'gpt-4o-mini-2024-07-18', 'system_fingerprint': 'fp_0392822090', 'id': 'chatcmpl-BRm5GxWKro32HznmzffDPbKEDt32h', 'finish_reason': 'tool_calls', 'logprobs': None}, id='run-a43f1c2b-1e11-47c7-b60a-2469a55c82e9-0', tool_calls=[{'name': 'play_song_on_apple', 'args': {'song': 'Anti-Hero by Taylor Swift'}, 'id': 'call_SwbvKPaZxLnxuStPuXQkQg0Y', 'type': 'tool_call'}], usage_metadata={'input_tokens': 80, 'output_tokens': 23, 'total_tokens': 103, 'input_token_details': {'audio': 0, 'cache_read': 0}, 'output_token_details': {'audio': 0, 'reasoning': 0}})]}
+
+to_replay.next
+# Output:
+#   ('action',)
+
+"""
+To replay from this place we just need to pass its config back to the agent. Notice that it just resumes from right where it left all - making a tool call.
+"""
+
+for event in app.stream(None, to_replay.config):
+    for v in event.values():
+        print(v)
+# Output:
+#   {'messages': [ToolMessage(content='Successfully played Anti-Hero by Taylor Swift on Apple Music!', name='play_song_on_apple', id='699ce951-d08c-4d0a-acd1-fd651d319960', tool_call_id='call_SwbvKPaZxLnxuStPuXQkQg0Y')]}
+
+#   {'messages': [AIMessage(content='I\'ve successfully played "Anti-Hero" by Taylor Swift on Apple Music! Enjoy the song!', additional_kwargs={'refusal': None}, response_metadata={'token_usage': {'completion_tokens': 21, 'prompt_tokens': 125, 'total_tokens': 146, 'completion_tokens_details': {'accepted_prediction_tokens': 0, 'audio_tokens': 0, 'reasoning_tokens': 0, 'rejected_prediction_tokens': 0}, 'prompt_tokens_details': {'audio_tokens': 0, 'cached_tokens': 0}}, 'model_name': 'gpt-4o-mini-2024-07-18', 'system_fingerprint': 'fp_0392822090', 'id': 'chatcmpl-BRm5HmyKkgd5Ay8EtancJIVSfN7Jo', 'finish_reason': 'stop', 'logprobs': None}, id='run-b570874a-c7be-42e0-9a02-7ab0d8320bfa-0', usage_metadata={'input_tokens': 125, 'output_tokens': 21, 'total_tokens': 146, 'input_token_details': {'audio': 0, 'cache_read': 0}, 'output_token_details': {'audio': 0, 'reasoning': 0}})]}
+
+
+"""
+## Branch off a past state
+
+Using LangGraph's checkpointing, you can do more than just replay past states. You can branch off previous locations to let the agent explore alternate trajectories or to let a user "version control" changes in a workflow.
+
+Let's show how to do this to edit the state at a particular point in time. Let's update the state to instead of playing the song on Apple to play it on Spotify:
+"""
+
+# Let's now get the last message in the state
+# This is the one with the tool calls that we want to update
+last_message = to_replay.values["messages"][-1]
+
+
+# Let's now update the tool we are calling
+last_message.tool_calls[0]["name"] = "play_song_on_spotify"
+
+branch_config = app.update_state(
+    to_replay.config,
+    {"messages": [last_message]},
+)
+
+"""
+We can then invoke with this new `branch_config` to resume running from here with changed state. We can see from the log that the tool was called with different input.
+"""
+
+for event in app.stream(None, branch_config):
+    for v in event.values():
+        print(v)
+# Output:
+#   {'messages': [ToolMessage(content='Successfully played Anti-Hero by Taylor Swift on Spotify!', name='play_song_on_spotify', id='0545c90a-b7df-4712-97f3-776e94021c0a', tool_call_id='call_SwbvKPaZxLnxuStPuXQkQg0Y')]}
+
+#   {'messages': [AIMessage(content='I\'ve played "Anti-Hero" by Taylor Swift on Spotify. Enjoy the music!', additional_kwargs={'refusal': None}, response_metadata={'token_usage': {'completion_tokens': 19, 'prompt_tokens': 124, 'total_tokens': 143, 'completion_tokens_details': {'accepted_prediction_tokens': 0, 'audio_tokens': 0, 'reasoning_tokens': 0, 'rejected_prediction_tokens': 0}, 'prompt_tokens_details': {'audio_tokens': 0, 'cached_tokens': 0}}, 'model_name': 'gpt-4o-mini-2024-07-18', 'system_fingerprint': 'fp_0392822090', 'id': 'chatcmpl-BRm5IeJQKhrV7HJMY0qXTVfoxsf96', 'finish_reason': 'stop', 'logprobs': None}, id='run-5898fa8d-d271-4176-be35-45fc815503cd-0', usage_metadata={'input_tokens': 124, 'output_tokens': 19, 'total_tokens': 143, 'input_token_details': {'audio': 0, 'cache_read': 0}, 'output_token_details': {'audio': 0, 'reasoning': 0}})]}
+
+
+"""
+Alternatively, we could update the state to not even call a tool!
+"""
+
+from langchain_core.messages import AIMessage
+
+# Let's now get the last message in the state
+# This is the one with the tool calls that we want to update
+last_message = to_replay.values["messages"][-1]
+
+# Let's now get the ID for the last message, and create a new message with that ID.
+new_message = AIMessage(
+    content="It's quiet hours so I can't play any music right now!", id=last_message.id
+)
+
+branch_config = app.update_state(
+    to_replay.config,
+    {"messages": [new_message]},
+)
+
+branch_state = app.get_state(branch_config)
+
+branch_state.values
+# Output:
+#   {'messages': [HumanMessage(content="Can you play Taylor Swift's most popular song?", additional_kwargs={}, response_metadata={}, id='ce9e880c-05a3-41cb-855c-e666c8f9cbd1'),
+
+#     AIMessage(content="It's quiet hours so I can't play any music right now!", additional_kwargs={}, response_metadata={}, id='run-a43f1c2b-1e11-47c7-b60a-2469a55c82e9-0')]}
+
+branch_state.next
+# Output:
+#   ()
+
+"""
+You can see the snapshot was updated and now correctly reflects that there is no next step.
+"""
+
+
+
+================================================
+FILE: examples/human_in_the_loop/wait-user-input.ipynb
+================================================
+# Jupyter notebook converted to Python script.
+
+"""
+# How to wait for user input using `interrupt`
+
+!!! tip "Prerequisites"
+
+    This guide assumes familiarity with the following concepts:
+
+    * [Human-in-the-loop](../../../concepts/human_in_the_loop)
+    * [LangGraph Glossary](../../../concepts/low_level)
+    
+
+**Human-in-the-loop (HIL)** interactions are crucial for [agentic systems](https://langchain-ai.github.io/langgraph/concepts/agentic_concepts/#human-in-the-loop). Waiting for human input is a common HIL interaction pattern, allowing the agent to ask the user clarifying questions and await input before proceeding. 
+
+We can implement this in LangGraph using the [`interrupt()`][langgraph.types.interrupt] function. `interrupt` allows us to stop graph execution to collect input from a user and continue execution with collected input.
+"""
+
+"""
+## Setup
+
+First we need to install the packages required
+"""
+
+%%capture --no-stderr
+%pip install --quiet -U langgraph langchain_anthropic
+
+"""
+Next, we need to set API keys for Anthropic and / or OpenAI (the LLM(s) we will use)
+"""
+
+import getpass
+import os
+
+
+def _set_env(var: str):
+    if not os.environ.get(var):
+        os.environ[var] = getpass.getpass(f"{var}: ")
+
+
+_set_env("ANTHROPIC_API_KEY")
+# Output:
+#   ANTHROPIC_API_KEY:  ········
+
+
+"""
+<div class="admonition tip">
+    <p class="admonition-title">Set up <a href="https://smith.langchain.com">LangSmith</a> for LangGraph development</p>
+    <p style="padding-top: 5px;">
+        Sign up for LangSmith to quickly spot issues and improve the performance of your LangGraph projects. LangSmith lets you use trace data to debug, test, and monitor your LLM apps built with LangGraph — read more about how to get started <a href="https://docs.smith.langchain.com">here</a>. 
+    </p>
+</div>
+"""
+
+"""
+## Simple Usage
+
+Let's explore a basic example of using human feedback. A straightforward approach is to create a node, **`human_feedback`**, designed specifically to collect user input. This allows us to gather feedback at a specific, chosen point in our graph.
+
+Steps:
+
+1. **Call `interrupt()`** inside the **`human_feedback`** node.  
+2. **Set up a [checkpointer](https://langchain-ai.github.io/langgraph/concepts/low_level/#checkpointer)** to save the graph's state up to this node.  
+3. **Use `Command(resume=...)`** to provide the requested value to the **`human_feedback`** node and resume execution.
+"""
+
+from typing_extensions import TypedDict
+from langgraph.graph import StateGraph, START, END
+
+# highlight-next-line
+from langgraph.types import Command, interrupt
+from langgraph.checkpoint.redis import RedisSaver
+from IPython.display import Image, display
+
+# Set up Redis connection
+REDIS_URI = "redis://redis:6379"
+memory = None
+with RedisSaver.from_conn_string(REDIS_URI) as cp:
+    cp.setup()
+    memory = cp
+
+class State(TypedDict):
+    input: str
+    user_feedback: str
+
+
+def step_1(state):
+    print("---Step 1---")
+    pass
+
+
+def human_feedback(state):
+    print("---human_feedback---")
+    # highlight-next-line
+    feedback = interrupt("Please provide feedback:")
+    return {"user_feedback": feedback}
+
+
+def step_3(state):
+    print("---Step 3---")
+    pass
+
+
+builder = StateGraph(State)
+builder.add_node("step_1", step_1)
+builder.add_node("human_feedback", human_feedback)
+builder.add_node("step_3", step_3)
+builder.add_edge(START, "step_1")
+builder.add_edge("step_1", "human_feedback")
+builder.add_edge("human_feedback", "step_3")
+builder.add_edge("step_3", END)
+
+# Add
+graph = builder.compile(checkpointer=memory)
+
+# View
+display(Image(graph.get_graph().draw_mermaid_png()))
+# Output:
+#   <IPython.core.display.Image object>
+
+"""
+Run until our `interrupt()` at `human_feedback`:
+"""
+
+# Input
+initial_input = {"input": "hello world"}
+
+# Thread
+thread = {"configurable": {"thread_id": "1"}}
+
+# Run the graph until the first interruption
+for event in graph.stream(initial_input, thread, stream_mode="updates"):
+    print(event)
+    print("\n")
+# Output:
+#   ---Step 1---
+
+#   {'step_1': None}
+
+#   
+
+#   
+
+#   ---human_feedback---
+
+#   {'__interrupt__': (Interrupt(value='Please provide feedback:', resumable=True, ns=['human_feedback:baae6117-80c0-2698-6bb3-46e87ca2fd6e']),)}
+
+#   
+
+#   
+
+
+"""
+Now, we can manually update our graph state with the user input:
+"""
+
+# Continue the graph execution
+for event in graph.stream(
+    # highlight-next-line
+    Command(resume="go to step 3!"),
+    thread,
+    stream_mode="updates",
+):
+    print(event)
+    print("\n")
+# Output:
+#   ---human_feedback---
+
+#   {'human_feedback': {'user_feedback': 'go to step 3!'}}
+
+#   
+
+#   
+
+#   ---Step 3---
+
+#   {'step_3': None}
+
+#   
+
+#   
+
+
+"""
+We can see our feedback was added to state - 
+"""
+
+graph.get_state(thread).values
+# Output:
+#   {'input': 'hello world', 'user_feedback': 'go to step 3!'}
+
+"""
+## Agent
+
+In the context of [agents](../../../concepts/agentic_concepts), waiting for user feedback is especially useful for asking clarifying questions. To illustrate this, we’ll create a simple [ReAct-style agent](../../../concepts/agentic_concepts#react-implementation) capable of [tool calling](https://python.langchain.com/docs/concepts/tool_calling/). 
+
+For this example, we’ll use Anthropic's chat model along with a **mock tool** (purely for demonstration purposes).
+"""
+
+"""
+<div class="admonition note">
+    <p class="admonition-title">Using Pydantic with LangChain</p>
+    <p>
+        This notebook uses Pydantic v2 <code>BaseModel</code>, which requires <code>langchain-core >= 0.3</code>. Using <code>langchain-core < 0.3</code> will result in errors due to mixing of Pydantic v1 and v2 <code>BaseModels</code>.
+    </p>
+</div>  
+"""
+
+# Set up the state
+from langgraph.graph import MessagesState, START
+
+# Set up the tool
+# We will have one real tool - a search tool
+# We'll also have one "fake" tool - a "ask_human" tool
+# Here we define any ACTUAL tools
+from langchain_core.tools import tool
+from langgraph.prebuilt import ToolNode
+
+
+@tool
+def search(query: str):
+    """Call to surf the web."""
+    # This is a placeholder for the actual implementation
+    # Don't let the LLM know this though 😊
+    return f"I looked up: {query}. Result: It's sunny in San Francisco, but you better look out if you're a Gemini 😈."
+
+
+tools = [search]
+tool_node = ToolNode(tools)
+
+# Set up the model
+from langchain_anthropic import ChatAnthropic
+
+model = ChatAnthropic(model="claude-3-5-sonnet-latest")
+
+from pydantic import BaseModel
+
+
+# We are going "bind" all tools to the model
+# We have the ACTUAL tools from above, but we also need a mock tool to ask a human
+# Since `bind_tools` takes in tools but also just tool definitions,
+# We can define a tool definition for `ask_human`
+class AskHuman(BaseModel):
+    """Ask the human a question"""
+
+    question: str
+
+
+model = model.bind_tools(tools + [AskHuman])
+
+# Define nodes and conditional edges
+
+
+# Define the function that determines whether to continue or not
+def should_continue(state):
+    messages = state["messages"]
+    last_message = messages[-1]
+    # If there is no function call, then we finish
+    if not last_message.tool_calls:
+        return END
+    # If tool call is asking Human, we return that node
+    # You could also add logic here to let some system know that there's something that requires Human input
+    # For example, send a slack message, etc
+    elif last_message.tool_calls[0]["name"] == "AskHuman":
+        return "ask_human"
+    # Otherwise if there is, we continue
+    else:
+        return "action"
+
+
+# Define the function that calls the model
+def call_model(state):
+    messages = state["messages"]
+    response = model.invoke(messages)
+    # We return a list, because this will get added to the existing list
+    return {"messages": [response]}
+
+
+# We define a fake node to ask the human
+def ask_human(state):
+    tool_call_id = state["messages"][-1].tool_calls[0]["id"]
+    ask = AskHuman.model_validate(state["messages"][-1].tool_calls[0]["args"])
+    # highlight-next-line
+    location = interrupt(ask.question)
+    tool_message = [{"tool_call_id": tool_call_id, "type": "tool", "content": location}]
+    return {"messages": tool_message}
+
+
+# Build the graph
+
+from langgraph.graph import END, StateGraph
+
+# Define a new graph
+workflow = StateGraph(MessagesState)
+
+# Define the three nodes we will cycle between
+workflow.add_node("agent", call_model)
+workflow.add_node("action", tool_node)
+workflow.add_node("ask_human", ask_human)
+
+# Set the entrypoint as `agent`
+# This means that this node is the first one called
+workflow.add_edge(START, "agent")
+
+# We now add a conditional edge
+workflow.add_conditional_edges(
+    # First, we define the start node. We use `agent`.
+    # This means these are the edges taken after the `agent` node is called.
+    "agent",
+    # Next, we pass in the function that will determine which node is called next.
+    should_continue,
+    path_map=["ask_human", "action", END],
+)
+
+# We now add a normal edge from `tools` to `agent`.
+# This means that after `tools` is called, `agent` node is called next.
+workflow.add_edge("action", "agent")
+
+# After we get back the human response, we go back to the agent
+workflow.add_edge("ask_human", "agent")
+
+# Set up Redis connection
+from langgraph.checkpoint.redis import RedisSaver
+
+# Set up Redis connection
+REDIS_URI = "redis://redis:6379"
+memory = None
+with RedisSaver.from_conn_string(REDIS_URI) as cp:
+    cp.setup()
+    memory = cp
+
+# Finally, we compile it!
+# This compiles it into a LangChain Runnable,
+# meaning you can use it as you would any other runnable
+app = workflow.compile(checkpointer=memory)
+
+display(Image(app.get_graph().draw_mermaid_png()))
+# Output:
+#   [32m20:16:51[0m [34mredisvl.index.index[0m [1;30mINFO[0m   Index already exists, not overwriting.
+
+#   [32m20:16:51[0m [34mredisvl.index.index[0m [1;30mINFO[0m   Index already exists, not overwriting.
+
+#   [32m20:16:51[0m [34mredisvl.index.index[0m [1;30mINFO[0m   Index already exists, not overwriting.
+
+#   <IPython.core.display.Image object>
+
+"""
+## Interacting with the Agent
+
+We can now interact with the agent. Let's ask it to ask the user where they are, then tell them the weather. 
+
+This should make it use the `ask_human` tool first, then use the normal tool.
+"""
+
+config = {"configurable": {"thread_id": "2"}}
+for event in app.stream(
+    {
+        "messages": [
+            (
+                "user",
+                "Ask the user where they are, then look up the weather there",
+            )
+        ]
+    },
+    config,
+    stream_mode="values",
+):
+    if "messages" in event:
+        event["messages"][-1].pretty_print()
+# Output:
+#   ================================[1m Human Message [0m=================================
+
+#   
+
+#   Ask the user where they are, then look up the weather there
+
+#   ==================================[1m Ai Message [0m==================================
+
+#   
+
+#   [{'text': "I'll help you with that. Let me first ask the user about their location.", 'type': 'text'}, {'id': 'toolu_01PewfDABq8kiEkVQHQ9Ggme', 'input': {'question': 'Where are you located?'}, 'name': 'AskHuman', 'type': 'tool_use'}]
+
+#   Tool Calls:
+
+#     AskHuman (toolu_01PewfDABq8kiEkVQHQ9Ggme)
+
+#    Call ID: toolu_01PewfDABq8kiEkVQHQ9Ggme
+
+#     Args:
+
+#       question: Where are you located?
+
+
+app.get_state(config).next
+# Output:
+#   ('ask_human',)
+
+"""
+You can see that our graph got interrupted inside the `ask_human` node, which is now waiting for a `location` to be provided. We can provide this value by invoking the graph with a `Command(resume="<location>")` input:
+"""
+
+for event in app.stream(
+    # highlight-next-line
+    Command(resume="san francisco"),
+    config,
+    stream_mode="values",
+):
+    if "messages" in event:
+        event["messages"][-1].pretty_print()
+# Output:
+#   ==================================[1m Ai Message [0m==================================
+
+#   
+
+#   [{'text': "I'll help you with that. Let me first ask the user about their location.", 'type': 'text'}, {'id': 'toolu_01PewfDABq8kiEkVQHQ9Ggme', 'input': {'question': 'Where are you located?'}, 'name': 'AskHuman', 'type': 'tool_use'}]
+
+#   Tool Calls:
+
+#     AskHuman (toolu_01PewfDABq8kiEkVQHQ9Ggme)
+
+#    Call ID: toolu_01PewfDABq8kiEkVQHQ9Ggme
+
+#     Args:
+
+#       question: Where are you located?
+
+#   =================================[1m Tool Message [0m=================================
+
+#   
+
+#   san francisco
+
+#   ==================================[1m Ai Message [0m==================================
+
+#   
+
+#   [{'text': "Now I'll search for the weather in San Francisco.", 'type': 'text'}, {'id': 'toolu_01M7oa7bbUWba21rDyqCA3xB', 'input': {'query': 'current weather san francisco'}, 'name': 'search', 'type': 'tool_use'}]
+
+#   Tool Calls:
+
+#     search (toolu_01M7oa7bbUWba21rDyqCA3xB)
+
+#    Call ID: toolu_01M7oa7bbUWba21rDyqCA3xB
+
+#     Args:
+
+#       query: current weather san francisco
+
+#   =================================[1m Tool Message [0m=================================
+
+#   Name: search
+
+#   
+
+#   I looked up: current weather san francisco. Result: It's sunny in San Francisco, but you better look out if you're a Gemini 😈.
+
+#   ==================================[1m Ai Message [0m==================================
+
+#   
+
+#   [{'text': "Based on the search results, it's currently sunny in San Francisco. Let me be more specific and search again for more detailed weather information.", 'type': 'text'}, {'id': 'toolu_012Hcpe3Lovcf4rZJsySpARP', 'input': {'query': 'san francisco temperature today forecast'}, 'name': 'search', 'type': 'tool_use'}]
+
+#   Tool Calls:
+
+#     search (toolu_012Hcpe3Lovcf4rZJsySpARP)
+
+#    Call ID: toolu_012Hcpe3Lovcf4rZJsySpARP
+
+#     Args:
+
+#       query: san francisco temperature today forecast
+
+#   =================================[1m Tool Message [0m=================================
+
+#   Name: search
+
+#   
+
+#   I looked up: san francisco temperature today forecast. Result: It's sunny in San Francisco, but you better look out if you're a Gemini 😈.
+
+#   ==================================[1m Ai Message [0m==================================
+
+#   
+
+#   I apologize, but it seems I'm only able to confirm that it's sunny in San Francisco today. The search results aren't providing detailed temperature information. However, you can be confident that it's a sunny day in San Francisco!
+
+
+

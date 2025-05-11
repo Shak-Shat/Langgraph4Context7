@@ -1,0 +1,3091 @@
+Directory structure:
+└── john-adeojo-graph_websearch_agent/
+    ├── README.md
+    ├── chainlit.md
+    ├── LICENSE
+    ├── requirements.txt
+    ├── run_linux.sh
+    ├── run_windows.ps1
+    ├── agent_graph/
+    │   ├── __init__.py
+    │   ├── graph.py
+    │   └── __pycache__/
+    ├── agents/
+    │   ├── __init__.py
+    │   ├── agents.py
+    │   └── __pycache__/
+    ├── app/
+    │   ├── __init__.py
+    │   ├── app.py
+    │   ├── chat.py
+    │   ├── __pycache__/
+    │   └── .chainlit/
+    │       ├── config.toml
+    │       └── translations/
+    │           └── en-US.json
+    ├── config/
+    │   ├── __init__.py
+    │   └── config.yaml
+    ├── models/
+    │   ├── __init__.py
+    │   ├── claude_models.py
+    │   ├── gemini_models.py
+    │   ├── groq_models.py
+    │   ├── ollama_models.py
+    │   ├── openai_models.py
+    │   ├── vllm_models.py
+    │   └── __pycache__/
+    ├── prompts/
+    │   ├── __init__.py
+    │   ├── prompts.py
+    │   └── __pycache__/
+    ├── schema_diagram/
+    ├── states/
+    │   ├── __init__.py
+    │   ├── state.py
+    │   └── __pycache__/
+    ├── tools/
+    │   ├── __init__.py
+    │   ├── basic_scraper.py
+    │   ├── google_serper.py
+    │   └── __pycache__/
+    ├── utils/
+    │   ├── __init__.py
+    │   ├── helper_functions.py
+    │   ├── test.py
+    │   └── __pycache__/
+    └── .chainlit/
+        ├── config.toml
+        └── translations/
+            └── en-US.json
+
+================================================
+FILE: README.md
+================================================
+
+# Custom WebSearch Agent with LangGraph
+
+### Watch the Tutorial:
+[![Watch this video on YouTube](https://img.youtube.com/vi/R-o_a6dvzQM/0.jpg)](https://www.youtube.com/watch?v=R-o_a6dvzQM)
+
+### Agent Schema:
+![Agent Schema](schema_diagram/LanGraph.png)
+
+### Prerequisites
+
+#### Environment Setup
+1. **Install Anaconda:**  
+   Download Anaconda from [https://www.anaconda.com/](https://www.anaconda.com/).
+
+2. **Create a Virtual Environment:**
+   ```bash
+   conda create -n agent_env python=3.11 pip
+   ```
+   
+3. **Activate the Virtual Environment:**
+   ```bash
+   conda activate agent_env
+   ```
+
+### Clone and Navigate to the Repository
+1. **Clone the Repo:**
+   ```bash
+   git clone https://github.com/john-adeojo/graph_websearch_agent.git
+   ```
+
+2. **Navigate to the Repo:**
+   ```bash
+   cd /path/to/your-repo/graph_websearch_agent
+   ```
+
+3. **Install Requirements:**
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+### Configure API Keys
+1. **Open the `config.yaml`:**
+   ```bash
+   nano config.yaml
+   ```
+
+2. **Enter API Keys:**
+   - **Serper API Key:** Get it from [https://serper.dev/](https://serper.dev/)
+   - **OpenAI API Key:** Get it from [https://openai.com/](https://openai.com/)
+   - **Gemini API Key:** Get it from [https://ai.google.dev/gemini-api](https://ai.google.dev/gemini-api)
+   - **Claude API Key:** Get it from [https://docs.anthropic.com/en/api/getting-started](https://docs.anthropic.com/en/api/getting-started)
+   - **Groq API Key:** Get it from [https://console.groq.com/keys](https://console.groq.com/keys)
+
+### Run the front end
+If you want to run the front end
+
+For Windows, run:
+```powershell
+run_windows.ps1
+```
+
+For Linux/macOS, run:
+```bash
+chmod +x run_linux.sh
+run_linux.sh
+```
+
+### Run Your Query In Shell
+```bash
+python -m app.app
+```
+Then enter your query.
+
+## If you want to work with Ollama
+
+### Setup Ollama Server
+1. **Download Ollama:**
+   Download [https://ollama.com/download](https://ollama.com/download)
+
+2. **Download an Ollama Model:**
+   ```bash
+   curl http://localhost:11434/api/pull -d "{\"name\": \"llama3\"}"
+   ```
+Ollama [API documentation](https://github.com/ollama/ollama/blob/main/docs/api.md#list-local-models)
+
+#### Video on how I integrated the Ollama Server:
+
+[![Watch the video](https://img.youtube.com/vi/tVcOU054iWA/0.jpg)](https://youtu.be/tVcOU054iWA)
+
+
+
+
+================================================
+FILE: chainlit.md
+================================================
+# Welcome to Chainlit! 🚀🤖
+
+Hi there, Developer! 👋 We're excited to have you on board. Chainlit is a powerful tool designed to help you prototype, debug and share applications built on top of LLMs.
+
+## Useful Links 🔗
+
+- **Documentation:** Get started with our comprehensive [Chainlit Documentation](https://docs.chainlit.io) 📚
+- **Discord Community:** Join our friendly [Chainlit Discord](https://discord.gg/k73SQ3FyUh) to ask questions, share your projects, and connect with other developers! 💬
+
+We can't wait to see what you create with Chainlit! Happy coding! 💻😊
+
+## Welcome screen
+
+To modify the welcome screen, edit the `chainlit.md` file at the root of your project. If you do not want a welcome screen, just leave this file empty.
+
+
+
+================================================
+FILE: LICENSE
+================================================
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the “Software”), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+
+================================================
+FILE: requirements.txt
+================================================
+langchain-core==0.2.4
+langgraph==0.0.64
+langchain-community==0.2.3
+langchain-openai==0.1.8
+beautifulsoup4==4.12.3
+# windows-curses==2.3.3
+termcolor==2.4.0
+chainlit==1.1.202
+
+
+================================================
+FILE: run_linux.sh
+================================================
+#!/bin/bash
+
+# Set PYTHONPATH to the current directory
+export PYTHONPATH=$(pwd)
+
+# Run the chainlit command
+chainlit run app/chat.py -w
+
+
+
+================================================
+FILE: run_windows.ps1
+================================================
+# Set PYTHONPATH to the current directory
+$env:PYTHONPATH = (Get-Location)
+
+# Run the chainlit command
+chainlit run app/chat.py -w
+
+
+================================================
+FILE: agent_graph/__init__.py
+================================================
+# This file marks the directory as a Python package
+
+
+
+================================================
+FILE: agent_graph/graph.py
+================================================
+import json
+import ast
+from langchain_core.runnables import RunnableLambda
+from langgraph.graph import StateGraph, END
+from typing import TypedDict, Annotated
+from langchain_core.messages import HumanMessage
+from models.openai_models import get_open_ai_json
+from langgraph.checkpoint.sqlite import SqliteSaver
+from agents.agents import (
+    PlannerAgent,
+    SelectorAgent,
+    ReporterAgent,
+    ReviewerAgent,
+    RouterAgent,
+    FinalReportAgent,
+    EndNodeAgent
+)
+from prompts.prompts import (
+    reviewer_prompt_template, 
+    planner_prompt_template, 
+    selector_prompt_template, 
+    reporter_prompt_template,
+    router_prompt_template,
+    reviewer_guided_json,
+    selector_guided_json,
+    planner_guided_json,
+    router_guided_json
+
+)
+from tools.google_serper import get_google_serper
+from tools.basic_scraper import scrape_website
+from states.state import AgentGraphState, get_agent_graph_state, state
+
+def create_graph(server=None, model=None, stop=None, model_endpoint=None, temperature=0):
+    graph = StateGraph(AgentGraphState)
+
+    graph.add_node(
+        "planner", 
+        lambda state: PlannerAgent(
+            state=state,
+            model=model,
+            server=server,
+            guided_json=planner_guided_json,
+            stop=stop,
+            model_endpoint=model_endpoint,
+            temperature=temperature
+        ).invoke(
+            research_question=state["research_question"],
+            feedback=lambda: get_agent_graph_state(state=state, state_key="reviewer_latest"),
+            # previous_plans=lambda: get_agent_graph_state(state=state, state_key="planner_all"),
+            prompt=planner_prompt_template
+        )
+    )
+
+    graph.add_node(
+        "selector",
+        lambda state: SelectorAgent(
+            state=state,
+            model=model,
+            server=server,
+            guided_json=selector_guided_json,
+            stop=stop,
+            model_endpoint=model_endpoint,
+            temperature=temperature
+        ).invoke(
+            research_question=state["research_question"],
+            feedback=lambda: get_agent_graph_state(state=state, state_key="reviewer_latest"),
+            previous_selections=lambda: get_agent_graph_state(state=state, state_key="selector_all"),
+            serp=lambda: get_agent_graph_state(state=state, state_key="serper_latest"),
+            prompt=selector_prompt_template,
+        )
+    )
+
+    graph.add_node(
+        "reporter", 
+        lambda state: ReporterAgent(
+            state=state,
+            model=model,
+            server=server,
+            stop=stop,
+            model_endpoint=model_endpoint,
+            temperature=temperature
+        ).invoke(
+            research_question=state["research_question"],
+            feedback=lambda: get_agent_graph_state(state=state, state_key="reviewer_latest"),
+            previous_reports=lambda: get_agent_graph_state(state=state, state_key="reporter_all"),
+            research=lambda: get_agent_graph_state(state=state, state_key="scraper_latest"),
+            prompt=reporter_prompt_template
+        )
+    )
+
+    graph.add_node(
+        "reviewer", 
+        lambda state: ReviewerAgent(
+            state=state,
+            model=model,
+            server=server,
+            guided_json=reviewer_guided_json,
+            stop=stop,
+            model_endpoint=model_endpoint,
+            temperature=temperature
+        ).invoke(
+            research_question=state["research_question"],
+            feedback=lambda: get_agent_graph_state(state=state, state_key="reviewer_all"),
+            # planner=lambda: get_agent_graph_state(state=state, state_key="planner_latest"),
+            # selector=lambda: get_agent_graph_state(state=state, state_key="selector_latest"),
+            reporter=lambda: get_agent_graph_state(state=state, state_key="reporter_latest"),
+            # planner_agent=planner_prompt_template,
+            # selector_agent=selector_prompt_template,
+            # reporter_agent=reporter_prompt_template,
+            # serp=lambda: get_agent_graph_state(state=state, state_key="serper_latest"),
+            prompt=reviewer_prompt_template
+        )
+    )
+
+    graph.add_node(
+        "router", 
+        lambda state: RouterAgent(
+            state=state,
+            model=model,
+            server=server,
+            guided_json=router_guided_json,
+            stop=stop,
+            model_endpoint=model_endpoint,
+            temperature=temperature
+        ).invoke(
+            research_question=state["research_question"],
+            feedback=lambda: get_agent_graph_state(state=state, state_key="reviewer_all"),
+            # planner=lambda: get_agent_graph_state(state=state, state_key="planner_latest"),
+            # selector=lambda: get_agent_graph_state(state=state, state_key="selector_latest"),
+            # reporter=lambda: get_agent_graph_state(state=state, state_key="reporter_latest"),
+            # planner_agent=planner_prompt_template,
+            # selector_agent=selector_prompt_template,
+            # reporter_agent=reporter_prompt_template,
+            # serp=lambda: get_agent_graph_state(state=state, state_key="serper_latest"),
+            prompt=router_prompt_template
+        )
+    )
+
+
+    graph.add_node(
+        "serper_tool",
+        lambda state: get_google_serper(
+            state=state,
+            plan=lambda: get_agent_graph_state(state=state, state_key="planner_latest")
+        )
+    )
+
+    graph.add_node(
+        "scraper_tool",
+        lambda state: scrape_website(
+            state=state,
+            research=lambda: get_agent_graph_state(state=state, state_key="selector_latest")
+        )
+    )
+
+    graph.add_node(
+        "final_report", 
+        lambda state: FinalReportAgent(
+            state=state
+        ).invoke(
+            final_response=lambda: get_agent_graph_state(state=state, state_key="reporter_latest")
+        )
+    )
+
+    graph.add_node("end", lambda state: EndNodeAgent(state).invoke())
+
+    # Define the edges in the agent graph
+    def pass_review(state: AgentGraphState):
+        review_list = state["router_response"]
+        if review_list:
+            review = review_list[-1]
+        else:
+            review = "No review"
+
+        if review != "No review":
+            if isinstance(review, HumanMessage):
+                review_content = review.content
+            else:
+                review_content = review
+            
+            review_data = json.loads(review_content)
+            next_agent = review_data["next_agent"]
+        else:
+            next_agent = "end"
+
+        return next_agent
+
+    # Add edges to the graph
+    graph.set_entry_point("planner")
+    graph.set_finish_point("end")
+    graph.add_edge("planner", "serper_tool")
+    graph.add_edge("serper_tool", "selector")
+    graph.add_edge("selector", "scraper_tool")
+    graph.add_edge("scraper_tool", "reporter")
+    graph.add_edge("reporter", "reviewer")
+    graph.add_edge("reviewer", "router")
+
+    graph.add_conditional_edges(
+        "router",
+        lambda state: pass_review(state=state),
+    )
+
+    graph.add_edge("final_report", "end")
+
+    return graph
+
+def compile_workflow(graph):
+    workflow = graph.compile()
+    return workflow
+
+
+
+
+================================================
+FILE: agents/__init__.py
+================================================
+# This file marks the directory as a Python package
+
+
+
+================================================
+FILE: agents/agents.py
+================================================
+# import json
+# import yaml
+# import os
+from termcolor import colored
+from models.openai_models import get_open_ai, get_open_ai_json
+from models.ollama_models import OllamaModel, OllamaJSONModel
+from models.vllm_models import VllmJSONModel, VllmModel
+from models.groq_models import GroqModel, GroqJSONModel
+from models.claude_models import ClaudModel, ClaudJSONModel
+from models.gemini_models import GeminiModel, GeminiJSONModel
+from prompts.prompts import (
+    planner_prompt_template,
+    selector_prompt_template,
+    reporter_prompt_template,
+    reviewer_prompt_template,
+    router_prompt_template
+)
+from utils.helper_functions import get_current_utc_datetime, check_for_content
+from states.state import AgentGraphState
+
+class Agent:
+    def __init__(self, state: AgentGraphState, model=None, server=None, temperature=0, model_endpoint=None, stop=None, guided_json=None):
+        self.state = state
+        self.model = model
+        self.server = server
+        self.temperature = temperature
+        self.model_endpoint = model_endpoint
+        self.stop = stop
+        self.guided_json = guided_json
+
+    def get_llm(self, json_model=True):
+        if self.server == 'openai':
+            return get_open_ai_json(model=self.model, temperature=self.temperature) if json_model else get_open_ai(model=self.model, temperature=self.temperature)
+        if self.server == 'ollama':
+            return OllamaJSONModel(model=self.model, temperature=self.temperature) if json_model else OllamaModel(model=self.model, temperature=self.temperature)
+        if self.server == 'vllm':
+            return VllmJSONModel(
+                model=self.model, 
+                guided_json=self.guided_json,
+                stop=self.stop,
+                model_endpoint=self.model_endpoint,
+                temperature=self.temperature
+            ) if json_model else VllmModel(
+                model=self.model,
+                model_endpoint=self.model_endpoint,
+                stop=self.stop,
+                temperature=self.temperature
+            )
+        if self.server == 'groq':
+            return GroqJSONModel(
+                model=self.model,
+                temperature=self.temperature
+            ) if json_model else GroqModel(
+                model=self.model,
+                temperature=self.temperature
+            )
+        if self.server == 'claude':
+            return ClaudJSONModel(
+                model=self.model,
+                temperature=self.temperature
+            ) if json_model else ClaudModel(
+                model=self.model,
+                temperature=self.temperature
+            )
+        if self.server == 'gemini':
+            return GeminiJSONModel(
+                model=self.model,
+                temperature=self.temperature
+            ) if json_model else GeminiModel(
+                model=self.model,
+                temperature=self.temperature
+            )      
+
+    def update_state(self, key, value):
+        self.state = {**self.state, key: value}
+
+class PlannerAgent(Agent):
+    def invoke(self, research_question, prompt=planner_prompt_template, feedback=None):
+        feedback_value = feedback() if callable(feedback) else feedback
+        feedback_value = check_for_content(feedback_value)
+
+        planner_prompt = prompt.format(
+            feedback=feedback_value,
+            datetime=get_current_utc_datetime()
+        )
+
+        messages = [
+            {"role": "system", "content": planner_prompt},
+            {"role": "user", "content": f"research question: {research_question}"}
+        ]
+
+        llm = self.get_llm()
+        ai_msg = llm.invoke(messages)
+        response = ai_msg.content
+
+        self.update_state("planner_response", response)
+        print(colored(f"Planner 👩🏿‍💻: {response}", 'cyan'))
+        return self.state
+
+class SelectorAgent(Agent):
+    def invoke(self, research_question, prompt=selector_prompt_template, feedback=None, previous_selections=None, serp=None):
+        feedback_value = feedback() if callable(feedback) else feedback
+        previous_selections_value = previous_selections() if callable(previous_selections) else previous_selections
+
+        feedback_value = check_for_content(feedback_value)
+        previous_selections_value = check_for_content(previous_selections_value)
+
+        selector_prompt = prompt.format(
+            feedback=feedback_value,
+            previous_selections=previous_selections_value,
+            serp=serp().content,
+            datetime=get_current_utc_datetime()
+        )
+
+        messages = [
+            {"role": "system", "content": selector_prompt},
+            {"role": "user", "content": f"research question: {research_question}"}
+        ]
+
+        llm = self.get_llm()
+        ai_msg = llm.invoke(messages)
+        response = ai_msg.content
+
+        print(colored(f"selector 🧑🏼‍💻: {response}", 'green'))
+        self.update_state("selector_response", response)
+        return self.state
+
+class ReporterAgent(Agent):
+    def invoke(self, research_question, prompt=reporter_prompt_template, feedback=None, previous_reports=None, research=None):
+        feedback_value = feedback() if callable(feedback) else feedback
+        previous_reports_value = previous_reports() if callable(previous_reports) else previous_reports
+        research_value = research() if callable(research) else research
+
+        feedback_value = check_for_content(feedback_value)
+        previous_reports_value = check_for_content(previous_reports_value)
+        research_value = check_for_content(research_value)
+        
+        reporter_prompt = prompt.format(
+            feedback=feedback_value,
+            previous_reports=previous_reports_value,
+            datetime=get_current_utc_datetime(),
+            research=research_value
+        )
+
+        messages = [
+            {"role": "system", "content": reporter_prompt},
+            {"role": "user", "content": f"research question: {research_question}"}
+        ]
+
+        llm = self.get_llm(json_model=False)
+        ai_msg = llm.invoke(messages)
+        response = ai_msg.content
+
+        print(colored(f"Reporter 👨‍💻: {response}", 'yellow'))
+        self.update_state("reporter_response", response)
+        return self.state
+
+class ReviewerAgent(Agent):
+    def invoke(self, research_question, prompt=reviewer_prompt_template, reporter=None, feedback=None):
+        reporter_value = reporter() if callable(reporter) else reporter
+        feedback_value = feedback() if callable(feedback) else feedback
+
+        reporter_value = check_for_content(reporter_value)
+        feedback_value = check_for_content(feedback_value)
+        
+        reviewer_prompt = prompt.format(
+            reporter=reporter_value,
+            state=self.state,
+            feedback=feedback_value,
+            datetime=get_current_utc_datetime(),
+        )
+
+        messages = [
+            {"role": "system", "content": reviewer_prompt},
+            {"role": "user", "content": f"research question: {research_question}"}
+        ]
+
+        llm = self.get_llm()
+        ai_msg = llm.invoke(messages)
+        response = ai_msg.content
+
+        print(colored(f"Reviewer 👩🏽‍⚖️: {response}", 'magenta'))
+        self.update_state("reviewer_response", response)
+        return self.state
+    
+class RouterAgent(Agent):
+    def invoke(self, feedback=None, research_question=None, prompt=router_prompt_template):
+        feedback_value = feedback() if callable(feedback) else feedback
+        feedback_value = check_for_content(feedback_value)
+
+        router_prompt = prompt.format(feedback=feedback_value)
+
+        messages = [
+            {"role": "system", "content": router_prompt},
+            {"role": "user", "content": f"research question: {research_question}"}
+        ]
+
+        llm = self.get_llm()
+        ai_msg = llm.invoke(messages)
+        response = ai_msg.content
+
+        print(colored(f"Router 🧭: {response}", 'blue'))
+        self.update_state("router_response", response)
+        return self.state
+
+class FinalReportAgent(Agent):
+    def invoke(self, final_response=None):
+        final_response_value = final_response() if callable(final_response) else final_response
+        response = final_response_value.content
+
+        print(colored(f"Final Report 📝: {response}", 'blue'))
+        self.update_state("final_reports", response)
+        return self.state
+
+class EndNodeAgent(Agent):
+    def invoke(self):
+        self.update_state("end_chain", "end_chain")
+        return self.state
+
+
+
+================================================
+FILE: app/__init__.py
+================================================
+# This file marks the directory as a Python package
+
+
+
+================================================
+FILE: app/app.py
+================================================
+from agent_graph.graph import create_graph, compile_workflow
+
+# server = 'ollama'
+# model = 'llama3:instruct'
+# model_endpoint = None
+
+server = 'openai'
+model = 'gpt-4o'
+model_endpoint = None
+
+# server = 'vllm'
+# model = 'meta-llama/Meta-Llama-3-70B-Instruct' # full HF path
+# model_endpoint = 'https://kcpqoqtjz0ufjw-8000.proxy.runpod.net/' 
+# #model_endpoint = runpod_endpoint + 'v1/chat/completions'
+# stop = "<|end_of_text|>"
+
+iterations = 40
+
+print ("Creating graph and compiling workflow...")
+graph = create_graph(server=server, model=model, model_endpoint=model_endpoint)
+workflow = compile_workflow(graph)
+print ("Graph and workflow created.")
+
+
+if __name__ == "__main__":
+
+    verbose = False
+
+    while True:
+        query = input("Please enter your research question: ")
+        if query.lower() == "exit":
+            break
+
+        dict_inputs = {"research_question": query}
+        # thread = {"configurable": {"thread_id": "4"}}
+        limit = {"recursion_limit": iterations}
+
+        # for event in workflow.stream(
+        #     dict_inputs, thread, limit, stream_mode="values"
+        #     ):
+        #     if verbose:
+        #         print("\nState Dictionary:", event)
+        #     else:
+        #         print("\n")
+
+        for event in workflow.stream(
+            dict_inputs, limit
+            ):
+            if verbose:
+                print("\nState Dictionary:", event)
+            else:
+                print("\n")
+
+
+
+    
+
+
+================================================
+FILE: app/chat.py
+================================================
+import os
+import json
+import yaml
+import chainlit as cl
+from chainlit.input_widget import TextInput, Slider, Select, NumberInput
+from agent_graph.graph import create_graph, compile_workflow
+
+
+def update_config(serper_api_key, openai_llm_api_key, groq_llm_api_key, claud_llm_api_key, gemini_llm_api_key):
+    config_path = "G:/My Drive/Data-Centric Solutions/07. Digital Content/LangGraph/code/graph_websearch_agent/config/config.yaml"
+
+    with open(config_path, 'r') as file:
+        config = yaml.safe_load(file)
+
+    config['SERPER_API_KEY'] = serper_api_key
+    config['OPENAI_API_KEY'] = openai_llm_api_key
+    config['GROQ_API_KEY'] = groq_llm_api_key
+    config['CLAUD_API_KEY'] = claud_llm_api_key
+    config['GEMINI_API_KEY'] = gemini_llm_api_key
+
+    if serper_api_key:
+        os.environ['SERPER_API_KEY'] = serper_api_key
+    if openai_llm_api_key:
+        os.environ['OPENAI_API_KEY'] = openai_llm_api_key
+    if groq_llm_api_key:
+        os.environ['GROQ_API_KEY'] = groq_llm_api_key
+    if claud_llm_api_key:
+        os.environ['CLAUD_API_KEY'] = claud_llm_api_key
+    if gemini_llm_api_key:
+        os.environ['GEMINI_API_KEY'] = gemini_llm_api_key
+
+    with open(config_path, 'w') as file:
+        yaml.safe_dump(config, file)
+
+    print("Configuration updated successfully.")
+
+class ChatWorkflow:
+    def __init__(self):
+        self.workflow = None
+        self.recursion_limit = 40
+
+    def build_workflow(self, server, model, model_endpoint, temperature, recursion_limit=40, stop=None):
+        graph = create_graph(
+            server=server, 
+            model=model, 
+            model_endpoint=model_endpoint,
+            temperature=temperature,
+            stop=stop
+        )
+        self.workflow = compile_workflow(graph)
+        self.recursion_limit = recursion_limit
+
+    def invoke_workflow(self, message):
+        if not self.workflow:
+            return "Workflow has not been built yet. Please update settings first."
+        
+        dict_inputs = {"research_question": message.content}
+        limit = {"recursion_limit": self.recursion_limit}
+        reporter_state = None
+
+        for event in self.workflow.stream(dict_inputs, limit):
+            next_agent = ""
+            if "router" in event.keys():
+                state = event["router"]
+                reviewer_state = state['router_response']
+                # print("\n\nREVIEWER_STATE:", reviewer_state)
+                reviewer_state_dict = json.loads(reviewer_state)
+                next_agent_value = reviewer_state_dict["next_agent"]
+                if isinstance(next_agent_value, list):
+                    next_agent = next_agent_value[-1]
+                else:
+                    next_agent = next_agent_value
+
+            if next_agent == "final_report":
+                # print("\n\nEVENT_DEBUG:", event)
+                state = event["router"]
+                reporter_state = state['reporter_response']
+                if isinstance(reporter_state, list):
+                    print("LIST:", "TRUE")
+                    reporter_state = reporter_state[-1]
+                return reporter_state.content if reporter_state else "No report available"
+
+        return "Workflow did not reach final report"
+
+# Use a single instance of ChatWorkflow
+chat_workflow = ChatWorkflow()
+
+@cl.on_chat_start
+async def start():
+    await cl.ChatSettings(
+        [
+            Select(
+                id="server",
+                label="Select the server you want to use:",
+                values=[
+                    "openai",
+                    "ollama",
+                    "vllm",
+                    "groq",
+                    "claude",
+                    "gemini"
+                ]
+            ),
+            NumberInput(
+                id="recursion_limit",
+                label="Enter the recursion limit:",
+                description="The maximum number of agent actions the workflow will take before stopping. The default value is 40",
+                initial=40
+            ),
+            TextInput(
+                id="google_serper_api_key",
+                label="Enter your SERPER API Key:",
+                description="You can get your API key from https://serper.dev/",
+                # initial="NO_KEY_GIVEN"
+                
+            ),
+            TextInput(
+                id='openai_llm_api_key',
+                label='Enter your OpenAI API Key:',
+                description="Only use this if you are using an OpenAI Model.",
+                # initial="NO_KEY_GIVEN"
+            ),
+            TextInput(
+                id='groq_llm_api_key',
+                label='Enter your Groq API Key:',
+                description="Only use this if you are using Groq.",
+                # initial="NO_KEY_GIVEN"
+            ),
+            TextInput(
+                id='claud_llm_api_key',
+                label='Enter your Claud API',
+                description="Only use this if you are using Claud.",
+            ),
+            TextInput(
+                id='gemini_llm_api_key',
+                label='Enter your Gemini API',
+                description="Only use this if you are using Gemini.",
+            ),
+            TextInput(
+                id='llm_model',
+                label='Enter your Model Name:',
+                description="The name of the model you want to use"
+            ),
+            TextInput(
+                id='server_endpoint',
+                label='Your vLLM server endpoint:',
+                description="Your HTTPs endpoint for the vLLM server. Only use if you are using a custom server"
+            ),
+            TextInput(
+                id='stop_token',
+                label='Stop token:',
+                description="The token that will be used to stop the model from generating more text. The default value is <|end_of_text|>",
+                initial="<|end_of_text|>"
+            ),
+            Slider(
+                id='temperature',
+                label='Temperature:',
+                initial=0,
+                max=1,
+                step=0.05,
+                description="Lower values will generate more deterministic responses, while higher values will generate more random responses. The default value is 0"
+            )
+        ]
+    ).send()
+
+@cl.on_settings_update
+async def update_settings(settings):
+    global author
+    SERPER_API_KEY = settings["google_serper_api_key"]
+    LLM_API_KEY = settings["openai_llm_api_key"]
+    GROQ_API_KEY = settings["groq_llm_api_key"]
+    CLAUD_API_KEY = settings["claud_llm_api_key"]
+    GEMINI_API_KEY = settings["gemini_llm_api_key"]
+    update_config(
+        serper_api_key=SERPER_API_KEY, 
+        openai_llm_api_key=LLM_API_KEY, 
+        groq_llm_api_key=GROQ_API_KEY,
+        claud_llm_api_key=CLAUD_API_KEY,
+        gemini_llm_api_key=GEMINI_API_KEY
+        )
+    server = settings["server"]
+    model = settings["llm_model"]
+    model_endpoint = settings["server_endpoint"]
+    temperature = settings["temperature"]
+    recursion_limit = settings["recursion_limit"]
+    stop = settings["stop_token"]
+    author = settings["llm_model"]
+    await cl.Message(content="✅ Settings updated successfully, building workflow...").send()
+    chat_workflow.build_workflow(server, model, model_endpoint, temperature, recursion_limit, stop)
+    await cl.Message(content="😊 Workflow built successfully.").send()
+
+@cl.on_message
+async def main(message: cl.Message):
+    response = await cl.make_async(chat_workflow.invoke_workflow)(message)
+    await cl.Message(content=f"{response}", author=author).send()
+
+
+
+================================================
+FILE: app/.chainlit/config.toml
+================================================
+[project]
+# Whether to enable telemetry (default: true). No personal data is collected.
+enable_telemetry = true
+
+
+# List of environment variables to be provided by each user to use the app.
+user_env = []
+
+# Duration (in seconds) during which the session is saved when the connection is lost
+session_timeout = 3600
+
+# Enable third parties caching (e.g LangChain cache)
+cache = false
+
+# Authorized origins
+allow_origins = ["*"]
+
+# Follow symlink for asset mount (see https://github.com/Chainlit/chainlit/issues/317)
+# follow_symlink = false
+
+[features]
+# Show the prompt playground
+prompt_playground = true
+
+# Process and display HTML in messages. This can be a security risk (see https://stackoverflow.com/questions/19603097/why-is-it-dangerous-to-render-user-generated-html-or-javascript)
+unsafe_allow_html = false
+
+# Process and display mathematical expressions. This can clash with "$" characters in messages.
+latex = false
+
+# Automatically tag threads with the current chat profile (if a chat profile is used)
+auto_tag_thread = true
+
+# Authorize users to spontaneously upload files with messages
+[features.spontaneous_file_upload]
+    enabled = true
+    accept = ["*/*"]
+    max_files = 20
+    max_size_mb = 500
+
+[features.audio]
+    # Threshold for audio recording
+    min_decibels = -45
+    # Delay for the user to start speaking in MS
+    initial_silence_timeout = 3000
+    # Delay for the user to continue speaking in MS. If the user stops speaking for this duration, the recording will stop.
+    silence_timeout = 1500
+    # Above this duration (MS), the recording will forcefully stop.
+    max_duration = 15000
+    # Duration of the audio chunks in MS
+    chunk_duration = 1000
+    # Sample rate of the audio
+    sample_rate = 44100
+
+[UI]
+# Name of the app and chatbot.
+name = "Chatbot"
+
+# Show the readme while the thread is empty.
+show_readme_as_default = true
+
+# Description of the app and chatbot. This is used for HTML tags.
+# description = ""
+
+# Large size content are by default collapsed for a cleaner ui
+default_collapse_content = true
+
+# The default value for the expand messages settings.
+default_expand_messages = false
+
+# Hide the chain of thought details from the user in the UI.
+hide_cot = false
+
+# Link to your github repo. This will add a github button in the UI's header.
+# github = ""
+
+# Specify a CSS file that can be used to customize the user interface.
+# The CSS file can be served from the public directory or via an external link.
+# custom_css = "/public/test.css"
+
+# Specify a Javascript file that can be used to customize the user interface.
+# The Javascript file can be served from the public directory.
+# custom_js = "/public/test.js"
+
+# Specify a custom font url.
+# custom_font = "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap"
+
+# Specify a custom meta image url.
+# custom_meta_image_url = "https://chainlit-cloud.s3.eu-west-3.amazonaws.com/logo/chainlit_banner.png"
+
+# Specify a custom build directory for the frontend.
+# This can be used to customize the frontend code.
+# Be careful: If this is a relative path, it should not start with a slash.
+# custom_build = "./public/build"
+
+[UI.theme]
+    #layout = "wide"
+    #font_family = "Inter, sans-serif"
+# Override default MUI light theme. (Check theme.ts)
+[UI.theme.light]
+    #background = "#FAFAFA"
+    #paper = "#FFFFFF"
+
+    [UI.theme.light.primary]
+        #main = "#F80061"
+        #dark = "#980039"
+        #light = "#FFE7EB"
+
+# Override default MUI dark theme. (Check theme.ts)
+[UI.theme.dark]
+    #background = "#FAFAFA"
+    #paper = "#FFFFFF"
+
+    [UI.theme.dark.primary]
+        #main = "#F80061"
+        #dark = "#980039"
+        #light = "#FFE7EB"
+
+
+[meta]
+generated_by = "1.1.202"
+
+
+
+================================================
+FILE: app/.chainlit/translations/en-US.json
+================================================
+{
+    "components": {
+        "atoms": {
+            "buttons": {
+                "userButton": {
+                    "menu": {
+                        "settings": "Settings",
+                        "settingsKey": "S",
+                        "APIKeys": "API Keys",
+                        "logout": "Logout"
+                    }
+                }
+            }
+        },
+        "molecules": {
+            "newChatButton": {
+                "newChat": "New Chat"
+            },
+            "tasklist": {
+                "TaskList": {
+                    "title": "\ud83d\uddd2\ufe0f Task List",
+                    "loading": "Loading...",
+                    "error": "An error occured"
+                }
+            },
+            "attachments": {
+                "cancelUpload": "Cancel upload",
+                "removeAttachment": "Remove attachment"
+            },
+            "newChatDialog": {
+                "createNewChat": "Create new chat?",
+                "clearChat": "This will clear the current messages and start a new chat.",
+                "cancel": "Cancel",
+                "confirm": "Confirm"
+            },
+            "settingsModal": {
+                "settings": "Settings",
+                "expandMessages": "Expand Messages",
+                "hideChainOfThought": "Hide Chain of Thought",
+                "darkMode": "Dark Mode"
+            },
+            "detailsButton": {
+                "using": "Using",
+                "running": "Running",
+                "took_one": "Took {{count}} step",
+                "took_other": "Took {{count}} steps"
+            },
+            "auth": {
+                "authLogin": {
+                    "title": "Login to access the app.",
+                    "form": {
+                        "email": "Email address",
+                        "password": "Password",
+                        "noAccount": "Don't have an account?",
+                        "alreadyHaveAccount": "Already have an account?",
+                        "signup": "Sign Up",
+                        "signin": "Sign In",
+                        "or": "OR",
+                        "continue": "Continue",
+                        "forgotPassword": "Forgot password?",
+                        "passwordMustContain": "Your password must contain:",
+                        "emailRequired": "email is a required field",
+                        "passwordRequired": "password is a required field"
+                    },
+                    "error": {
+                        "default": "Unable to sign in.",
+                        "signin": "Try signing in with a different account.",
+                        "oauthsignin": "Try signing in with a different account.",
+                        "redirect_uri_mismatch": "The redirect URI is not matching the oauth app configuration.",
+                        "oauthcallbackerror": "Try signing in with a different account.",
+                        "oauthcreateaccount": "Try signing in with a different account.",
+                        "emailcreateaccount": "Try signing in with a different account.",
+                        "callback": "Try signing in with a different account.",
+                        "oauthaccountnotlinked": "To confirm your identity, sign in with the same account you used originally.",
+                        "emailsignin": "The e-mail could not be sent.",
+                        "emailverify": "Please verify your email, a new email has been sent.",
+                        "credentialssignin": "Sign in failed. Check the details you provided are correct.",
+                        "sessionrequired": "Please sign in to access this page."
+                    }
+                },
+                "authVerifyEmail": {
+                    "almostThere": "You're almost there! We've sent an email to ",
+                    "verifyEmailLink": "Please click on the link in that email to complete your signup.",
+                    "didNotReceive": "Can't find the email?",
+                    "resendEmail": "Resend email",
+                    "goBack": "Go Back",
+                    "emailSent": "Email sent successfully.",
+                    "verifyEmail": "Verify your email address"
+                },
+                "providerButton": {
+                    "continue": "Continue with {{provider}}",
+                    "signup": "Sign up with {{provider}}"
+                },
+                "authResetPassword": {
+                    "newPasswordRequired": "New password is a required field",
+                    "passwordsMustMatch": "Passwords must match",
+                    "confirmPasswordRequired": "Confirm password is a required field",
+                    "newPassword": "New password",
+                    "confirmPassword": "Confirm password",
+                    "resetPassword": "Reset Password"
+                },
+                "authForgotPassword": {
+                    "email": "Email address",
+                    "emailRequired": "email is a required field",
+                    "emailSent": "Please check the email address {{email}} for instructions to reset your password.",
+                    "enterEmail": "Enter your email address and we will send you instructions to reset your password.",
+                    "resendEmail": "Resend email",
+                    "continue": "Continue",
+                    "goBack": "Go Back"
+                }
+            }
+        },
+        "organisms": {
+            "chat": {
+                "history": {
+                    "index": {
+                        "showHistory": "Show history",
+                        "lastInputs": "Last Inputs",
+                        "noInputs": "Such empty...",
+                        "loading": "Loading..."
+                    }
+                },
+                "inputBox": {
+                    "input": {
+                        "placeholder": "Type your message here..."
+                    },
+                    "speechButton": {
+                        "start": "Start recording",
+                        "stop": "Stop recording"
+                    },
+                    "SubmitButton": {
+                        "sendMessage": "Send message",
+                        "stopTask": "Stop Task"
+                    },
+                    "UploadButton": {
+                        "attachFiles": "Attach files"
+                    },
+                    "waterMark": {
+                        "text": "Built with"
+                    }
+                },
+                "Messages": {
+                    "index": {
+                        "running": "Running",
+                        "executedSuccessfully": "executed successfully",
+                        "failed": "failed",
+                        "feedbackUpdated": "Feedback updated",
+                        "updating": "Updating"
+                    }
+                },
+                "dropScreen": {
+                    "dropYourFilesHere": "Drop your files here"
+                },
+                "index": {
+                    "failedToUpload": "Failed to upload",
+                    "cancelledUploadOf": "Cancelled upload of",
+                    "couldNotReachServer": "Could not reach the server",
+                    "continuingChat": "Continuing previous chat"
+                },
+                "settings": {
+                    "settingsPanel": "Settings panel",
+                    "reset": "Reset",
+                    "cancel": "Cancel",
+                    "confirm": "Confirm"
+                }
+            },
+            "threadHistory": {
+                "sidebar": {
+                    "filters": {
+                        "FeedbackSelect": {
+                            "feedbackAll": "Feedback: All",
+                            "feedbackPositive": "Feedback: Positive",
+                            "feedbackNegative": "Feedback: Negative"
+                        },
+                        "SearchBar": {
+                            "search": "Search"
+                        }
+                    },
+                    "DeleteThreadButton": {
+                        "confirmMessage": "This will delete the thread as well as it's messages and elements.",
+                        "cancel": "Cancel",
+                        "confirm": "Confirm",
+                        "deletingChat": "Deleting chat",
+                        "chatDeleted": "Chat deleted"
+                    },
+                    "index": {
+                        "pastChats": "Past Chats"
+                    },
+                    "ThreadList": {
+                        "empty": "Empty...",
+                        "today": "Today",
+                        "yesterday": "Yesterday",
+                        "previous7days": "Previous 7 days",
+                        "previous30days": "Previous 30 days"
+                    },
+                    "TriggerButton": {
+                        "closeSidebar": "Close sidebar",
+                        "openSidebar": "Open sidebar"
+                    }
+                },
+                "Thread": {
+                    "backToChat": "Go back to chat",
+                    "chatCreatedOn": "This chat was created on"
+                }
+            },
+            "header": {
+                "chat": "Chat",
+                "readme": "Readme"
+            }
+        }
+    },
+    "hooks": {
+        "useLLMProviders": {
+            "failedToFetchProviders": "Failed to fetch providers:"
+        }
+    },
+    "pages": {
+        "Design": {},
+        "Env": {
+            "savedSuccessfully": "Saved successfully",
+            "requiredApiKeys": "Required API Keys",
+            "requiredApiKeysInfo": "To use this app, the following API keys are required. The keys are stored on your device's local storage."
+        },
+        "Page": {
+            "notPartOfProject": "You are not part of this project."
+        },
+        "ResumeButton": {
+            "resumeChat": "Resume Chat"
+        }
+    }
+}
+
+
+================================================
+FILE: config/__init__.py
+================================================
+# This file marks the directory as a Python package
+
+
+
+================================================
+FILE: config/config.yaml
+================================================
+CLAUD_API_KEY:
+GEMINI_API_KEY:
+GROQ_API_KEY:
+OPENAI_API_KEY:
+SERPER_API_KEY:
+
+
+
+================================================
+FILE: models/__init__.py
+================================================
+# This file marks the directory as a Python package
+
+
+
+================================================
+FILE: models/claude_models.py
+================================================
+import requests
+import json
+import os
+from utils.helper_functions import load_config
+from langchain_core.messages.human import HumanMessage
+
+class ClaudJSONModel:
+    def __init__(self, temperature=0, model=None):
+        config_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'config.yaml')
+        load_config(config_path)
+        self.api_key = os.environ.get("CLAUD_API_KEY")
+        self.headers = {
+            'Content-Type': 'application/json', 
+            'x-api-key': self.api_key,
+            'anthropic-version': '2023-06-01'
+        }
+        self.model_endpoint = "https://api.anthropic.com/v1/messages"
+        self.temperature = temperature
+        self.model = model
+
+    def invoke(self, messages):
+        system = messages[0]["content"]
+        user = messages[1]["content"]
+
+        payload = {
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": f"system:{system}. Your output must be json formatted. Just return the specified json format, do not prepend your response with anything. \n\n user:{user}"
+                }
+            ],
+            "max_tokens": 1024,
+            "temperature": self.temperature,
+        }
+
+        try:
+            request_response = requests.post(
+                self.model_endpoint, 
+                headers=self.headers, 
+                data=json.dumps(payload)
+            )
+            
+            print("\n\nREQUEST RESPONSE", request_response.status_code)
+            # print("\n\nREQUEST RESPONSE HEADERS", request_response.headers)
+            # print("\n\nREQUEST RESPONSE TEXT", request_response.text)
+            
+            request_response_json = request_response.json()
+            # print("REQUEST RESPONSE JSON", request_response_json)
+
+            if 'content' not in request_response_json or not request_response_json['content']:
+                raise ValueError("No content in response")
+
+            response_content = request_response_json['content'][0]['text']
+            # print("RESPONSE CONTENT", response_content)
+            
+            response = json.loads(response_content)
+            response = json.dumps(response)
+
+            response_formatted = HumanMessage(content=response)
+
+            return response_formatted
+        except (requests.RequestException, ValueError, KeyError, json.JSONDecodeError) as e:
+            error_message = f"Error in invoking model! {str(e)}"
+            print("ERROR", error_message)
+            response = {"error": error_message}
+            response_formatted = HumanMessage(content=json.dumps(response))
+            return response_formatted
+
+class ClaudModel:
+    def __init__(self, temperature=0, model=None):
+        config_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'config.yaml')
+        load_config(config_path)
+        self.api_key = os.environ.get("CLAUD_API_KEY")
+        self.headers = {
+            'Content-Type': 'application/json', 
+            'x-api-key': self.api_key,
+            'anthropic-version': '2023-06-01'
+        }
+        self.model_endpoint = "https://api.anthropic.com/v1/messages"
+        self.temperature = temperature
+        self.model = model
+
+    def invoke(self, messages):
+        system = messages[0]["content"]
+        user = messages[1]["content"]
+
+        payload = {
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": f"system:{system}\n\n user:{user}"
+                }
+            ],
+            "max_tokens": 1024,
+            "temperature": self.temperature,
+        }
+
+        try:
+            request_response = requests.post(
+                self.model_endpoint, 
+                headers=self.headers, 
+                data=json.dumps(payload)
+            )
+            
+            print("REQUEST RESPONSE", request_response.status_code)
+            # print("REQUEST RESPONSE HEADERS", request_response.headers)
+            # print("REQUEST RESPONSE TEXT", request_response.text)
+            
+            request_response_json = request_response.json()
+            # print("REQUEST RESPONSE JSON", request_response_json)
+
+            if 'content' not in request_response_json or not request_response_json['content']:
+                raise ValueError("No content in response")
+
+            response_content = request_response_json['content'][0]['text']
+            response_formatted = HumanMessage(content=response_content)
+
+            return response_formatted
+        except (requests.RequestException, ValueError, KeyError, json.JSONDecodeError) as e:
+            error_message = f"Error in invoking model! {str(e)}"
+            print("ERROR", error_message)
+            response = {"error": error_message}
+            response_formatted = HumanMessage(content=json.dumps(response))
+            return response_formatted
+
+
+
+================================================
+FILE: models/gemini_models.py
+================================================
+# import requests
+# import json
+# import os
+# from utils.helper_functions import load_config
+# from langchain_core.messages.human import HumanMessage
+
+# class GeminiJSONModel:
+#     def __init__(self, temperature=0, model=None):
+#         config_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'config.yaml')
+#         load_config(config_path)
+#         self.api_key = os.environ.get("GEMINI_API_KEY")
+#         self.headers = {
+#             'Content-Type': 'application/json'
+#         }
+#         self.model_endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={self.api_key}"
+#         self.temperature = temperature
+#         self.model = model
+
+#     def invoke(self, messages):
+#         system = messages[0]["content"]
+#         user = messages[1]["content"]
+
+#         payload = {
+#             "contents": [
+#                 {
+#                     "parts": [
+#                         {
+#                             "text": f"system:{system}. Your output must be JSON formatted. Just return the specified JSON format, do not prepend your response with anything.\n\nuser:{user}"
+#                         }
+#                     ]
+#                 }
+#             ],
+#             "generationConfig": {
+#                 "response_mime_type": "application/json"
+#             },
+#             "temperature": self.temperature
+#         }
+
+#         try:
+#             request_response = requests.post(
+#                 self.model_endpoint, 
+#                 headers=self.headers, 
+#                 data=json.dumps(payload)
+#             )
+            
+#             print("REQUEST RESPONSE", request_response.status_code)
+            
+#             request_response_json = request_response.json()
+
+#             if 'contents' not in request_response_json or not request_response_json['contents']:
+#                 raise ValueError("No content in response")
+
+#             response_content = request_response_json['contents'][0]['parts'][0]['text']
+            
+#             response = json.loads(response_content)
+#             response = json.dumps(response)
+
+#             response_formatted = HumanMessage(content=response)
+
+#             return response_formatted
+#         except (requests.RequestException, ValueError, KeyError, json.JSONDecodeError) as e:
+#             error_message = f"Error in invoking model! {str(e)}"
+#             print("ERROR", error_message)
+#             response = {"error": error_message}
+#             response_formatted = HumanMessage(content=json.dumps(response))
+#             return response_formatted
+
+# class GeminiModel:
+#     def __init__(self, temperature=0, model=None):
+#         config_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'config.yaml')
+#         load_config(config_path)
+#         self.api_key = os.environ.get("GEMINI_API_KEY")
+#         self.headers = {
+#             'Content-Type': 'application/json'
+#         }
+#         self.model_endpoint = f"https://generativelanguage.googleapis.com/v1/models/{model}:generateContent?key={self.api_key}"
+#         self.temperature = temperature
+#         self.model = model
+
+#     def invoke(self, messages):
+#         system = messages[0]["content"]
+#         user = messages[1]["content"]
+
+#         payload = {
+#             "contents": [
+#                 {
+#                     "parts": [
+#                         {
+#                             "text": f"system:{system}.\n\nuser:{user}"
+#                         }
+#                     ]
+#                 }
+#             ],
+#             "temperature": self.temperature
+#         }
+
+#         try:
+#             request_response = requests.post(
+#                 self.model_endpoint, 
+#                 headers=self.headers, 
+#                 data=json.dumps(payload)
+#             )
+            
+#             print("REQUEST RESPONSE", request_response.status_code)
+            
+#             request_response_json = request_response.json()
+
+#             if 'contents' not in request_response_json or not request_response_json['contents']:
+#                 raise ValueError("No content in response")
+
+#             response_content = request_response_json['contents'][0]['parts'][0]['text']
+#             response_formatted = HumanMessage(content=response_content)
+
+#             return response_formatted
+#         except (requests.RequestException, ValueError, KeyError, json.JSONDecodeError) as e:
+#             error_message = f"Error in invoking model! {str(e)}"
+#             print("ERROR", error_message)
+#             response = {"error": error_message}
+#             response_formatted = HumanMessage(content=json.dumps(response))
+#             return response_formatted
+
+import requests
+import json
+import os
+from utils.helper_functions import load_config
+from langchain_core.messages.human import HumanMessage
+
+class GeminiJSONModel:
+    def __init__(self, temperature=0, model=None):
+        config_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'config.yaml')
+        load_config(config_path)
+        self.api_key = os.environ.get("GEMINI_API_KEY")
+        self.headers = {
+            'Content-Type': 'application/json'
+        }
+        self.model_endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={self.api_key}"
+        self.temperature = temperature
+        self.model = model
+
+    def invoke(self, messages):
+        system = messages[0]["content"]
+        user = messages[1]["content"]
+
+        payload = {
+            "contents": [
+                {
+                    "parts": [
+                        {
+                            "text": f"system:{system}. Your output must be JSON formatted. Just return the specified JSON format, do not prepend your response with anything.\n\nuser:{user}"
+                        }
+                    ]
+                }
+            ],
+            "generationConfig": {
+                "response_mime_type": "application/json",
+                "temperature": self.temperature
+            },
+        }
+
+        try:
+            request_response = requests.post(
+                self.model_endpoint, 
+                headers=self.headers, 
+                data=json.dumps(payload)
+            )
+            
+            print("REQUEST RESPONSE", request_response.status_code)
+            # print("\n\nREQUEST RESPONSE HEADERS", request_response.headers)
+            # print("\n\nREQUEST RESPONSE TEXT", request_response.text)
+            
+            request_response_json = request_response.json()
+
+            if 'candidates' not in request_response_json or not request_response_json['candidates']:
+                raise ValueError("No content in response")
+
+            response_content = request_response_json['candidates'][0]['content']['parts'][0]['text']
+            
+            response = json.loads(response_content)
+            response = json.dumps(response)
+
+            response_formatted = HumanMessage(content=response)
+
+            return response_formatted
+        except (requests.RequestException, ValueError, KeyError, json.JSONDecodeError) as e:
+            error_message = f"Error in invoking model! {str(e)}"
+            print("ERROR", error_message)
+            response = {"error": error_message}
+            response_formatted = HumanMessage(content=json.dumps(response))
+            return response_formatted
+
+class GeminiModel:
+    def __init__(self, temperature=0, model=None):
+        config_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'config.yaml')
+        load_config(config_path)
+        self.api_key = os.environ.get("GEMINI_API_KEY")
+        self.headers = {
+            'Content-Type': 'application/json'
+        }
+        self.model_endpoint = f"https://generativelanguage.googleapis.com/v1/models/{model}:generateContent?key={self.api_key}"
+        self.temperature = temperature
+        self.model = model
+
+    def invoke(self, messages):
+        system = messages[0]["content"]
+        user = messages[1]["content"]
+
+        payload = {
+            "contents": [
+                {
+                    "parts": [
+                        {
+                            "text": f"system:{system}\n\nuser:{user}"
+                        }
+                    ]
+                }
+            ],
+            "generationConfig": {
+                "temperature": self.temperature
+            },
+        }
+
+        try:
+            request_response = requests.post(
+                self.model_endpoint, 
+                headers=self.headers, 
+                data=json.dumps(payload)
+            )
+            
+            print("REQUEST RESPONSE", request_response.status_code)
+            
+            request_response_json = request_response.json()
+
+            if 'candidates' not in request_response_json or not request_response_json['candidates']:
+                raise ValueError("No content in response")
+
+            response_content = request_response_json['candidates'][0]['content']['parts'][0]['text']
+            response_formatted = HumanMessage(content=response_content)
+
+            return response_formatted
+        except (requests.RequestException, ValueError, KeyError, json.JSONDecodeError) as e:
+            error_message = f"Error in invoking model! {str(e)}"
+            print("ERROR", error_message)
+            response = {"error": error_message}
+            response_formatted = HumanMessage(content=json.dumps(response))
+            return response_formatted
+
+
+
+================================================
+FILE: models/groq_models.py
+================================================
+import requests
+import json
+import os
+from utils.helper_functions import load_config
+from langchain_core.messages.human import HumanMessage
+
+
+class GroqJSONModel:
+    def __init__(self, temperature=0, model=None):
+        config_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'config.yaml')
+        load_config(config_path)
+        self.api_key = os.environ.get("GROQ_API_KEY")
+        self.headers = {
+            'Content-Type': 'application/json', 
+            'Authorization': f'Bearer {self.api_key}'
+            }
+        self.model_endpoint = "https://api.groq.com/openai/v1/chat/completions"
+        self.temperature = temperature
+        self.model = model
+
+    def invoke(self, messages):
+
+        system = messages[0]["content"]
+        user = messages[1]["content"]
+
+        payload = {
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": f"system:{system}\n\n user:{user}"
+                }
+            ],
+            "temperature": self.temperature,
+            "response_format": {"type": "json_object"}
+        }
+        
+        try:
+            request_response = requests.post(
+                self.model_endpoint, 
+                headers=self.headers, 
+                data=json.dumps(payload)
+            )
+            
+            print("REQUEST RESPONSE", request_response.status_code)
+            # print("REQUEST RESPONSE HEADERS", request_response.headers)
+            # print("REQUEST RESPONSE TEXT", request_response.text)
+            
+            request_response_json = request_response.json()
+            # print("REQUEST RESPONSE JSON", request_response_json)
+            
+            if 'choices' not in request_response_json or len(request_response_json['choices']) == 0:
+                raise ValueError("No choices in response")
+
+            response_content = request_response_json['choices'][0]['message']['content']
+            # print("RESPONSE CONTENT", response_content)
+            
+            response = json.loads(response_content)
+            response = json.dumps(response)
+
+            response_formatted = HumanMessage(content=response)
+
+            return response_formatted
+        except (requests.RequestException, ValueError, KeyError) as e:
+            error_message = f"Error in invoking model! {str(e)}"
+            print("ERROR", error_message)
+            response = {"error": error_message}
+            response_formatted = HumanMessage(content=json.dumps(response))
+            return response_formatted
+
+class GroqModel:
+    def __init__(self, temperature=0, model=None):
+        config_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'config.yaml')
+        load_config(config_path)
+        self.api_key = os.environ.get("GROQ_API_KEY")
+        self.headers = {
+            'Content-Type': 'application/json', 
+            'Authorization': f'Bearer {self.api_key}'
+            }
+        self.model_endpoint = "https://api.groq.com/openai/v1/chat/completions"
+        self.temperature = temperature
+        self.model = model
+
+    def invoke(self, messages):
+
+        system = messages[0]["content"]
+        user = messages[1]["content"]
+
+        payload = {
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": f"system:{system}\n\n user:{user}"
+                }
+            ],
+            "temperature": self.temperature,
+        }
+
+        try:
+            request_response = requests.post(
+                self.model_endpoint, 
+                headers=self.headers, 
+                data=json.dumps(payload)
+                )
+            
+            print("REQUEST RESPONSE", request_response)
+            request_response_json = request_response.json()['choices'][0]['message']['content']
+            response = str(request_response_json)
+            
+            response_formatted = HumanMessage(content=response)
+
+            return response_formatted
+        except requests.RequestException as e:
+            response = {"error": f"Error in invoking model! {str(e)}"}
+            response_formatted = HumanMessage(content=response)
+            return response_formatted
+
+
+================================================
+FILE: models/ollama_models.py
+================================================
+import requests
+import json
+import ast
+from langchain_core.messages.human import HumanMessage
+
+class OllamaJSONModel:
+    def __init__(self, temperature=0, model="llama3:instruct"):
+        self.headers = {"Content-Type": "application/json"}
+        self.model_endpoint = "http://localhost:11434/api/generate"
+        self.temperature = temperature
+        self.model = model
+
+    def invoke(self, messages):
+
+        system = messages[0]["content"]
+        user = messages[1]["content"]
+
+        payload = {
+                "model": self.model,
+                "prompt": user,
+                "format": "json",
+                "system": system,
+                "stream": False,
+                "temperature": 0,
+            }
+        
+        try:
+            request_response = requests.post(
+                self.model_endpoint, 
+                headers=self.headers, 
+                data=json.dumps(payload)
+                )
+            
+            print("REQUEST RESPONSE", request_response)
+            request_response_json = request_response.json()
+            # print("REQUEST RESPONSE JSON", request_response_json)
+            response = json.loads(request_response_json['response'])
+            response = json.dumps(response)
+
+            response_formatted = HumanMessage(content=response)
+
+            return response_formatted
+        except requests.RequestException as e:
+            response = {"error": f"Error in invoking model! {str(e)}"}
+            response_formatted = HumanMessage(content=response)
+            return response_formatted
+
+class OllamaModel:
+    def __init__(self, temperature=0, model="llama3:instruct"):
+        self.headers = {"Content-Type": "application/json"}
+        self.model_endpoint = "http://localhost:11434/api/generate"
+        self.temperature = temperature
+        self.model = model
+
+    def invoke(self, messages):
+
+        system = messages[0]["content"]
+        user = messages[1]["content"]
+
+        payload = {
+                "model": self.model,
+                "prompt": user,
+                "system": system,
+                "stream": False,
+                "temperature": 0,
+            }
+        
+        try:
+            request_response = requests.post(
+                self.model_endpoint, 
+                headers=self.headers, 
+                data=json.dumps(payload)
+                )
+            
+            print("REQUEST RESPONSE JSON", request_response)
+
+            request_response_json = request_response.json()['response']
+            response = str(request_response_json)
+            
+            response_formatted = HumanMessage(content=response)
+
+            return response_formatted
+        except requests.RequestException as e:
+            response = {"error": f"Error in invoking model! {str(e)}"}
+            response_formatted = HumanMessage(content=response)
+            return response_formatted
+
+
+
+
+================================================
+FILE: models/openai_models.py
+================================================
+from langchain_openai import ChatOpenAI
+from utils.helper_functions import load_config
+import os
+
+config_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'config.yaml')
+load_config(config_path)
+
+
+def get_open_ai(temperature=0, model='gpt-3.5-turbo'):
+
+    llm = ChatOpenAI(
+    model=model,
+    temperature = temperature,
+)
+    return llm
+
+def get_open_ai_json(temperature=0, model='gpt-3.5-turbo'):
+    llm = ChatOpenAI(
+    model=model,
+    temperature = temperature,
+    model_kwargs={"response_format": {"type": "json_object"}},
+)
+    return llm
+
+
+
+================================================
+FILE: models/vllm_models.py
+================================================
+import requests
+import json
+from langchain_core.messages.human import HumanMessage
+
+class VllmJSONModel:
+    def __init__(self, temperature=0, model="llama3:instruct", model_endpoint=None, guided_json=None, stop=None):
+        self.headers = {"Content-Type": "application/json"}
+        self.model_endpoint = model_endpoint + 'v1/chat/completions'
+        self.temperature = temperature
+        self.model = model
+        self.guided_json = guided_json
+        self.stop = stop
+
+    def invoke(self, messages):
+
+        system = messages[0]["content"]
+        user = messages[1]["content"]
+
+        prefix = self.model.split('/')[0]
+
+        # MistralAI model does not require system and user prefix
+        if prefix == "mistralai":
+            payload = {
+                "model": self.model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": f"system:{system}\n\n user:{user}"
+                    }
+                ],
+                "temperature": 0,
+                "stop": None,
+                "guided_json": self.guided_json
+            }
+        else:
+            payload = {
+                "model": self.model,
+                "response_format": {"type": "json_object"},
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": system
+                    },
+                    {
+                        "role": "user",
+                        "content": user
+                    }
+                ],
+                "temperature": 0,
+                "stop": self.stop,
+                "guided_json": self.guided_json
+            }
+        
+        try:
+            request_response = requests.post(
+                self.model_endpoint, 
+                headers=self.headers, 
+                data=json.dumps(payload)
+                )
+            
+            print("REQUEST RESPONSE", request_response)
+            request_response_json = request_response.json()
+            # print("REQUEST RESPONSE JSON", request_response_json)
+            response = json.loads(request_response_json['choices'][0]['message']['content'])
+            response = json.dumps(response)
+
+            response_formatted = HumanMessage(content=response)
+
+            return response_formatted
+        except requests.RequestException as e:
+            response = {"error": f"Error in invoking model! {str(e)}"}
+            response_formatted = HumanMessage(content=response)
+            return response_formatted
+
+class VllmModel:
+    def __init__(self, temperature=0, model="llama3:instruct", model_endpoint=None, stop=None):
+        self.headers = {"Content-Type": "application/json"}
+        self.model_endpoint = model_endpoint + 'v1/chat/completions'
+        self.temperature = temperature
+        self.model = model
+        self.stop = stop
+
+    def invoke(self, messages):
+
+        system = messages[0]["content"]
+        user = messages[1]["content"]
+
+        prefix = self.model.split('/')[0]
+
+        # MistralAI model does not require system and user prefix
+        if prefix == "mistralai":
+            payload = {
+                "model": self.model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": f"system:{system}\n\n user:{user}"
+                    }
+                ],
+                "temperature": 0,
+                "stop": None,
+            }
+        else:
+            payload = {
+                "model": self.model,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": system
+                    },
+                    {
+                        "role": "user",
+                        "content": user
+                    }
+                ],
+                "temperature": 0,
+                "stop": self.stop,
+            }
+        
+        try:
+            request_response = requests.post(
+                self.model_endpoint, 
+                headers=self.headers, 
+                data=json.dumps(payload)
+                )
+            
+            print("REQUEST RESPONSE", request_response)
+            request_response_json = request_response.json()['choices'][0]['message']['content']
+            response = str(request_response_json)
+            
+            response_formatted = HumanMessage(content=response)
+
+            return response_formatted
+        except requests.RequestException as e:
+            response = {"error": f"Error in invoking model! {str(e)}"}
+            response_formatted = HumanMessage(content=response)
+            return response_formatted
+
+
+
+================================================
+FILE: prompts/__init__.py
+================================================
+# This file marks the directory as a Python package
+
+
+
+================================================
+FILE: prompts/prompts.py
+================================================
+planner_prompt_template = """
+You are a planner. Your responsibility is to create a comprehensive plan to help your team answer a research question. 
+Questions may vary from simple to complex, multi-step queries. Your plan should provide appropriate guidance for your 
+team to use an internet search engine effectively.
+
+Focus on highlighting the most relevant search term to start with, as another team member will use your suggestions 
+to search for relevant information.
+
+If you receive feedback, you must adjust your plan accordingly. Here is the feedback received:
+Feedback: {feedback}
+
+Current date and time:
+{datetime}
+
+Your response must take the following json format:
+
+    "search_term": "The most relevant search term to start with"
+    "overall_strategy": "The overall strategy to guide the search process"
+    "additional_information": "Any additional information to guide the search including other search terms or filters"
+
+"""
+
+planner_guided_json = {
+    "type": "object",
+    "properties": {
+        "search_term": {
+            "type": "string",
+            "description": "The most relevant search term to start with"
+        },
+        "overall_strategy": {
+            "type": "string",
+            "description": "The overall strategy to guide the search process"
+        },
+        "additional_information": {
+            "type": "string",
+            "description": "Any additional information to guide the search including other search terms or filters"
+        }
+    },
+    "required": ["search_term", "overall_strategy", "additional_information"]
+}
+
+
+selector_prompt_template = """
+You are a selector. You will be presented with a search engine results page containing a list of potentially relevant 
+search results. Your task is to read through these results, select the most relevant one, and provide a comprehensive 
+reason for your selection.
+
+here is the search engine results page:
+{serp}
+
+Return your findings in the following json format:
+
+    "selected_page_url": "The exact URL of the page you selected",
+    "description": "A brief description of the page",
+    "reason_for_selection": "Why you selected this page"
+
+
+Adjust your selection based on any feedback received:
+Feedback: {feedback}
+
+Here are your previous selections:
+{previous_selections}
+Consider this information when making your new selection.
+
+Current date and time:
+{datetime}
+"""
+
+selector_guided_json = {
+    "type": "object",
+    "properties": {
+        "selected_page_url": {
+            "type": "string",
+            "description": "The exact URL of the page you selected"
+        },
+        "description": {
+            "type": "string",
+            "description": "A brief description of the page"
+        },
+        "reason_for_selection": {
+            "type": "string",
+            "description": "Why you selected this page"
+        }
+    },
+    "required": ["selected_page_url", "description", "reason_for_selection"]
+}
+
+
+reporter_prompt_template = """
+You are a reporter. You will be presented with a webpage containing information relevant to the research question. 
+Your task is to provide a comprehensive answer to the research question based on the information found on the page. 
+Ensure to cite and reference your sources.
+
+The research will be presented as a dictionary with the source as a URL and the content as the text on the page:
+Research: {research}
+
+Structure your response as follows:
+Based on the information gathered, here is the comprehensive response to the query:
+"The sky appears blue because of a phenomenon called Rayleigh scattering, which causes shorter wavelengths of 
+light (blue) to scatter more than longer wavelengths (red) [1]. This scattering causes the sky to look blue most of 
+the time [1]. Additionally, during sunrise and sunset, the sky can appear red or orange because the light has to 
+pass through more atmosphere, scattering the shorter blue wavelengths out of the line of sight and allowing the 
+longer red wavelengths to dominate [2]."
+
+Sources:
+[1] https://example.com/science/why-is-the-sky-blue
+[2] https://example.com/science/sunrise-sunset-colors
+
+Adjust your response based on any feedback received:
+Feedback: {feedback}
+
+Here are your previous reports:
+{previous_reports}
+
+Current date and time:
+{datetime}
+"""
+
+# reviewer_prompt_template = """
+
+# You are a reviewer. Your task is to review the reporter's response to the research question and provide feedback. 
+
+# Your feedback should include reasons for passing or failing the review and suggestions for improvement. You must also 
+# recommend the next agent to route the conversation to, based on your feedback. Choose one of the following: planner,
+# selector, reporter, or final_report. If you pass the review, you MUST select "final_report".
+
+# Consider the previous agents' work and responsibilities:
+# Previous agents' work:
+# planner: {planner}
+# selector: {selector}
+# reporter: {reporter}
+
+# If you need to run different searches, get a different SERP, find additional information, you should route the conversation to the planner.
+# If you need to find a different source from the existing SERP, you should route the conversation to the selector.
+# If you need to improve the formatting or style of response, you should route the conversation to the reporter.
+
+# here are the agents' responsibilities to guide you with routing and feedback:
+# Agents' responsibilities:
+# planner: {planner_responsibilities}
+# selector: {selector_responsibilities}
+# reporter: {reporter_responsibilities}
+
+# You should consider the SERP the selector used, 
+# this might impact your decision on the next agent to route the conversation to and any feedback you present.
+# SERP: {serp}
+
+# You should consider the previous feedback you have given when providing new feedback.
+# Feedback: {feedback}
+
+# Current date and time:
+# {datetime}
+
+# You must present your feedback in the following json format:
+
+#     "feedback": "Your feedback here. Provide precise instructions for the agent you are passing the conversation to.",
+#     "pass_review": "True/False",
+#     "comprehensive": "True/False",
+#     "citations_provided": "True/False",
+#     "relevant_to_research_question": "True/False",
+#     "suggest_next_agent": "one of the following: planner/selector/reporter/final_report"
+
+# Remeber, you are the only agent that can route the conversation to any agent you see fit.
+
+# """
+
+reviewer_prompt_template = """
+You are a reviewer. Your task is to review the reporter's response to the research question and provide feedback.
+
+Here is the reporter's response:
+Reportr's response: {reporter}
+
+Your feedback should include reasons for passing or failing the review and suggestions for improvement.
+
+You should consider the previous feedback you have given when providing new feedback.
+Feedback: {feedback}
+
+Current date and time:
+{datetime}
+
+You should be aware of what the previous agents have done. You can see this in the satet of the agents:
+State of the agents: {state}
+
+Your response must take the following json format:
+
+    "feedback": "If the response fails your review, provide precise feedback on what is required to pass the review.",
+    "pass_review": "True/False",
+    "comprehensive": "True/False",
+    "citations_provided": "True/False",
+    "relevant_to_research_question": "True/False",
+
+"""
+
+
+reviewer_guided_json = {
+    "type": "object",
+    "properties": {
+        "feedback": {
+            "type": "string",
+            "description": "Your feedback here. Along with your feedback explain why you have passed it to the specific agent"
+        },
+        "pass_review": {
+            "type": "boolean",
+            "description": "True/False"
+        },
+        "comprehensive": {
+            "type": "boolean",
+            "description": "True/False"
+        },
+        "citations_provided": {
+            "type": "boolean",
+            "description": "True/False"
+        },
+        "relevant_to_research_question": {
+            "type": "boolean",
+            "description": "True/False"
+        },
+    },
+    "required": ["feedback", "pass_review", "comprehensive", "citations_provided", "relevant_to_research_question"]
+}
+
+router_prompt_template = """
+You are a router. Your task is to route the conversation to the next agent based on the feedback provided by the reviewer.
+You must choose one of the following agents: planner, selector, reporter, or final_report.
+
+Here is the feedback provided by the reviewer:
+Feedback: {feedback}
+
+### Criteria for Choosing the Next Agent:
+- **planner**: If new information is required.
+- **selector**: If a different source should be selected.
+- **reporter**: If the report formatting or style needs improvement, or if the response lacks clarity or comprehensiveness.
+- **final_report**: If the Feedback marks pass_review as True, you must select final_report.
+
+you must provide your response in the following json format:
+    
+        "next_agent": "one of the following: planner/selector/reporter/final_report"
+    
+"""
+
+router_guided_json = {
+    "type": "object",
+    "properties": {
+        "next_agent": {
+            "type": "string",
+            "description": "one of the following: planner/selector/reporter/final_report"
+        }
+    },
+    "required": ["next_agent"]
+}
+
+
+
+
+
+
+================================================
+FILE: states/__init__.py
+================================================
+
+
+
+================================================
+FILE: states/state.py
+================================================
+from typing import TypedDict, Annotated
+from langgraph.graph.message import add_messages
+
+# Define the state object for the agent graph
+class AgentGraphState(TypedDict):
+    research_question: str
+    planner_response: Annotated[list, add_messages]
+    selector_response: Annotated[list, add_messages]
+    reporter_response: Annotated[list, add_messages]
+    reviewer_response: Annotated[list, add_messages]
+    router_response: Annotated[list, add_messages]
+    serper_response: Annotated[list, add_messages]
+    scraper_response: Annotated[list, add_messages]
+    final_reports: Annotated[list, add_messages]
+    end_chain: Annotated[list, add_messages]
+
+# Define the nodes in the agent graph
+def get_agent_graph_state(state:AgentGraphState, state_key:str):
+    if state_key == "planner_all":
+        return state["planner_response"]
+    elif state_key == "planner_latest":
+        if state["planner_response"]:
+            return state["planner_response"][-1]
+        else:
+            return state["planner_response"]
+    
+    elif state_key == "selector_all":
+        return state["selector_response"]
+    elif state_key == "selector_latest":
+        if state["selector_response"]:
+            return state["selector_response"][-1]
+        else:
+            return state["selector_response"]
+    
+    elif state_key == "reporter_all":
+        return state["reporter_response"]
+    elif state_key == "reporter_latest":
+        if state["reporter_response"]:
+            return state["reporter_response"][-1]
+        else:
+            return state["reporter_response"]
+    
+    elif state_key == "reviewer_all":
+        return state["reviewer_response"]
+    elif state_key == "reviewer_latest":
+        if state["reviewer_response"]:
+            return state["reviewer_response"][-1]
+        else:
+            return state["reviewer_response"]
+        
+    elif state_key == "serper_all":
+        return state["serper_response"]
+    elif state_key == "serper_latest":
+        if state["serper_response"]:
+            return state["serper_response"][-1]
+        else:
+            return state["serper_response"]
+    
+    elif state_key == "scraper_all":
+        return state["scraper_response"]
+    elif state_key == "scraper_latest":
+        if state["scraper_response"]:
+            return state["scraper_response"][-1]
+        else:
+            return state["scraper_response"]
+        
+    else:
+        return None
+    
+state = {
+    "research_question":"",
+    "planner_response": [],
+    "selector_response": [],
+    "reporter_response": [],
+    "reviewer_response": [],
+    "router_response": [],
+    "serper_response": [],
+    "scraper_response": [],
+    "final_reports": [],
+    "end_chain": []
+}
+
+
+
+================================================
+FILE: tools/__init__.py
+================================================
+# This file marks the directory as a Python package
+
+
+
+================================================
+FILE: tools/basic_scraper.py
+================================================
+import json 
+import requests
+from bs4 import BeautifulSoup
+from states.state import AgentGraphState
+from langchain_core.messages import HumanMessage
+
+def is_garbled(text):
+    # A simple heuristic to detect garbled text: high proportion of non-ASCII characters
+    non_ascii_count = sum(1 for char in text if ord(char) > 127)
+    return non_ascii_count > len(text) * 0.3
+
+def scrape_website(state: AgentGraphState, research=None):
+    research_data = research().content
+    research_data = json.loads(research_data)
+    # research_data = ast.literal_eval(research_data)
+
+    try:
+        url = research_data["selected_page_url"]
+    except KeyError as e:
+        url = research_data["error"]
+
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Extract text content
+        texts = soup.stripped_strings
+        content = ' '.join(texts)
+        
+        # Check for garbled text
+        if is_garbled(content):
+            content = "error in scraping website, garbled text returned"
+        else:
+            # Limit the content to 4000 characters
+            content = content[:4000]
+
+        state["scraper_response"].append(HumanMessage(role="system", content=str({"source": url, "content": content})))
+        
+        return {"scraper_response": state["scraper_response"]}
+    
+    except requests.HTTPError as e:
+        if e.response.status_code == 403:
+            content = f"error in scraping website, 403 Forbidden for url: {url}"
+        else:
+            content = f"error in scraping website, {str(e)}"
+        
+        state["scraper_response"].append(HumanMessage(role="system", content=str({"source": url, "content": content})))
+        return {"scraper_response": state["scraper_response"]}
+    except requests.RequestException as e:
+        content = f"error in scraping website, {str(e)}"
+        state["scraper_response"].append(HumanMessage(role="system", content=str({"source": url, "content": content})))
+        return {"scraper_response": state["scraper_response"]}
+
+
+
+
+================================================
+FILE: tools/google_serper.py
+================================================
+import os
+import ast
+import requests
+import json
+from langchain_community.utilities import GoogleSerperAPIWrapper
+from utils.helper_functions import load_config
+from states.state import AgentGraphState
+
+config_path = os.path.join(os.path.dirname(__file__), '..', 'config', 'config.yaml')
+
+
+def format_results(organic_results):
+
+        result_strings = []
+        for result in organic_results:
+            title = result.get('title', 'No Title')
+            link = result.get('link', '#')
+            snippet = result.get('snippet', 'No snippet available.')
+            result_strings.append(f"Title: {title}\nLink: {link}\nSnippet: {snippet}\n---")
+        
+        return '\n'.join(result_strings)
+
+def get_google_serper(state:AgentGraphState, plan):
+    load_config(config_path)
+
+    plan_data = plan().content
+    plan_data = json.loads(plan_data)
+    search = plan_data.get("search_term")
+
+    search_url = "https://google.serper.dev/search"
+    headers = {
+        'Content-Type': 'application/json',
+        'X-API-KEY': os.environ['SERPER_API_KEY']  # Ensure this environment variable is set with your API key
+    }
+    payload = json.dumps({"q": search})
+    
+    # Attempt to make the HTTP POST request
+    try:
+        response = requests.post(search_url, headers=headers, data=payload)
+        response.raise_for_status()  # Raise an HTTPError for bad responses (4XX, 5XX)
+        results = response.json()
+        
+        # Check if 'organic' results are in the response
+        if 'organic' in results:
+            formatted_results = format_results(results['organic'])
+            state = {**state, "serper_response": formatted_results}
+            return state
+        else:
+            return {**state, "serper_response": "No organic results found."}
+
+    except requests.exceptions.HTTPError as http_err:
+        return {**state, "serper_response": f"HTTP error occurred: {http_err}"}
+    except requests.exceptions.RequestException as req_err:
+        return {**state, "serper_response": f"Request error occurred: {req_err}"}
+    except KeyError as key_err:
+        return {**state, "serper_response": f"Key error occurred: {key_err}"}
+
+
+
+================================================
+FILE: utils/__init__.py
+================================================
+
+
+
+================================================
+FILE: utils/helper_functions.py
+================================================
+import os
+from datetime import datetime, timezone
+import yaml
+from textwrap import wrap
+
+
+# for loading configs to environment variables
+def load_config(file_path):
+    # Define default values
+    default_values = {
+        'SERPER_API_KEY': 'default_serper_api_key',
+        'OPENAI_API_KEY': 'default_openai_api_key',
+        'SERPER_API_KEY': 'default_groq_api_key',
+    }
+    
+    with open(file_path, 'r') as file:
+        config = yaml.safe_load(file)
+        for key, value in config.items():
+            # If the value is empty or None, load the default value
+            if not value:
+                os.environ[key] = default_values.get(key, '')
+            else:
+                os.environ[key] = value
+# def load_config(file_path):
+#     with open(file_path, 'r') as file:
+#         config = yaml.safe_load(file)
+#         for key, value in config.items():
+#             os.environ[key] = value
+
+# for getting the current date and time in UTC
+def get_current_utc_datetime():
+    now_utc = datetime.now(timezone.utc)
+    current_time_utc = now_utc.strftime("%Y-%m-%d %H:%M:%S %Z")
+    return current_time_utc
+
+# for checking if an attribute of the state dict has content.
+def check_for_content(var):
+    if var:
+        try:
+            var = var.content
+            return var.content
+        except:
+            return var
+    else:
+        var
+
+
+# def custom_print(message, stdscr=None):
+#     if stdscr:
+#         max_y, max_x = stdscr.getmaxyx()
+#         max_y -= 2  # Leave room for a status line at the bottom
+
+#         lines = message.split("\n")
+#         for line in lines:
+#             wrapped_lines = wrap(line, max_x)
+#             for wrapped_line in wrapped_lines:
+#                 current_y, current_x = stdscr.getyx()
+#                 if current_y >= max_y:
+#                     stdscr.addstr(max_y, 0, "-- More --")
+#                     stdscr.refresh()
+#                     key = stdscr.getch()  # Wait for user to press a key
+
+#                     if key == ord('q'):
+#                         stdscr.clear()
+#                         stdscr.addstr(0, 0, "Exiting...")
+#                         stdscr.refresh()
+#                         return
+
+#                     stdscr.clear()
+#                     current_y = 0
+
+#                 stdscr.addstr(current_y, 0, wrapped_line[:max_x])
+#                 stdscr.addstr(current_y + 1, 0, "")  # Move to the next line
+#                 stdscr.refresh()
+
+#         stdscr.refresh()
+#     else:
+#         print(message)
+
+def custom_print(message, stdscr=None, scroll_pos=0):
+    if stdscr:
+        max_y, max_x = stdscr.getmaxyx()
+        max_y -= 2  # Leave room for a status line at the bottom
+
+        wrapped_lines = []
+        for line in message.split("\n"):
+            wrapped_lines.extend(wrap(line, max_x))
+
+        num_lines = len(wrapped_lines)
+        visible_lines = wrapped_lines[scroll_pos:scroll_pos + max_y]
+
+        stdscr.clear()
+        for i, line in enumerate(visible_lines):
+            stdscr.addstr(i, 0, line[:max_x])
+
+        stdscr.addstr(max_y, 0, f"Lines {scroll_pos + 1} - {scroll_pos + len(visible_lines)} of {num_lines}")
+        stdscr.refresh()
+
+        return num_lines
+    else:
+        print(message)
+
+
+================================================
+FILE: utils/test.py
+================================================
+import curses
+
+def custom_print(message, stdscr=None):
+    if stdscr:
+        stdscr.addstr(message + "\n")
+        stdscr.refresh()
+    else:
+        print(message)
+
+def test_custom_print(stdscr):
+    curses.echo()
+    stdscr.clear()
+    
+    custom_print("This is a test message.", stdscr)
+    stdscr.addstr("\nPress any key to exit.")
+    stdscr.getch()
+
+if __name__ == "__main__":
+    curses.wrapper(test_custom_print)
+
+
+
+================================================
+FILE: .chainlit/config.toml
+================================================
+[project]
+# Whether to enable telemetry (default: true). No personal data is collected.
+enable_telemetry = true
+
+
+# List of environment variables to be provided by each user to use the app.
+user_env = []
+
+# Duration (in seconds) during which the session is saved when the connection is lost
+session_timeout = 3600
+
+# Enable third parties caching (e.g LangChain cache)
+cache = false
+
+# Authorized origins
+allow_origins = ["*"]
+
+# Follow symlink for asset mount (see https://github.com/Chainlit/chainlit/issues/317)
+# follow_symlink = false
+
+[features]
+# Show the prompt playground
+prompt_playground = true
+
+# Process and display HTML in messages. This can be a security risk (see https://stackoverflow.com/questions/19603097/why-is-it-dangerous-to-render-user-generated-html-or-javascript)
+unsafe_allow_html = false
+
+# Process and display mathematical expressions. This can clash with "$" characters in messages.
+latex = false
+
+# Automatically tag threads with the current chat profile (if a chat profile is used)
+auto_tag_thread = true
+
+# Authorize users to spontaneously upload files with messages
+[features.spontaneous_file_upload]
+    enabled = true
+    accept = ["*/*"]
+    max_files = 20
+    max_size_mb = 500
+
+[features.audio]
+    # Threshold for audio recording
+    min_decibels = -45
+    # Delay for the user to start speaking in MS
+    initial_silence_timeout = 3000
+    # Delay for the user to continue speaking in MS. If the user stops speaking for this duration, the recording will stop.
+    silence_timeout = 1500
+    # Above this duration (MS), the recording will forcefully stop.
+    max_duration = 15000
+    # Duration of the audio chunks in MS
+    chunk_duration = 1000
+    # Sample rate of the audio
+    sample_rate = 44100
+
+[UI]
+# Name of the app and chatbot.
+name = "Chatbot"
+
+# Show the readme while the thread is empty.
+show_readme_as_default = true
+
+# Description of the app and chatbot. This is used for HTML tags.
+# description = ""
+
+# Large size content are by default collapsed for a cleaner ui
+default_collapse_content = true
+
+# The default value for the expand messages settings.
+default_expand_messages = false
+
+# Hide the chain of thought details from the user in the UI.
+hide_cot = false
+
+# Link to your github repo. This will add a github button in the UI's header.
+# github = ""
+
+# Specify a CSS file that can be used to customize the user interface.
+# The CSS file can be served from the public directory or via an external link.
+# custom_css = "/public/test.css"
+
+# Specify a Javascript file that can be used to customize the user interface.
+# The Javascript file can be served from the public directory.
+# custom_js = "/public/test.js"
+
+# Specify a custom font url.
+# custom_font = "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap"
+
+# Specify a custom meta image url.
+# custom_meta_image_url = "https://chainlit-cloud.s3.eu-west-3.amazonaws.com/logo/chainlit_banner.png"
+
+# Specify a custom build directory for the frontend.
+# This can be used to customize the frontend code.
+# Be careful: If this is a relative path, it should not start with a slash.
+# custom_build = "./public/build"
+
+[UI.theme]
+    #layout = "wide"
+    #font_family = "Inter, sans-serif"
+# Override default MUI light theme. (Check theme.ts)
+[UI.theme.light]
+    #background = "#FAFAFA"
+    #paper = "#FFFFFF"
+
+    [UI.theme.light.primary]
+        #main = "#F80061"
+        #dark = "#980039"
+        #light = "#FFE7EB"
+
+# Override default MUI dark theme. (Check theme.ts)
+[UI.theme.dark]
+    #background = "#FAFAFA"
+    #paper = "#FFFFFF"
+
+    [UI.theme.dark.primary]
+        #main = "#F80061"
+        #dark = "#980039"
+        #light = "#FFE7EB"
+
+
+[meta]
+generated_by = "1.1.202"
+
+
+
+================================================
+FILE: .chainlit/translations/en-US.json
+================================================
+{
+    "components": {
+        "atoms": {
+            "buttons": {
+                "userButton": {
+                    "menu": {
+                        "settings": "Settings",
+                        "settingsKey": "S",
+                        "APIKeys": "API Keys",
+                        "logout": "Logout"
+                    }
+                }
+            }
+        },
+        "molecules": {
+            "newChatButton": {
+                "newChat": "New Chat"
+            },
+            "tasklist": {
+                "TaskList": {
+                    "title": "\ud83d\uddd2\ufe0f Task List",
+                    "loading": "Loading...",
+                    "error": "An error occured"
+                }
+            },
+            "attachments": {
+                "cancelUpload": "Cancel upload",
+                "removeAttachment": "Remove attachment"
+            },
+            "newChatDialog": {
+                "createNewChat": "Create new chat?",
+                "clearChat": "This will clear the current messages and start a new chat.",
+                "cancel": "Cancel",
+                "confirm": "Confirm"
+            },
+            "settingsModal": {
+                "settings": "Settings",
+                "expandMessages": "Expand Messages",
+                "hideChainOfThought": "Hide Chain of Thought",
+                "darkMode": "Dark Mode"
+            },
+            "detailsButton": {
+                "using": "Using",
+                "running": "Running",
+                "took_one": "Took {{count}} step",
+                "took_other": "Took {{count}} steps"
+            },
+            "auth": {
+                "authLogin": {
+                    "title": "Login to access the app.",
+                    "form": {
+                        "email": "Email address",
+                        "password": "Password",
+                        "noAccount": "Don't have an account?",
+                        "alreadyHaveAccount": "Already have an account?",
+                        "signup": "Sign Up",
+                        "signin": "Sign In",
+                        "or": "OR",
+                        "continue": "Continue",
+                        "forgotPassword": "Forgot password?",
+                        "passwordMustContain": "Your password must contain:",
+                        "emailRequired": "email is a required field",
+                        "passwordRequired": "password is a required field"
+                    },
+                    "error": {
+                        "default": "Unable to sign in.",
+                        "signin": "Try signing in with a different account.",
+                        "oauthsignin": "Try signing in with a different account.",
+                        "redirect_uri_mismatch": "The redirect URI is not matching the oauth app configuration.",
+                        "oauthcallbackerror": "Try signing in with a different account.",
+                        "oauthcreateaccount": "Try signing in with a different account.",
+                        "emailcreateaccount": "Try signing in with a different account.",
+                        "callback": "Try signing in with a different account.",
+                        "oauthaccountnotlinked": "To confirm your identity, sign in with the same account you used originally.",
+                        "emailsignin": "The e-mail could not be sent.",
+                        "emailverify": "Please verify your email, a new email has been sent.",
+                        "credentialssignin": "Sign in failed. Check the details you provided are correct.",
+                        "sessionrequired": "Please sign in to access this page."
+                    }
+                },
+                "authVerifyEmail": {
+                    "almostThere": "You're almost there! We've sent an email to ",
+                    "verifyEmailLink": "Please click on the link in that email to complete your signup.",
+                    "didNotReceive": "Can't find the email?",
+                    "resendEmail": "Resend email",
+                    "goBack": "Go Back",
+                    "emailSent": "Email sent successfully.",
+                    "verifyEmail": "Verify your email address"
+                },
+                "providerButton": {
+                    "continue": "Continue with {{provider}}",
+                    "signup": "Sign up with {{provider}}"
+                },
+                "authResetPassword": {
+                    "newPasswordRequired": "New password is a required field",
+                    "passwordsMustMatch": "Passwords must match",
+                    "confirmPasswordRequired": "Confirm password is a required field",
+                    "newPassword": "New password",
+                    "confirmPassword": "Confirm password",
+                    "resetPassword": "Reset Password"
+                },
+                "authForgotPassword": {
+                    "email": "Email address",
+                    "emailRequired": "email is a required field",
+                    "emailSent": "Please check the email address {{email}} for instructions to reset your password.",
+                    "enterEmail": "Enter your email address and we will send you instructions to reset your password.",
+                    "resendEmail": "Resend email",
+                    "continue": "Continue",
+                    "goBack": "Go Back"
+                }
+            }
+        },
+        "organisms": {
+            "chat": {
+                "history": {
+                    "index": {
+                        "showHistory": "Show history",
+                        "lastInputs": "Last Inputs",
+                        "noInputs": "Such empty...",
+                        "loading": "Loading..."
+                    }
+                },
+                "inputBox": {
+                    "input": {
+                        "placeholder": "Type your message here..."
+                    },
+                    "speechButton": {
+                        "start": "Start recording",
+                        "stop": "Stop recording"
+                    },
+                    "SubmitButton": {
+                        "sendMessage": "Send message",
+                        "stopTask": "Stop Task"
+                    },
+                    "UploadButton": {
+                        "attachFiles": "Attach files"
+                    },
+                    "waterMark": {
+                        "text": "Built with"
+                    }
+                },
+                "Messages": {
+                    "index": {
+                        "running": "Running",
+                        "executedSuccessfully": "executed successfully",
+                        "failed": "failed",
+                        "feedbackUpdated": "Feedback updated",
+                        "updating": "Updating"
+                    }
+                },
+                "dropScreen": {
+                    "dropYourFilesHere": "Drop your files here"
+                },
+                "index": {
+                    "failedToUpload": "Failed to upload",
+                    "cancelledUploadOf": "Cancelled upload of",
+                    "couldNotReachServer": "Could not reach the server",
+                    "continuingChat": "Continuing previous chat"
+                },
+                "settings": {
+                    "settingsPanel": "Settings panel",
+                    "reset": "Reset",
+                    "cancel": "Cancel",
+                    "confirm": "Confirm"
+                }
+            },
+            "threadHistory": {
+                "sidebar": {
+                    "filters": {
+                        "FeedbackSelect": {
+                            "feedbackAll": "Feedback: All",
+                            "feedbackPositive": "Feedback: Positive",
+                            "feedbackNegative": "Feedback: Negative"
+                        },
+                        "SearchBar": {
+                            "search": "Search"
+                        }
+                    },
+                    "DeleteThreadButton": {
+                        "confirmMessage": "This will delete the thread as well as it's messages and elements.",
+                        "cancel": "Cancel",
+                        "confirm": "Confirm",
+                        "deletingChat": "Deleting chat",
+                        "chatDeleted": "Chat deleted"
+                    },
+                    "index": {
+                        "pastChats": "Past Chats"
+                    },
+                    "ThreadList": {
+                        "empty": "Empty...",
+                        "today": "Today",
+                        "yesterday": "Yesterday",
+                        "previous7days": "Previous 7 days",
+                        "previous30days": "Previous 30 days"
+                    },
+                    "TriggerButton": {
+                        "closeSidebar": "Close sidebar",
+                        "openSidebar": "Open sidebar"
+                    }
+                },
+                "Thread": {
+                    "backToChat": "Go back to chat",
+                    "chatCreatedOn": "This chat was created on"
+                }
+            },
+            "header": {
+                "chat": "Chat",
+                "readme": "Readme"
+            }
+        }
+    },
+    "hooks": {
+        "useLLMProviders": {
+            "failedToFetchProviders": "Failed to fetch providers:"
+        }
+    },
+    "pages": {
+        "Design": {},
+        "Env": {
+            "savedSuccessfully": "Saved successfully",
+            "requiredApiKeys": "Required API Keys",
+            "requiredApiKeysInfo": "To use this app, the following API keys are required. The keys are stored on your device's local storage."
+        },
+        "Page": {
+            "notPartOfProject": "You are not part of this project."
+        },
+        "ResumeButton": {
+            "resumeChat": "Resume Chat"
+        }
+    }
+}
+

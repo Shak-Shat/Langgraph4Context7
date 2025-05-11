@@ -1,0 +1,4006 @@
+Directory structure:
+└── teddynote-lab-langgraph-mcp-agents/
+    ├── README.md
+    ├── app.py
+    ├── app_KOR.py
+    ├── config.json
+    ├── example_config.json
+    ├── MCP-HandsOn-ENG.ipynb
+    ├── MCP-HandsOn-KOR.ipynb
+    ├── mcp_server_local.py
+    ├── mcp_server_rag.py
+    ├── mcp_server_remote.py
+    ├── mcp_server_time.py
+    ├── packages.txt
+    ├── pyproject.toml
+    ├── README_KOR.md
+    ├── requirements.txt
+    ├── utils.py
+    ├── .env.example
+    ├── .python-version
+    ├── assets/
+    └── dockers/
+        ├── config.json
+        ├── docker-compose-KOR-mac.yaml
+        ├── docker-compose-KOR.yaml
+        ├── docker-compose-mac.yaml
+        ├── docker-compose.yaml
+        └── .env.example
+
+================================================
+FILE: README.md
+================================================
+# LangGraph Agents + MCP
+
+[![English](https://img.shields.io/badge/Language-English-blue)](README.md) [![Korean](https://img.shields.io/badge/Language-한국어-red)](README_KOR.md)
+
+[![GitHub](https://img.shields.io/badge/GitHub-langgraph--mcp--agents-black?logo=github)](https://github.com/teddylee777/langgraph-mcp-agents)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
+[![Python](https://img.shields.io/badge/Python-≥3.12-blue?logo=python&logoColor=white)](https://www.python.org/)
+[![Version](https://img.shields.io/badge/Version-0.1.0-orange)](https://github.com/teddylee777/langgraph-mcp-agents)
+
+![project demo](./assets/project-demo.png)
+
+## Project Overview
+
+![project architecture](./assets/architecture.png)
+
+`LangChain-MCP-Adapters` is a toolkit provided by **LangChain AI** that enables AI agents to interact with external tools and data sources through the Model Context Protocol (MCP). This project provides a user-friendly interface for deploying ReAct agents that can access various data sources and APIs through MCP tools.
+
+### Features
+
+- **Streamlit Interface**: A user-friendly web interface for interacting with LangGraph `ReAct Agent` with MCP tools
+- **Tool Management**: Add, remove, and configure MCP tools through the UI (Smithery JSON format supported). This is done dynamically without restarting the application
+- **Streaming Responses**: View agent responses and tool calls in real-time
+- **Conversation History**: Track and manage conversations with the agent
+
+## MCP Architecture
+
+The Model Context Protocol (MCP) consists of three main components:
+
+1. **MCP Host**: Programs seeking to access data through MCP, such as Claude Desktop, IDEs, or LangChain/LangGraph.
+
+2. **MCP Client**: A protocol client that maintains a 1:1 connection with the server, acting as an intermediary between the host and server.
+
+3. **MCP Server**: A lightweight program that exposes specific functionalities through a standardized model context protocol, serving as the primary data source.
+
+## Quick Start with Docker
+
+You can easily run this project using Docker without setting up a local Python environment.
+
+### Requirements (Docker Desktop)
+
+Install Docker Desktop from the link below:
+
+- [Install Docker Desktop](https://www.docker.com/products/docker-desktop/)
+
+### Run with Docker Compose
+
+1. Navigate to the `dockers` directory
+
+```bash
+cd dockers
+```
+
+2. Create a `.env` file with your API keys in the project root directory.
+
+```bash
+cp .env.example .env
+```
+
+Enter your obtained API keys in the `.env` file.
+
+(Note) Not all API keys are required. Only enter the ones you need.
+- `ANTHROPIC_API_KEY`: If you enter an Anthropic API key, you can use "claude-3-7-sonnet-latest", "claude-3-5-sonnet-latest", "claude-3-haiku-latest" models.
+- `OPENAI_API_KEY`: If you enter an OpenAI API key, you can use "gpt-4o", "gpt-4o-mini" models.
+- `LANGSMITH_API_KEY`: If you enter a LangSmith API key, you can use LangSmith tracing.
+
+```bash
+ANTHROPIC_API_KEY=your_anthropic_api_key
+OPENAI_API_KEY=your_openai_api_key
+LANGSMITH_API_KEY=your_langsmith_api_key
+LANGSMITH_TRACING=true
+LANGSMITH_ENDPOINT=https://api.smith.langchain.com
+LANGSMITH_PROJECT=LangGraph-MCP-Agents
+```
+
+When using the login feature, set `USE_LOGIN` to `true` and enter `USER_ID` and `USER_PASSWORD`.
+
+```bash
+USE_LOGIN=true
+USER_ID=admin
+USER_PASSWORD=admin123
+```
+
+If you don't want to use the login feature, set `USE_LOGIN` to `false`.
+
+```bash
+USE_LOGIN=false
+```
+
+3. Select the Docker Compose file that matches your system architecture.
+
+**AMD64/x86_64 Architecture (Intel/AMD Processors)**
+
+```bash
+# Run container
+docker compose -f docker-compose.yaml up -d
+```
+
+**ARM64 Architecture (Apple Silicon M1/M2/M3/M4)**
+
+```bash
+# Run container
+docker compose -f docker-compose-mac.yaml up -d
+```
+
+4. Access the application in your browser at http://localhost:8585
+
+(Note)
+- If you need to modify ports or other settings, edit the docker-compose.yaml file before building.
+
+## Install Directly from Source Code
+
+1. Clone this repository
+
+```bash
+git clone https://github.com/teddynote-lab/langgraph-mcp-agents.git
+cd langgraph-mcp-agents
+```
+
+2. Create a virtual environment and install dependencies using uv
+
+```bash
+uv venv
+uv pip install -r requirements.txt
+source .venv/bin/activate  # For Windows: .venv\Scripts\activate
+```
+
+3. Create a `.env` file with your API keys (copy from `.env.example`)
+
+```bash
+cp .env.example .env
+```
+
+Enter your obtained API keys in the `.env` file.
+
+(Note) Not all API keys are required. Only enter the ones you need.
+- `ANTHROPIC_API_KEY`: If you enter an Anthropic API key, you can use "claude-3-7-sonnet-latest", "claude-3-5-sonnet-latest", "claude-3-haiku-latest" models.
+- `OPENAI_API_KEY`: If you enter an OpenAI API key, you can use "gpt-4o", "gpt-4o-mini" models.
+- `LANGSMITH_API_KEY`: If you enter a LangSmith API key, you can use LangSmith tracing.
+```bash
+ANTHROPIC_API_KEY=your_anthropic_api_key
+OPENAI_API_KEY=your_openai_api_key
+LANGSMITH_API_KEY=your_langsmith_api_key
+LANGSMITH_TRACING=true
+LANGSMITH_ENDPOINT=https://api.smith.langchain.com
+LANGSMITH_PROJECT=LangGraph-MCP-Agents
+```
+
+4. (New) Use the login/logout feature
+
+When using the login feature, set `USE_LOGIN` to `true` and enter `USER_ID` and `USER_PASSWORD`.
+
+```bash
+USE_LOGIN=true
+USER_ID=admin
+USER_PASSWORD=admin123
+```
+
+If you don't want to use the login feature, set `USE_LOGIN` to `false`.
+
+```bash
+USE_LOGIN=false
+```
+
+## Usage
+
+1. Start the Streamlit application.
+
+```bash
+streamlit run app.py
+```
+
+2. The application will run in the browser and display the main interface.
+
+3. Use the sidebar to add and configure MCP tools
+
+Visit [Smithery](https://smithery.ai/) to find useful MCP servers.
+
+First, select the tool you want to use.
+
+Click the COPY button in the JSON configuration on the right.
+
+![copy from Smithery](./assets/smithery-copy-json.png)
+
+Paste the copied JSON string in the `Tool JSON` section.
+
+<img src="./assets/add-tools.png" alt="tool json" style="width: auto; height: auto;">
+
+Click the `Add Tool` button to add it to the "Registered Tools List" section.
+
+Finally, click the "Apply" button to apply the changes to initialize the agent with the new tools.
+
+<img src="./assets/apply-tool-configuration.png" alt="tool json" style="width: auto; height: auto;">
+
+4. Check the agent's status.
+
+![check status](./assets/check-status.png)
+
+5. Interact with the ReAct agent that utilizes the configured MCP tools by asking questions in the chat interface.
+
+![project demo](./assets/project-demo.png)
+
+## Hands-on Tutorial
+
+For developers who want to learn more deeply about how MCP and LangGraph integration works, we provide a comprehensive Jupyter notebook tutorial:
+
+- Link: [MCP-HandsOn-KOR.ipynb](./MCP-HandsOn-KOR.ipynb)
+
+This hands-on tutorial covers:
+
+1. **MCP Client Setup** - Learn how to configure and initialize the MultiServerMCPClient to connect to MCP servers
+2. **Local MCP Server Integration** - Connect to locally running MCP servers via SSE and Stdio methods
+3. **RAG Integration** - Access retriever tools using MCP for document retrieval capabilities
+4. **Mixed Transport Methods** - Combine different transport protocols (SSE and Stdio) in a single agent
+5. **LangChain Tools + MCP** - Integrate native LangChain tools alongside MCP tools
+
+This tutorial provides practical examples with step-by-step explanations that help you understand how to build and integrate MCP tools into LangGraph agents.
+
+## License
+
+MIT License 
+
+## References
+
+- https://github.com/langchain-ai/langchain-mcp-adapters
+
+
+================================================
+FILE: app.py
+================================================
+import streamlit as st
+import asyncio
+import nest_asyncio
+import json
+import os
+import platform
+
+if platform.system() == "Windows":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
+# Apply nest_asyncio: Allow nested calls within an already running event loop
+nest_asyncio.apply()
+
+# Create and reuse global event loop (create once and continue using)
+if "event_loop" not in st.session_state:
+    loop = asyncio.new_event_loop()
+    st.session_state.event_loop = loop
+    asyncio.set_event_loop(loop)
+
+from langgraph.prebuilt import create_react_agent
+from langchain_anthropic import ChatAnthropic
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage
+from dotenv import load_dotenv
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from utils import astream_graph, random_uuid
+from langchain_core.messages.ai import AIMessageChunk
+from langchain_core.messages.tool import ToolMessage
+from langgraph.checkpoint.memory import MemorySaver
+from langchain_core.runnables import RunnableConfig
+
+# Load environment variables (get API keys and settings from .env file)
+load_dotenv(override=True)
+
+# config.json file path setting
+CONFIG_FILE_PATH = "config.json"
+
+# Function to load settings from JSON file
+def load_config_from_json():
+    """
+    Loads settings from config.json file.
+    Creates a file with default settings if it doesn't exist.
+
+    Returns:
+        dict: Loaded settings
+    """
+    default_config = {
+        "get_current_time": {
+            "command": "python",
+            "args": ["./mcp_server_time.py"],
+            "transport": "stdio"
+        }
+    }
+    
+    try:
+        if os.path.exists(CONFIG_FILE_PATH):
+            with open(CONFIG_FILE_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
+        else:
+            # Create file with default settings if it doesn't exist
+            save_config_to_json(default_config)
+            return default_config
+    except Exception as e:
+        st.error(f"Error loading settings file: {str(e)}")
+        return default_config
+
+# Function to save settings to JSON file
+def save_config_to_json(config):
+    """
+    Saves settings to config.json file.
+
+    Args:
+        config (dict): Settings to save
+    
+    Returns:
+        bool: Save success status
+    """
+    try:
+        with open(CONFIG_FILE_PATH, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
+        return True
+    except Exception as e:
+        st.error(f"Error saving settings file: {str(e)}")
+        return False
+
+# Initialize login session variables
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+
+# Check if login is required
+use_login = os.environ.get("USE_LOGIN", "false").lower() == "true"
+
+# Change page settings based on login status
+if use_login and not st.session_state.authenticated:
+    # Login page uses default (narrow) layout
+    st.set_page_config(page_title="Agent with MCP Tools", page_icon="🧠")
+else:
+    # Main app uses wide layout
+    st.set_page_config(page_title="Agent with MCP Tools", page_icon="🧠", layout="wide")
+
+# Display login screen if login feature is enabled and not yet authenticated
+if use_login and not st.session_state.authenticated:
+    st.title("🔐 Login")
+    st.markdown("Login is required to use the system.")
+
+    # Place login form in the center of the screen with narrow width
+    with st.form("login_form"):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        submit_button = st.form_submit_button("Login")
+
+        if submit_button:
+            expected_username = os.environ.get("USER_ID")
+            expected_password = os.environ.get("USER_PASSWORD")
+
+            if username == expected_username and password == expected_password:
+                st.session_state.authenticated = True
+                st.success("✅ Login successful! Please wait...")
+                st.rerun()
+            else:
+                st.error("❌ Username or password is incorrect.")
+
+    # Don't display the main app on the login screen
+    st.stop()
+
+# Add author information at the top of the sidebar (placed before other sidebar elements)
+st.sidebar.markdown("### ✍️ Made by [TeddyNote](https://youtube.com/c/teddynote) 🚀")
+st.sidebar.markdown(
+    "### 💻 [Project Page](https://github.com/teddynote-lab/langgraph-mcp-agents)"
+)
+
+st.sidebar.divider()  # Add divider
+
+# Existing page title and description
+st.title("💬 MCP Tool Utilization Agent")
+st.markdown("✨ Ask questions to the ReAct agent that utilizes MCP tools.")
+
+SYSTEM_PROMPT = """<ROLE>
+You are a smart agent with an ability to use tools. 
+You will be given a question and you will use the tools to answer the question.
+Pick the most relevant tool to answer the question. 
+If you are failed to answer the question, try different tools to get context.
+Your answer should be very polite and professional.
+</ROLE>
+
+----
+
+<INSTRUCTIONS>
+Step 1: Analyze the question
+- Analyze user's question and final goal.
+- If the user's question is consist of multiple sub-questions, split them into smaller sub-questions.
+
+Step 2: Pick the most relevant tool
+- Pick the most relevant tool to answer the question.
+- If you are failed to answer the question, try different tools to get context.
+
+Step 3: Answer the question
+- Answer the question in the same language as the question.
+- Your answer should be very polite and professional.
+
+Step 4: Provide the source of the answer(if applicable)
+- If you've used the tool, provide the source of the answer.
+- Valid sources are either a website(URL) or a document(PDF, etc).
+
+Guidelines:
+- If you've used the tool, your answer should be based on the tool's output(tool's output is more important than your own knowledge).
+- If you've used the tool, and the source is valid URL, provide the source(URL) of the answer.
+- Skip providing the source if the source is not URL.
+- Answer in the same language as the question.
+- Answer should be concise and to the point.
+- Avoid response your output with any other information than the answer and the source.  
+</INSTRUCTIONS>
+
+----
+
+<OUTPUT_FORMAT>
+(concise answer to the question)
+
+**Source**(if applicable)
+- (source1: valid URL)
+- (source2: valid URL)
+- ...
+</OUTPUT_FORMAT>
+"""
+
+OUTPUT_TOKEN_INFO = {
+    "claude-3-5-sonnet-latest": {"max_tokens": 8192},
+    "claude-3-5-haiku-latest": {"max_tokens": 8192},
+    "claude-3-7-sonnet-latest": {"max_tokens": 64000},
+    "gpt-4o": {"max_tokens": 16000},
+    "gpt-4o-mini": {"max_tokens": 16000},
+}
+
+# Initialize session state
+if "session_initialized" not in st.session_state:
+    st.session_state.session_initialized = False  # Session initialization flag
+    st.session_state.agent = None  # Storage for ReAct agent object
+    st.session_state.history = []  # List for storing conversation history
+    st.session_state.mcp_client = None  # Storage for MCP client object
+    st.session_state.timeout_seconds = (
+        120  # Response generation time limit (seconds), default 120 seconds
+    )
+    st.session_state.selected_model = (
+        "claude-3-7-sonnet-latest"  # Default model selection
+    )
+    st.session_state.recursion_limit = 100  # Recursion call limit, default 100
+
+if "thread_id" not in st.session_state:
+    st.session_state.thread_id = random_uuid()
+
+
+# --- Function Definitions ---
+
+
+async def cleanup_mcp_client():
+    """
+    Safely terminates the existing MCP client.
+
+    Properly releases resources if an existing client exists.
+    """
+    if "mcp_client" in st.session_state and st.session_state.mcp_client is not None:
+        try:
+
+            await st.session_state.mcp_client.__aexit__(None, None, None)
+            st.session_state.mcp_client = None
+        except Exception as e:
+            import traceback
+
+            # st.warning(f"Error while terminating MCP client: {str(e)}")
+            # st.warning(traceback.format_exc())
+
+
+def print_message():
+    """
+    Displays chat history on the screen.
+
+    Distinguishes between user and assistant messages on the screen,
+    and displays tool call information within the assistant message container.
+    """
+    i = 0
+    while i < len(st.session_state.history):
+        message = st.session_state.history[i]
+
+        if message["role"] == "user":
+            st.chat_message("user", avatar="🧑‍💻").markdown(message["content"])
+            i += 1
+        elif message["role"] == "assistant":
+            # Create assistant message container
+            with st.chat_message("assistant", avatar="🤖"):
+                # Display assistant message content
+                st.markdown(message["content"])
+
+                # Check if the next message is tool call information
+                if (
+                    i + 1 < len(st.session_state.history)
+                    and st.session_state.history[i + 1]["role"] == "assistant_tool"
+                ):
+                    # Display tool call information in the same container as an expander
+                    with st.expander("🔧 Tool Call Information", expanded=False):
+                        st.markdown(st.session_state.history[i + 1]["content"])
+                    i += 2  # Increment by 2 as we processed two messages together
+                else:
+                    i += 1  # Increment by 1 as we only processed a regular message
+        else:
+            # Skip assistant_tool messages as they are handled above
+            i += 1
+
+
+def get_streaming_callback(text_placeholder, tool_placeholder):
+    """
+    Creates a streaming callback function.
+
+    This function creates a callback function to display responses generated from the LLM in real-time.
+    It displays text responses and tool call information in separate areas.
+
+    Args:
+        text_placeholder: Streamlit component to display text responses
+        tool_placeholder: Streamlit component to display tool call information
+
+    Returns:
+        callback_func: Streaming callback function
+        accumulated_text: List to store accumulated text responses
+        accumulated_tool: List to store accumulated tool call information
+    """
+    accumulated_text = []
+    accumulated_tool = []
+
+    def callback_func(message: dict):
+        nonlocal accumulated_text, accumulated_tool
+        message_content = message.get("content", None)
+
+        if isinstance(message_content, AIMessageChunk):
+            content = message_content.content
+            # If content is in list form (mainly occurs in Claude models)
+            if isinstance(content, list) and len(content) > 0:
+                message_chunk = content[0]
+                # Process text type
+                if message_chunk["type"] == "text":
+                    accumulated_text.append(message_chunk["text"])
+                    text_placeholder.markdown("".join(accumulated_text))
+                # Process tool use type
+                elif message_chunk["type"] == "tool_use":
+                    if "partial_json" in message_chunk:
+                        accumulated_tool.append(message_chunk["partial_json"])
+                    else:
+                        tool_call_chunks = message_content.tool_call_chunks
+                        tool_call_chunk = tool_call_chunks[0]
+                        accumulated_tool.append(
+                            "\n```json\n" + str(tool_call_chunk) + "\n```\n"
+                        )
+                    with tool_placeholder.expander(
+                        "🔧 Tool Call Information", expanded=True
+                    ):
+                        st.markdown("".join(accumulated_tool))
+            # Process if tool_calls attribute exists (mainly occurs in OpenAI models)
+            elif (
+                hasattr(message_content, "tool_calls")
+                and message_content.tool_calls
+                and len(message_content.tool_calls[0]["name"]) > 0
+            ):
+                tool_call_info = message_content.tool_calls[0]
+                accumulated_tool.append("\n```json\n" + str(tool_call_info) + "\n```\n")
+                with tool_placeholder.expander(
+                    "🔧 Tool Call Information", expanded=True
+                ):
+                    st.markdown("".join(accumulated_tool))
+            # Process if content is a simple string
+            elif isinstance(content, str):
+                accumulated_text.append(content)
+                text_placeholder.markdown("".join(accumulated_text))
+            # Process if invalid tool call information exists
+            elif (
+                hasattr(message_content, "invalid_tool_calls")
+                and message_content.invalid_tool_calls
+            ):
+                tool_call_info = message_content.invalid_tool_calls[0]
+                accumulated_tool.append("\n```json\n" + str(tool_call_info) + "\n```\n")
+                with tool_placeholder.expander(
+                    "🔧 Tool Call Information (Invalid)", expanded=True
+                ):
+                    st.markdown("".join(accumulated_tool))
+            # Process if tool_call_chunks attribute exists
+            elif (
+                hasattr(message_content, "tool_call_chunks")
+                and message_content.tool_call_chunks
+            ):
+                tool_call_chunk = message_content.tool_call_chunks[0]
+                accumulated_tool.append(
+                    "\n```json\n" + str(tool_call_chunk) + "\n```\n"
+                )
+                with tool_placeholder.expander(
+                    "🔧 Tool Call Information", expanded=True
+                ):
+                    st.markdown("".join(accumulated_tool))
+            # Process if tool_calls exists in additional_kwargs (supports various model compatibility)
+            elif (
+                hasattr(message_content, "additional_kwargs")
+                and "tool_calls" in message_content.additional_kwargs
+            ):
+                tool_call_info = message_content.additional_kwargs["tool_calls"][0]
+                accumulated_tool.append("\n```json\n" + str(tool_call_info) + "\n```\n")
+                with tool_placeholder.expander(
+                    "🔧 Tool Call Information", expanded=True
+                ):
+                    st.markdown("".join(accumulated_tool))
+        # Process if it's a tool message (tool response)
+        elif isinstance(message_content, ToolMessage):
+            accumulated_tool.append(
+                "\n```json\n" + str(message_content.content) + "\n```\n"
+            )
+            with tool_placeholder.expander("🔧 Tool Call Information", expanded=True):
+                st.markdown("".join(accumulated_tool))
+        return None
+
+    return callback_func, accumulated_text, accumulated_tool
+
+
+async def process_query(query, text_placeholder, tool_placeholder, timeout_seconds=60):
+    """
+    Processes user questions and generates responses.
+
+    This function passes the user's question to the agent and streams the response in real-time.
+    Returns a timeout error if the response is not completed within the specified time.
+
+    Args:
+        query: Text of the question entered by the user
+        text_placeholder: Streamlit component to display text responses
+        tool_placeholder: Streamlit component to display tool call information
+        timeout_seconds: Response generation time limit (seconds)
+
+    Returns:
+        response: Agent's response object
+        final_text: Final text response
+        final_tool: Final tool call information
+    """
+    try:
+        if st.session_state.agent:
+            streaming_callback, accumulated_text_obj, accumulated_tool_obj = (
+                get_streaming_callback(text_placeholder, tool_placeholder)
+            )
+            try:
+                response = await asyncio.wait_for(
+                    astream_graph(
+                        st.session_state.agent,
+                        {"messages": [HumanMessage(content=query)]},
+                        callback=streaming_callback,
+                        config=RunnableConfig(
+                            recursion_limit=st.session_state.recursion_limit,
+                            thread_id=st.session_state.thread_id,
+                        ),
+                    ),
+                    timeout=timeout_seconds,
+                )
+            except asyncio.TimeoutError:
+                error_msg = f"⏱️ Request time exceeded {timeout_seconds} seconds. Please try again later."
+                return {"error": error_msg}, error_msg, ""
+
+            final_text = "".join(accumulated_text_obj)
+            final_tool = "".join(accumulated_tool_obj)
+            return response, final_text, final_tool
+        else:
+            return (
+                {"error": "🚫 Agent has not been initialized."},
+                "🚫 Agent has not been initialized.",
+                "",
+            )
+    except Exception as e:
+        import traceback
+
+        error_msg = f"❌ Error occurred during query processing: {str(e)}\n{traceback.format_exc()}"
+        return {"error": error_msg}, error_msg, ""
+
+
+async def initialize_session(mcp_config=None):
+    """
+    Initializes MCP session and agent.
+
+    Args:
+        mcp_config: MCP tool configuration information (JSON). Uses default settings if None
+
+    Returns:
+        bool: Initialization success status
+    """
+    with st.spinner("🔄 Connecting to MCP server..."):
+        # First safely clean up existing client
+        await cleanup_mcp_client()
+
+        if mcp_config is None:
+            # Load settings from config.json file
+            mcp_config = load_config_from_json()
+        client = MultiServerMCPClient(mcp_config)
+        await client.__aenter__()
+        tools = client.get_tools()
+        st.session_state.tool_count = len(tools)
+        st.session_state.mcp_client = client
+
+        # Initialize appropriate model based on selection
+        selected_model = st.session_state.selected_model
+
+        if selected_model in [
+            "claude-3-7-sonnet-latest",
+            "claude-3-5-sonnet-latest",
+            "claude-3-5-haiku-latest",
+        ]:
+            model = ChatAnthropic(
+                model=selected_model,
+                temperature=0.1,
+                max_tokens=OUTPUT_TOKEN_INFO[selected_model]["max_tokens"],
+            )
+        else:  # Use OpenAI model
+            model = ChatOpenAI(
+                model=selected_model,
+                temperature=0.1,
+                max_tokens=OUTPUT_TOKEN_INFO[selected_model]["max_tokens"],
+            )
+        agent = create_react_agent(
+            model,
+            tools,
+            checkpointer=MemorySaver(),
+            prompt=SYSTEM_PROMPT,
+        )
+        st.session_state.agent = agent
+        st.session_state.session_initialized = True
+        return True
+
+
+# --- Sidebar: System Settings Section ---
+with st.sidebar:
+    st.subheader("⚙️ System Settings")
+
+    # Model selection feature
+    # Create list of available models
+    available_models = []
+
+    # Check Anthropic API key
+    has_anthropic_key = os.environ.get("ANTHROPIC_API_KEY") is not None
+    if has_anthropic_key:
+        available_models.extend(
+            [
+                "claude-3-7-sonnet-latest",
+                "claude-3-5-sonnet-latest",
+                "claude-3-5-haiku-latest",
+            ]
+        )
+
+    # Check OpenAI API key
+    has_openai_key = os.environ.get("OPENAI_API_KEY") is not None
+    if has_openai_key:
+        available_models.extend(["gpt-4o", "gpt-4o-mini"])
+
+    # Display message if no models are available
+    if not available_models:
+        st.warning(
+            "⚠️ API keys are not configured. Please add ANTHROPIC_API_KEY or OPENAI_API_KEY to your .env file."
+        )
+        # Add Claude model as default (to show UI even without keys)
+        available_models = ["claude-3-7-sonnet-latest"]
+
+    # Model selection dropdown
+    previous_model = st.session_state.selected_model
+    st.session_state.selected_model = st.selectbox(
+        "🤖 Select model to use",
+        options=available_models,
+        index=(
+            available_models.index(st.session_state.selected_model)
+            if st.session_state.selected_model in available_models
+            else 0
+        ),
+        help="Anthropic models require ANTHROPIC_API_KEY and OpenAI models require OPENAI_API_KEY to be set as environment variables.",
+    )
+
+    # Notify when model is changed and session needs to be reinitialized
+    if (
+        previous_model != st.session_state.selected_model
+        and st.session_state.session_initialized
+    ):
+        st.warning(
+            "⚠️ Model has been changed. Click 'Apply Settings' button to apply changes."
+        )
+
+    # Add timeout setting slider
+    st.session_state.timeout_seconds = st.slider(
+        "⏱️ Response generation time limit (seconds)",
+        min_value=60,
+        max_value=300,
+        value=st.session_state.timeout_seconds,
+        step=10,
+        help="Set the maximum time for the agent to generate a response. Complex tasks may require more time.",
+    )
+
+    st.session_state.recursion_limit = st.slider(
+        "⏱️ Recursion call limit (count)",
+        min_value=10,
+        max_value=200,
+        value=st.session_state.recursion_limit,
+        step=10,
+        help="Set the recursion call limit. Setting too high a value may cause memory issues.",
+    )
+
+    st.divider()  # Add divider
+
+    # Tool settings section
+    st.subheader("🔧 Tool Settings")
+
+    # Manage expander state in session state
+    if "mcp_tools_expander" not in st.session_state:
+        st.session_state.mcp_tools_expander = False
+
+    # MCP tool addition interface
+    with st.expander("🧰 Add MCP Tools", expanded=st.session_state.mcp_tools_expander):
+        # Load settings from config.json file
+        loaded_config = load_config_from_json()
+        default_config_text = json.dumps(loaded_config, indent=2, ensure_ascii=False)
+        
+        # Create pending config based on existing mcp_config_text if not present
+        if "pending_mcp_config" not in st.session_state:
+            try:
+                st.session_state.pending_mcp_config = loaded_config
+            except Exception as e:
+                st.error(f"Failed to set initial pending config: {e}")
+
+        # UI for adding individual tools
+        st.subheader("Add Tool(JSON format)")
+        st.markdown(
+            """
+        Please insert **ONE tool** in JSON format.
+
+        [How to Set Up?](https://teddylee777.notion.site/MCP-Tool-Setup-Guide-English-1d324f35d1298030a831dfb56045906a)
+
+        ⚠️ **Important**: JSON must be wrapped in curly braces (`{}`).
+        """
+        )
+
+        # Provide clearer example
+        example_json = {
+            "github": {
+                "command": "npx",
+                "args": [
+                    "-y",
+                    "@smithery/cli@latest",
+                    "run",
+                    "@smithery-ai/github",
+                    "--config",
+                    '{"githubPersonalAccessToken":"your_token_here"}',
+                ],
+                "transport": "stdio",
+            }
+        }
+
+        default_text = json.dumps(example_json, indent=2, ensure_ascii=False)
+
+        new_tool_json = st.text_area(
+            "Tool JSON",
+            default_text,
+            height=250,
+        )
+
+        # Add button
+        if st.button(
+            "Add Tool",
+            type="primary",
+            key="add_tool_button",
+            use_container_width=True,
+        ):
+            try:
+                # Validate input
+                if not new_tool_json.strip().startswith(
+                    "{"
+                ) or not new_tool_json.strip().endswith("}"):
+                    st.error("JSON must start and end with curly braces ({}).")
+                    st.markdown('Correct format: `{ "tool_name": { ... } }`')
+                else:
+                    # Parse JSON
+                    parsed_tool = json.loads(new_tool_json)
+
+                    # Check if it's in mcpServers format and process accordingly
+                    if "mcpServers" in parsed_tool:
+                        # Move contents of mcpServers to top level
+                        parsed_tool = parsed_tool["mcpServers"]
+                        st.info(
+                            "'mcpServers' format detected. Converting automatically."
+                        )
+
+                    # Check number of tools entered
+                    if len(parsed_tool) == 0:
+                        st.error("Please enter at least one tool.")
+                    else:
+                        # Process all tools
+                        success_tools = []
+                        for tool_name, tool_config in parsed_tool.items():
+                            # Check URL field and set transport
+                            if "url" in tool_config:
+                                # Set transport to "sse" if URL exists
+                                tool_config["transport"] = "sse"
+                                st.info(
+                                    f"URL detected in '{tool_name}' tool, setting transport to 'sse'."
+                                )
+                            elif "transport" not in tool_config:
+                                # Set default "stdio" if URL doesn't exist and transport isn't specified
+                                tool_config["transport"] = "stdio"
+
+                            # Check required fields
+                            if (
+                                "command" not in tool_config
+                                and "url" not in tool_config
+                            ):
+                                st.error(
+                                    f"'{tool_name}' tool configuration requires either 'command' or 'url' field."
+                                )
+                            elif "command" in tool_config and "args" not in tool_config:
+                                st.error(
+                                    f"'{tool_name}' tool configuration requires 'args' field."
+                                )
+                            elif "command" in tool_config and not isinstance(
+                                tool_config["args"], list
+                            ):
+                                st.error(
+                                    f"'args' field in '{tool_name}' tool must be an array ([]) format."
+                                )
+                            else:
+                                # Add tool to pending_mcp_config
+                                st.session_state.pending_mcp_config[tool_name] = (
+                                    tool_config
+                                )
+                                success_tools.append(tool_name)
+
+                        # Success message
+                        if success_tools:
+                            if len(success_tools) == 1:
+                                st.success(
+                                    f"{success_tools[0]} tool has been added. Click 'Apply Settings' button to apply."
+                                )
+                            else:
+                                tool_names = ", ".join(success_tools)
+                                st.success(
+                                    f"Total {len(success_tools)} tools ({tool_names}) have been added. Click 'Apply Settings' button to apply."
+                                )
+                            # Collapse expander after adding
+                            st.session_state.mcp_tools_expander = False
+                            st.rerun()
+            except json.JSONDecodeError as e:
+                st.error(f"JSON parsing error: {e}")
+                st.markdown(
+                    f"""
+                **How to fix**:
+                1. Check that your JSON format is correct.
+                2. All keys must be wrapped in double quotes (").
+                3. String values must also be wrapped in double quotes (").
+                4. When using double quotes within a string, they must be escaped (\\").
+                """
+                )
+            except Exception as e:
+                st.error(f"Error occurred: {e}")
+
+    # Display registered tools list and add delete buttons
+    with st.expander("📋 Registered Tools List", expanded=True):
+        try:
+            pending_config = st.session_state.pending_mcp_config
+        except Exception as e:
+            st.error("Not a valid MCP tool configuration.")
+        else:
+            # Iterate through keys (tool names) in pending config
+            for tool_name in list(pending_config.keys()):
+                col1, col2 = st.columns([8, 2])
+                col1.markdown(f"- **{tool_name}**")
+                if col2.button("Delete", key=f"delete_{tool_name}"):
+                    # Delete tool from pending config (not applied immediately)
+                    del st.session_state.pending_mcp_config[tool_name]
+                    st.success(
+                        f"{tool_name} tool has been deleted. Click 'Apply Settings' button to apply."
+                    )
+
+    st.divider()  # Add divider
+
+# --- Sidebar: System Information and Action Buttons Section ---
+with st.sidebar:
+    st.subheader("📊 System Information")
+    st.write(
+        f"🛠️ MCP Tools Count: {st.session_state.get('tool_count', 'Initializing...')}"
+    )
+    selected_model_name = st.session_state.selected_model
+    st.write(f"🧠 Current Model: {selected_model_name}")
+
+    # Move Apply Settings button here
+    if st.button(
+        "Apply Settings",
+        key="apply_button",
+        type="primary",
+        use_container_width=True,
+    ):
+        # Display applying message
+        apply_status = st.empty()
+        with apply_status.container():
+            st.warning("🔄 Applying changes. Please wait...")
+            progress_bar = st.progress(0)
+
+            # Save settings
+            st.session_state.mcp_config_text = json.dumps(
+                st.session_state.pending_mcp_config, indent=2, ensure_ascii=False
+            )
+
+            # Save settings to config.json file
+            save_result = save_config_to_json(st.session_state.pending_mcp_config)
+            if not save_result:
+                st.error("❌ Failed to save settings file.")
+            
+            progress_bar.progress(15)
+
+            # Prepare session initialization
+            st.session_state.session_initialized = False
+            st.session_state.agent = None
+
+            # Update progress
+            progress_bar.progress(30)
+
+            # Run initialization
+            success = st.session_state.event_loop.run_until_complete(
+                initialize_session(st.session_state.pending_mcp_config)
+            )
+
+            # Update progress
+            progress_bar.progress(100)
+
+            if success:
+                st.success("✅ New settings have been applied.")
+                # Collapse tool addition expander
+                if "mcp_tools_expander" in st.session_state:
+                    st.session_state.mcp_tools_expander = False
+            else:
+                st.error("❌ Failed to apply settings.")
+
+        # Refresh page
+        st.rerun()
+
+    st.divider()  # Add divider
+
+    # Action buttons section
+    st.subheader("🔄 Actions")
+
+    # Reset conversation button
+    if st.button("Reset Conversation", use_container_width=True, type="primary"):
+        # Reset thread_id
+        st.session_state.thread_id = random_uuid()
+
+        # Reset conversation history
+        st.session_state.history = []
+
+        # Notification message
+        st.success("✅ Conversation has been reset.")
+
+        # Refresh page
+        st.rerun()
+
+    # Show logout button only if login feature is enabled
+    if use_login and st.session_state.authenticated:
+        st.divider()  # Add divider
+        if st.button("Logout", use_container_width=True, type="secondary"):
+            st.session_state.authenticated = False
+            st.success("✅ You have been logged out.")
+            st.rerun()
+
+# --- Initialize default session (if not initialized) ---
+if not st.session_state.session_initialized:
+    st.info(
+        "MCP server and agent are not initialized. Please click the 'Apply Settings' button in the left sidebar to initialize."
+    )
+
+
+# --- Print conversation history ---
+print_message()
+
+# --- User input and processing ---
+user_query = st.chat_input("💬 Enter your question")
+if user_query:
+    if st.session_state.session_initialized:
+        st.chat_message("user", avatar="🧑‍💻").markdown(user_query)
+        with st.chat_message("assistant", avatar="🤖"):
+            tool_placeholder = st.empty()
+            text_placeholder = st.empty()
+            resp, final_text, final_tool = (
+                st.session_state.event_loop.run_until_complete(
+                    process_query(
+                        user_query,
+                        text_placeholder,
+                        tool_placeholder,
+                        st.session_state.timeout_seconds,
+                    )
+                )
+            )
+        if "error" in resp:
+            st.error(resp["error"])
+        else:
+            st.session_state.history.append({"role": "user", "content": user_query})
+            st.session_state.history.append(
+                {"role": "assistant", "content": final_text}
+            )
+            if final_tool.strip():
+                st.session_state.history.append(
+                    {"role": "assistant_tool", "content": final_tool}
+                )
+            st.rerun()
+    else:
+        st.warning(
+            "⚠️ MCP server and agent are not initialized. Please click the 'Apply Settings' button in the left sidebar to initialize."
+        )
+
+
+
+================================================
+FILE: app_KOR.py
+================================================
+import streamlit as st
+import asyncio
+import nest_asyncio
+import json
+import os
+import platform
+
+if platform.system() == "Windows":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
+# nest_asyncio 적용: 이미 실행 중인 이벤트 루프 내에서 중첩 호출 허용
+nest_asyncio.apply()
+
+# 전역 이벤트 루프 생성 및 재사용 (한번 생성한 후 계속 사용)
+if "event_loop" not in st.session_state:
+    loop = asyncio.new_event_loop()
+    st.session_state.event_loop = loop
+    asyncio.set_event_loop(loop)
+
+from langgraph.prebuilt import create_react_agent
+from langchain_anthropic import ChatAnthropic
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage
+from dotenv import load_dotenv
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from utils import astream_graph, random_uuid
+from langchain_core.messages.ai import AIMessageChunk
+from langchain_core.messages.tool import ToolMessage
+from langgraph.checkpoint.memory import MemorySaver
+from langchain_core.runnables import RunnableConfig
+
+# 환경 변수 로드 (.env 파일에서 API 키 등의 설정을 가져옴)
+load_dotenv(override=True)
+
+# config.json 파일 경로 설정
+CONFIG_FILE_PATH = "config.json"
+
+# JSON 설정 파일 로드 함수
+def load_config_from_json():
+    """
+    config.json 파일에서 설정을 로드합니다.
+    파일이 없는 경우 기본 설정으로 파일을 생성합니다.
+
+    반환값:
+        dict: 로드된 설정
+    """
+    default_config = {
+        "get_current_time": {
+            "command": "python",
+            "args": ["./mcp_server_time.py"],
+            "transport": "stdio"
+        }
+    }
+    
+    try:
+        if os.path.exists(CONFIG_FILE_PATH):
+            with open(CONFIG_FILE_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
+        else:
+            # 파일이 없는 경우 기본 설정으로 파일 생성
+            save_config_to_json(default_config)
+            return default_config
+    except Exception as e:
+        st.error(f"설정 파일 로드 중 오류 발생: {str(e)}")
+        return default_config
+
+# JSON 설정 파일 저장 함수
+def save_config_to_json(config):
+    """
+    설정을 config.json 파일에 저장합니다.
+
+    매개변수:
+        config (dict): 저장할 설정
+    
+    반환값:
+        bool: 저장 성공 여부
+    """
+    try:
+        with open(CONFIG_FILE_PATH, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2, ensure_ascii=False)
+        return True
+    except Exception as e:
+        st.error(f"설정 파일 저장 중 오류 발생: {str(e)}")
+        return False
+
+# 로그인 세션 변수 초기화
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+
+# 로그인 필요 여부 확인
+use_login = os.environ.get("USE_LOGIN", "false").lower() == "true"
+
+# 로그인 상태에 따라 페이지 설정 변경
+if use_login and not st.session_state.authenticated:
+    # 로그인 페이지는 기본(narrow) 레이아웃 사용
+    st.set_page_config(page_title="Agent with MCP Tools", page_icon="🧠")
+else:
+    # 메인 앱은 wide 레이아웃 사용
+    st.set_page_config(page_title="Agent with MCP Tools", page_icon="🧠", layout="wide")
+
+# 로그인 기능이 활성화되어 있고 아직 인증되지 않은 경우 로그인 화면 표시
+if use_login and not st.session_state.authenticated:
+    st.title("🔐 로그인")
+    st.markdown("시스템을 사용하려면 로그인이 필요합니다.")
+
+    # 로그인 폼을 화면 중앙에 좁게 배치
+    with st.form("login_form"):
+        username = st.text_input("아이디")
+        password = st.text_input("비밀번호", type="password")
+        submit_button = st.form_submit_button("로그인")
+
+        if submit_button:
+            expected_username = os.environ.get("USER_ID")
+            expected_password = os.environ.get("USER_PASSWORD")
+
+            if username == expected_username and password == expected_password:
+                st.session_state.authenticated = True
+                st.success("✅ 로그인 성공! 잠시만 기다려주세요...")
+                st.rerun()
+            else:
+                st.error("❌ 아이디 또는 비밀번호가 올바르지 않습니다.")
+
+    # 로그인 화면에서는 메인 앱을 표시하지 않음
+    st.stop()
+
+# 사이드바 최상단에 저자 정보 추가 (다른 사이드바 요소보다 먼저 배치)
+st.sidebar.markdown("### ✍️ Made by [테디노트](https://youtube.com/c/teddynote) 🚀")
+st.sidebar.markdown(
+    "### 💻 [Project Page](https://github.com/teddynote-lab/langgraph-mcp-agents)"
+)
+
+st.sidebar.divider()  # 구분선 추가
+
+# 기존 페이지 타이틀 및 설명
+st.title("💬 MCP 도구 활용 에이전트")
+st.markdown("✨ MCP 도구를 활용한 ReAct 에이전트에게 질문해보세요.")
+
+SYSTEM_PROMPT = """<ROLE>
+You are a smart agent with an ability to use tools. 
+You will be given a question and you will use the tools to answer the question.
+Pick the most relevant tool to answer the question. 
+If you are failed to answer the question, try different tools to get context.
+Your answer should be very polite and professional.
+</ROLE>
+
+----
+
+<INSTRUCTIONS>
+Step 1: Analyze the question
+- Analyze user's question and final goal.
+- If the user's question is consist of multiple sub-questions, split them into smaller sub-questions.
+
+Step 2: Pick the most relevant tool
+- Pick the most relevant tool to answer the question.
+- If you are failed to answer the question, try different tools to get context.
+
+Step 3: Answer the question
+- Answer the question in the same language as the question.
+- Your answer should be very polite and professional.
+
+Step 4: Provide the source of the answer(if applicable)
+- If you've used the tool, provide the source of the answer.
+- Valid sources are either a website(URL) or a document(PDF, etc).
+
+Guidelines:
+- If you've used the tool, your answer should be based on the tool's output(tool's output is more important than your own knowledge).
+- If you've used the tool, and the source is valid URL, provide the source(URL) of the answer.
+- Skip providing the source if the source is not URL.
+- Answer in the same language as the question.
+- Answer should be concise and to the point.
+- Avoid response your output with any other information than the answer and the source.  
+</INSTRUCTIONS>
+
+----
+
+<OUTPUT_FORMAT>
+(concise answer to the question)
+
+**Source**(if applicable)
+- (source1: valid URL)
+- (source2: valid URL)
+- ...
+</OUTPUT_FORMAT>
+"""
+
+OUTPUT_TOKEN_INFO = {
+    "claude-3-5-sonnet-latest": {"max_tokens": 8192},
+    "claude-3-5-haiku-latest": {"max_tokens": 8192},
+    "claude-3-7-sonnet-latest": {"max_tokens": 64000},
+    "gpt-4o": {"max_tokens": 16000},
+    "gpt-4o-mini": {"max_tokens": 16000},
+}
+
+# 세션 상태 초기화
+if "session_initialized" not in st.session_state:
+    st.session_state.session_initialized = False  # 세션 초기화 상태 플래그
+    st.session_state.agent = None  # ReAct 에이전트 객체 저장 공간
+    st.session_state.history = []  # 대화 기록 저장 리스트
+    st.session_state.mcp_client = None  # MCP 클라이언트 객체 저장 공간
+    st.session_state.timeout_seconds = 120  # 응답 생성 제한 시간(초), 기본값 120초
+    st.session_state.selected_model = "claude-3-7-sonnet-latest"  # 기본 모델 선택
+    st.session_state.recursion_limit = 100  # 재귀 호출 제한, 기본값 100
+
+if "thread_id" not in st.session_state:
+    st.session_state.thread_id = random_uuid()
+
+
+# --- 함수 정의 부분 ---
+
+
+async def cleanup_mcp_client():
+    """
+    기존 MCP 클라이언트를 안전하게 종료합니다.
+
+    기존 클라이언트가 있는 경우 정상적으로 리소스를 해제합니다.
+    """
+    if "mcp_client" in st.session_state and st.session_state.mcp_client is not None:
+        try:
+
+            await st.session_state.mcp_client.__aexit__(None, None, None)
+            st.session_state.mcp_client = None
+        except Exception as e:
+            import traceback
+
+            # st.warning(f"MCP 클라이언트 종료 중 오류: {str(e)}")
+            # st.warning(traceback.format_exc())
+
+
+def print_message():
+    """
+    채팅 기록을 화면에 출력합니다.
+
+    사용자와 어시스턴트의 메시지를 구분하여 화면에 표시하고,
+    도구 호출 정보는 어시스턴트 메시지 컨테이너 내에 표시합니다.
+    """
+    i = 0
+    while i < len(st.session_state.history):
+        message = st.session_state.history[i]
+
+        if message["role"] == "user":
+            st.chat_message("user", avatar="🧑‍💻").markdown(message["content"])
+            i += 1
+        elif message["role"] == "assistant":
+            # 어시스턴트 메시지 컨테이너 생성
+            with st.chat_message("assistant", avatar="🤖"):
+                # 어시스턴트 메시지 내용 표시
+                st.markdown(message["content"])
+
+                # 다음 메시지가 도구 호출 정보인지 확인
+                if (
+                    i + 1 < len(st.session_state.history)
+                    and st.session_state.history[i + 1]["role"] == "assistant_tool"
+                ):
+                    # 도구 호출 정보를 동일한 컨테이너 내에 expander로 표시
+                    with st.expander("🔧 도구 호출 정보", expanded=False):
+                        st.markdown(st.session_state.history[i + 1]["content"])
+                    i += 2  # 두 메시지를 함께 처리했으므로 2 증가
+                else:
+                    i += 1  # 일반 메시지만 처리했으므로 1 증가
+        else:
+            # assistant_tool 메시지는 위에서 처리되므로 건너뜀
+            i += 1
+
+
+def get_streaming_callback(text_placeholder, tool_placeholder):
+    """
+    스트리밍 콜백 함수를 생성합니다.
+
+    이 함수는 LLM에서 생성되는 응답을 실시간으로 화면에 표시하기 위한 콜백 함수를 생성합니다.
+    텍스트 응답과 도구 호출 정보를 각각 다른 영역에 표시합니다.
+
+    매개변수:
+        text_placeholder: 텍스트 응답을 표시할 Streamlit 컴포넌트
+        tool_placeholder: 도구 호출 정보를 표시할 Streamlit 컴포넌트
+
+    반환값:
+        callback_func: 스트리밍 콜백 함수
+        accumulated_text: 누적된 텍스트 응답을 저장하는 리스트
+        accumulated_tool: 누적된 도구 호출 정보를 저장하는 리스트
+    """
+    accumulated_text = []
+    accumulated_tool = []
+
+    def callback_func(message: dict):
+        nonlocal accumulated_text, accumulated_tool
+        message_content = message.get("content", None)
+
+        if isinstance(message_content, AIMessageChunk):
+            content = message_content.content
+            # 콘텐츠가 리스트 형태인 경우 (Claude 모델 등에서 주로 발생)
+            if isinstance(content, list) and len(content) > 0:
+                message_chunk = content[0]
+                # 텍스트 타입인 경우 처리
+                if message_chunk["type"] == "text":
+                    accumulated_text.append(message_chunk["text"])
+                    text_placeholder.markdown("".join(accumulated_text))
+                # 도구 사용 타입인 경우 처리
+                elif message_chunk["type"] == "tool_use":
+                    if "partial_json" in message_chunk:
+                        accumulated_tool.append(message_chunk["partial_json"])
+                    else:
+                        tool_call_chunks = message_content.tool_call_chunks
+                        tool_call_chunk = tool_call_chunks[0]
+                        accumulated_tool.append(
+                            "\n```json\n" + str(tool_call_chunk) + "\n```\n"
+                        )
+                    with tool_placeholder.expander("🔧 도구 호출 정보", expanded=True):
+                        st.markdown("".join(accumulated_tool))
+            # tool_calls 속성이 있는 경우 처리 (OpenAI 모델 등에서 주로 발생)
+            elif (
+                hasattr(message_content, "tool_calls")
+                and message_content.tool_calls
+                and len(message_content.tool_calls[0]["name"]) > 0
+            ):
+                tool_call_info = message_content.tool_calls[0]
+                accumulated_tool.append("\n```json\n" + str(tool_call_info) + "\n```\n")
+                with tool_placeholder.expander("🔧 도구 호출 정보", expanded=True):
+                    st.markdown("".join(accumulated_tool))
+            # 단순 문자열인 경우 처리
+            elif isinstance(content, str):
+                accumulated_text.append(content)
+                text_placeholder.markdown("".join(accumulated_text))
+            # 유효하지 않은 도구 호출 정보가 있는 경우 처리
+            elif (
+                hasattr(message_content, "invalid_tool_calls")
+                and message_content.invalid_tool_calls
+            ):
+                tool_call_info = message_content.invalid_tool_calls[0]
+                accumulated_tool.append("\n```json\n" + str(tool_call_info) + "\n```\n")
+                with tool_placeholder.expander(
+                    "🔧 도구 호출 정보 (유효하지 않음)", expanded=True
+                ):
+                    st.markdown("".join(accumulated_tool))
+            # tool_call_chunks 속성이 있는 경우 처리
+            elif (
+                hasattr(message_content, "tool_call_chunks")
+                and message_content.tool_call_chunks
+            ):
+                tool_call_chunk = message_content.tool_call_chunks[0]
+                accumulated_tool.append(
+                    "\n```json\n" + str(tool_call_chunk) + "\n```\n"
+                )
+                with tool_placeholder.expander("🔧 도구 호출 정보", expanded=True):
+                    st.markdown("".join(accumulated_tool))
+            # additional_kwargs에 tool_calls가 있는 경우 처리 (다양한 모델 호환성 지원)
+            elif (
+                hasattr(message_content, "additional_kwargs")
+                and "tool_calls" in message_content.additional_kwargs
+            ):
+                tool_call_info = message_content.additional_kwargs["tool_calls"][0]
+                accumulated_tool.append("\n```json\n" + str(tool_call_info) + "\n```\n")
+                with tool_placeholder.expander("🔧 도구 호출 정보", expanded=True):
+                    st.markdown("".join(accumulated_tool))
+        # 도구 메시지인 경우 처리 (도구의 응답)
+        elif isinstance(message_content, ToolMessage):
+            accumulated_tool.append(
+                "\n```json\n" + str(message_content.content) + "\n```\n"
+            )
+            with tool_placeholder.expander("🔧 도구 호출 정보", expanded=True):
+                st.markdown("".join(accumulated_tool))
+        return None
+
+    return callback_func, accumulated_text, accumulated_tool
+
+
+async def process_query(query, text_placeholder, tool_placeholder, timeout_seconds=60):
+    """
+    사용자 질문을 처리하고 응답을 생성합니다.
+
+    이 함수는 사용자의 질문을 에이전트에 전달하고, 응답을 실시간으로 스트리밍하여 표시합니다.
+    지정된 시간 내에 응답이 완료되지 않으면 타임아웃 오류를 반환합니다.
+
+    매개변수:
+        query: 사용자가 입력한 질문 텍스트
+        text_placeholder: 텍스트 응답을 표시할 Streamlit 컴포넌트
+        tool_placeholder: 도구 호출 정보를 표시할 Streamlit 컴포넌트
+        timeout_seconds: 응답 생성 제한 시간(초)
+
+    반환값:
+        response: 에이전트의 응답 객체
+        final_text: 최종 텍스트 응답
+        final_tool: 최종 도구 호출 정보
+    """
+    try:
+        if st.session_state.agent:
+            streaming_callback, accumulated_text_obj, accumulated_tool_obj = (
+                get_streaming_callback(text_placeholder, tool_placeholder)
+            )
+            try:
+                response = await asyncio.wait_for(
+                    astream_graph(
+                        st.session_state.agent,
+                        {"messages": [HumanMessage(content=query)]},
+                        callback=streaming_callback,
+                        config=RunnableConfig(
+                            recursion_limit=st.session_state.recursion_limit,
+                            thread_id=st.session_state.thread_id,
+                        ),
+                    ),
+                    timeout=timeout_seconds,
+                )
+            except asyncio.TimeoutError:
+                error_msg = f"⏱️ 요청 시간이 {timeout_seconds}초를 초과했습니다. 나중에 다시 시도해 주세요."
+                return {"error": error_msg}, error_msg, ""
+
+            final_text = "".join(accumulated_text_obj)
+            final_tool = "".join(accumulated_tool_obj)
+            return response, final_text, final_tool
+        else:
+            return (
+                {"error": "🚫 에이전트가 초기화되지 않았습니다."},
+                "🚫 에이전트가 초기화되지 않았습니다.",
+                "",
+            )
+    except Exception as e:
+        import traceback
+
+        error_msg = f"❌ 쿼리 처리 중 오류 발생: {str(e)}\n{traceback.format_exc()}"
+        return {"error": error_msg}, error_msg, ""
+
+
+async def initialize_session(mcp_config=None):
+    """
+    MCP 세션과 에이전트를 초기화합니다.
+
+    매개변수:
+        mcp_config: MCP 도구 설정 정보(JSON). None인 경우 기본 설정 사용
+
+    반환값:
+        bool: 초기화 성공 여부
+    """
+    with st.spinner("🔄 MCP 서버에 연결 중..."):
+        # 먼저 기존 클라이언트를 안전하게 정리
+        await cleanup_mcp_client()
+
+        if mcp_config is None:
+            # config.json 파일에서 설정 로드
+            mcp_config = load_config_from_json()
+        client = MultiServerMCPClient(mcp_config)
+        await client.__aenter__()
+        tools = client.get_tools()
+        st.session_state.tool_count = len(tools)
+        st.session_state.mcp_client = client
+
+        # 선택된 모델에 따라 적절한 모델 초기화
+        selected_model = st.session_state.selected_model
+
+        if selected_model in [
+            "claude-3-7-sonnet-latest",
+            "claude-3-5-sonnet-latest",
+            "claude-3-5-haiku-latest",
+        ]:
+            model = ChatAnthropic(
+                model=selected_model,
+                temperature=0.1,
+                max_tokens=OUTPUT_TOKEN_INFO[selected_model]["max_tokens"],
+            )
+        else:  # OpenAI 모델 사용
+            model = ChatOpenAI(
+                model=selected_model,
+                temperature=0.1,
+                max_tokens=OUTPUT_TOKEN_INFO[selected_model]["max_tokens"],
+            )
+        agent = create_react_agent(
+            model,
+            tools,
+            checkpointer=MemorySaver(),
+            prompt=SYSTEM_PROMPT,
+        )
+        st.session_state.agent = agent
+        st.session_state.session_initialized = True
+        return True
+
+
+# --- 사이드바: 시스템 설정 섹션 ---
+with st.sidebar:
+    st.subheader("⚙️ 시스템 설정")
+
+    # 모델 선택 기능
+    # 사용 가능한 모델 목록 생성
+    available_models = []
+
+    # Anthropic API 키 확인
+    has_anthropic_key = os.environ.get("ANTHROPIC_API_KEY") is not None
+    if has_anthropic_key:
+        available_models.extend(
+            [
+                "claude-3-7-sonnet-latest",
+                "claude-3-5-sonnet-latest",
+                "claude-3-5-haiku-latest",
+            ]
+        )
+
+    # OpenAI API 키 확인
+    has_openai_key = os.environ.get("OPENAI_API_KEY") is not None
+    if has_openai_key:
+        available_models.extend(["gpt-4o", "gpt-4o-mini"])
+
+    # 사용 가능한 모델이 없는 경우 메시지 표시
+    if not available_models:
+        st.warning(
+            "⚠️ API 키가 설정되지 않았습니다. .env 파일에 ANTHROPIC_API_KEY 또는 OPENAI_API_KEY를 추가해주세요."
+        )
+        # 기본값으로 Claude 모델 추가 (키가 없어도 UI를 보여주기 위함)
+        available_models = ["claude-3-7-sonnet-latest"]
+
+    # 모델 선택 드롭다운
+    previous_model = st.session_state.selected_model
+    st.session_state.selected_model = st.selectbox(
+        "🤖 사용할 모델 선택",
+        options=available_models,
+        index=(
+            available_models.index(st.session_state.selected_model)
+            if st.session_state.selected_model in available_models
+            else 0
+        ),
+        help="Anthropic 모델은 ANTHROPIC_API_KEY가, OpenAI 모델은 OPENAI_API_KEY가 환경변수로 설정되어야 합니다.",
+    )
+
+    # 모델이 변경되었을 때 세션 초기화 필요 알림
+    if (
+        previous_model != st.session_state.selected_model
+        and st.session_state.session_initialized
+    ):
+        st.warning(
+            "⚠️ 모델이 변경되었습니다. '설정 적용하기' 버튼을 눌러 변경사항을 적용하세요."
+        )
+
+    # 타임아웃 설정 슬라이더 추가
+    st.session_state.timeout_seconds = st.slider(
+        "⏱️ 응답 생성 제한 시간(초)",
+        min_value=60,
+        max_value=300,
+        value=st.session_state.timeout_seconds,
+        step=10,
+        help="에이전트가 응답을 생성하는 최대 시간을 설정합니다. 복잡한 작업은 더 긴 시간이 필요할 수 있습니다.",
+    )
+
+    st.session_state.recursion_limit = st.slider(
+        "⏱️ 재귀 호출 제한(횟수)",
+        min_value=10,
+        max_value=200,
+        value=st.session_state.recursion_limit,
+        step=10,
+        help="재귀 호출 제한 횟수를 설정합니다. 너무 높은 값을 설정하면 메모리 부족 문제가 발생할 수 있습니다.",
+    )
+
+    st.divider()  # 구분선 추가
+
+    # 도구 설정 섹션 추가
+    st.subheader("🔧 도구 설정")
+
+    # expander 상태를 세션 상태로 관리
+    if "mcp_tools_expander" not in st.session_state:
+        st.session_state.mcp_tools_expander = False
+
+    # MCP 도구 추가 인터페이스
+    with st.expander("🧰 MCP 도구 추가", expanded=st.session_state.mcp_tools_expander):
+        # config.json 파일에서 설정 로드하여 표시
+        loaded_config = load_config_from_json()
+        default_config_text = json.dumps(loaded_config, indent=2, ensure_ascii=False)
+        
+        # pending config가 없으면 기존 mcp_config_text 기반으로 생성
+        if "pending_mcp_config" not in st.session_state:
+            try:
+                st.session_state.pending_mcp_config = loaded_config
+            except Exception as e:
+                st.error(f"초기 pending config 설정 실패: {e}")
+
+        # 개별 도구 추가를 위한 UI
+        st.subheader("도구 추가")
+        st.markdown(
+            """
+            [어떻게 설정 하나요?](https://teddylee777.notion.site/MCP-1d324f35d12980c8b018e12afdf545a1?pvs=4)
+
+            ⚠️ **중요**: JSON을 반드시 중괄호(`{}`)로 감싸야 합니다."""
+        )
+
+        # 보다 명확한 예시 제공
+        example_json = {
+            "github": {
+                "command": "npx",
+                "args": [
+                    "-y",
+                    "@smithery/cli@latest",
+                    "run",
+                    "@smithery-ai/github",
+                    "--config",
+                    '{"githubPersonalAccessToken":"your_token_here"}',
+                ],
+                "transport": "stdio",
+            }
+        }
+
+        default_text = json.dumps(example_json, indent=2, ensure_ascii=False)
+
+        new_tool_json = st.text_area(
+            "도구 JSON",
+            default_text,
+            height=250,
+        )
+
+        # 추가하기 버튼
+        if st.button(
+            "도구 추가",
+            type="primary",
+            key="add_tool_button",
+            use_container_width=True,
+        ):
+            try:
+                # 입력값 검증
+                if not new_tool_json.strip().startswith(
+                    "{"
+                ) or not new_tool_json.strip().endswith("}"):
+                    st.error("JSON은 중괄호({})로 시작하고 끝나야 합니다.")
+                    st.markdown('올바른 형식: `{ "도구이름": { ... } }`')
+                else:
+                    # JSON 파싱
+                    parsed_tool = json.loads(new_tool_json)
+
+                    # mcpServers 형식인지 확인하고 처리
+                    if "mcpServers" in parsed_tool:
+                        # mcpServers 안의 내용을 최상위로 이동
+                        parsed_tool = parsed_tool["mcpServers"]
+                        st.info(
+                            "'mcpServers' 형식이 감지되었습니다. 자동으로 변환합니다."
+                        )
+
+                    # 입력된 도구 수 확인
+                    if len(parsed_tool) == 0:
+                        st.error("최소 하나 이상의 도구를 입력해주세요.")
+                    else:
+                        # 모든 도구에 대해 처리
+                        success_tools = []
+                        for tool_name, tool_config in parsed_tool.items():
+                            # URL 필드 확인 및 transport 설정
+                            if "url" in tool_config:
+                                # URL이 있는 경우 transport를 "sse"로 설정
+                                tool_config["transport"] = "sse"
+                                st.info(
+                                    f"'{tool_name}' 도구에 URL이 감지되어 transport를 'sse'로 설정했습니다."
+                                )
+                            elif "transport" not in tool_config:
+                                # URL이 없고 transport도 없는 경우 기본값 "stdio" 설정
+                                tool_config["transport"] = "stdio"
+
+                            # 필수 필드 확인
+                            if (
+                                "command" not in tool_config
+                                and "url" not in tool_config
+                            ):
+                                st.error(
+                                    f"'{tool_name}' 도구 설정에는 'command' 또는 'url' 필드가 필요합니다."
+                                )
+                            elif "command" in tool_config and "args" not in tool_config:
+                                st.error(
+                                    f"'{tool_name}' 도구 설정에는 'args' 필드가 필요합니다."
+                                )
+                            elif "command" in tool_config and not isinstance(
+                                tool_config["args"], list
+                            ):
+                                st.error(
+                                    f"'{tool_name}' 도구의 'args' 필드는 반드시 배열([]) 형식이어야 합니다."
+                                )
+                            else:
+                                # pending_mcp_config에 도구 추가
+                                st.session_state.pending_mcp_config[tool_name] = (
+                                    tool_config
+                                )
+                                success_tools.append(tool_name)
+
+                        # 성공 메시지
+                        if success_tools:
+                            if len(success_tools) == 1:
+                                st.success(
+                                    f"{success_tools[0]} 도구가 추가되었습니다. 적용하려면 '설정 적용하기' 버튼을 눌러주세요."
+                                )
+                            else:
+                                tool_names = ", ".join(success_tools)
+                                st.success(
+                                    f"총 {len(success_tools)}개 도구({tool_names})가 추가되었습니다. 적용하려면 '설정 적용하기' 버튼을 눌러주세요."
+                                )
+                            # 추가되면 expander를 접어줌
+                            st.session_state.mcp_tools_expander = False
+                            st.rerun()
+            except json.JSONDecodeError as e:
+                st.error(f"JSON 파싱 에러: {e}")
+                st.markdown(
+                    f"""
+                **수정 방법**:
+                1. JSON 형식이 올바른지 확인하세요.
+                2. 모든 키는 큰따옴표(")로 감싸야 합니다.
+                3. 문자열 값도 큰따옴표(")로 감싸야 합니다.
+                4. 문자열 내에서 큰따옴표를 사용할 경우 이스케이프(\\")해야 합니다.
+                """
+                )
+            except Exception as e:
+                st.error(f"오류 발생: {e}")
+
+    # 등록된 도구 목록 표시 및 삭제 버튼 추가
+    with st.expander("📋 등록된 도구 목록", expanded=True):
+        try:
+            pending_config = st.session_state.pending_mcp_config
+        except Exception as e:
+            st.error("유효한 MCP 도구 설정이 아닙니다.")
+        else:
+            # pending config의 키(도구 이름) 목록을 순회하며 표시
+            for tool_name in list(pending_config.keys()):
+                col1, col2 = st.columns([8, 2])
+                col1.markdown(f"- **{tool_name}**")
+                if col2.button("삭제", key=f"delete_{tool_name}"):
+                    # pending config에서 해당 도구 삭제 (즉시 적용되지는 않음)
+                    del st.session_state.pending_mcp_config[tool_name]
+                    st.success(
+                        f"{tool_name} 도구가 삭제되었습니다. 적용하려면 '설정 적용하기' 버튼을 눌러주세요."
+                    )
+
+    st.divider()  # 구분선 추가
+
+# --- 사이드바: 시스템 정보 및 작업 버튼 섹션 ---
+with st.sidebar:
+    st.subheader("📊 시스템 정보")
+    st.write(f"🛠️ MCP 도구 수: {st.session_state.get('tool_count', '초기화 중...')}")
+    selected_model_name = st.session_state.selected_model
+    st.write(f"🧠 현재 모델: {selected_model_name}")
+
+    # 설정 적용하기 버튼을 여기로 이동
+    if st.button(
+        "설정 적용하기",
+        key="apply_button",
+        type="primary",
+        use_container_width=True,
+    ):
+        # 적용 중 메시지 표시
+        apply_status = st.empty()
+        with apply_status.container():
+            st.warning("🔄 변경사항을 적용하고 있습니다. 잠시만 기다려주세요...")
+            progress_bar = st.progress(0)
+
+            # 설정 저장
+            st.session_state.mcp_config_text = json.dumps(
+                st.session_state.pending_mcp_config, indent=2, ensure_ascii=False
+            )
+
+            # config.json 파일에 설정 저장
+            save_result = save_config_to_json(st.session_state.pending_mcp_config)
+            if not save_result:
+                st.error("❌ 설정 파일 저장에 실패했습니다.")
+            
+            progress_bar.progress(15)
+
+            # 세션 초기화 준비
+            st.session_state.session_initialized = False
+            st.session_state.agent = None
+
+            # 진행 상태 업데이트
+            progress_bar.progress(30)
+
+            # 초기화 실행
+            success = st.session_state.event_loop.run_until_complete(
+                initialize_session(st.session_state.pending_mcp_config)
+            )
+
+            # 진행 상태 업데이트
+            progress_bar.progress(100)
+
+            if success:
+                st.success("✅ 새로운 설정이 적용되었습니다.")
+                # 도구 추가 expander 접기
+                if "mcp_tools_expander" in st.session_state:
+                    st.session_state.mcp_tools_expander = False
+            else:
+                st.error("❌ 설정 적용에 실패하였습니다.")
+
+        # 페이지 새로고침
+        st.rerun()
+
+    st.divider()  # 구분선 추가
+
+    # 작업 버튼 섹션
+    st.subheader("🔄 작업")
+
+    # 대화 초기화 버튼
+    if st.button("대화 초기화", use_container_width=True, type="primary"):
+        # thread_id 초기화
+        st.session_state.thread_id = random_uuid()
+
+        # 대화 히스토리 초기화
+        st.session_state.history = []
+
+        # 알림 메시지
+        st.success("✅ 대화가 초기화되었습니다.")
+
+        # 페이지 새로고침
+        st.rerun()
+
+    # 로그인 기능이 활성화된 경우에만 로그아웃 버튼 표시
+    if use_login and st.session_state.authenticated:
+        st.divider()  # 구분선 추가
+        if st.button("로그아웃", use_container_width=True, type="secondary"):
+            st.session_state.authenticated = False
+            st.success("✅ 로그아웃 되었습니다.")
+            st.rerun()
+
+# --- 기본 세션 초기화 (초기화되지 않은 경우) ---
+if not st.session_state.session_initialized:
+    st.info(
+        "MCP 서버와 에이전트가 초기화되지 않았습니다. 왼쪽 사이드바의 '설정 적용하기' 버튼을 클릭하여 초기화해주세요."
+    )
+
+
+# --- 대화 기록 출력 ---
+print_message()
+
+# --- 사용자 입력 및 처리 ---
+user_query = st.chat_input("💬 질문을 입력하세요")
+if user_query:
+    if st.session_state.session_initialized:
+        st.chat_message("user", avatar="🧑‍💻").markdown(user_query)
+        with st.chat_message("assistant", avatar="🤖"):
+            tool_placeholder = st.empty()
+            text_placeholder = st.empty()
+            resp, final_text, final_tool = (
+                st.session_state.event_loop.run_until_complete(
+                    process_query(
+                        user_query,
+                        text_placeholder,
+                        tool_placeholder,
+                        st.session_state.timeout_seconds,
+                    )
+                )
+            )
+        if "error" in resp:
+            st.error(resp["error"])
+        else:
+            st.session_state.history.append({"role": "user", "content": user_query})
+            st.session_state.history.append(
+                {"role": "assistant", "content": final_text}
+            )
+            if final_tool.strip():
+                st.session_state.history.append(
+                    {"role": "assistant_tool", "content": final_tool}
+                )
+            st.rerun()
+    else:
+        st.warning(
+            "⚠️ MCP 서버와 에이전트가 초기화되지 않았습니다. 왼쪽 사이드바의 '설정 적용하기' 버튼을 클릭하여 초기화해주세요."
+        )
+
+
+
+================================================
+FILE: config.json
+================================================
+{
+  "get_current_time": {
+    "command": "python",
+    "args": [
+      "./mcp_server_time.py"
+    ],
+    "transport": "stdio"
+  }
+}
+
+
+================================================
+FILE: example_config.json
+================================================
+{
+  "get_current_time": {
+    "command": "python",
+    "args": ["./mcp_server_time.py"],
+    "transport": "stdio"
+  }
+}
+
+
+================================================
+FILE: MCP-HandsOn-ENG.ipynb
+================================================
+# Jupyter notebook converted to Python script.
+
+"""
+# MCP + LangGraph Hands-On Tutorial
+
+- Author: [Teddy Notes](https://youtube.com/c/teddynote)
+- Lecture: [Fastcampus RAG trick notes](https://fastcampus.co.kr/data_online_teddy)
+
+**References**
+- https://modelcontextprotocol.io/introduction
+- https://github.com/langchain-ai/langchain-mcp-adapters
+"""
+
+"""
+## configure
+
+Refer to the installation instructions below to install `uv`.
+
+**How to install `uv`**
+
+```bash
+# macOS/Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows (PowerShell)
+irm https://astral.sh/uv/install.ps1 | iex
+```
+
+Install **dependencies**
+
+```bash
+uv pip install -r requirements.txt
+```
+"""
+
+"""
+Gets the environment variables.
+"""
+
+from dotenv import load_dotenv
+
+load_dotenv(override=True)
+
+"""
+## MultiServerMCPClient
+"""
+
+"""
+Run `mcp_server_remote.py` in advance. Open a terminal with the virtual environment activated and run the server.
+
+> Command
+```bash
+source .venv/bin/activate
+python mcp_server_remote.py
+```
+
+Create and terminate a temporary Session connection using `async with`
+"""
+
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langgraph.prebuilt import create_react_agent
+from utils import ainvoke_graph, astream_graph
+from langchain_anthropic import ChatAnthropic
+
+model = ChatAnthropic(
+    model_name="claude-3-7-sonnet-latest", temperature=0, max_tokens=20000
+)
+
+async with MultiServerMCPClient(
+    {
+        "weather": {
+            # Must match the server's port (port 8005)
+            "url": "http://localhost:8005/sse",
+            "transport": "sse",
+        }
+    }
+) as client:
+    print(client.get_tools())
+    agent = create_react_agent(model, client.get_tools())
+    answer = await astream_graph(
+        agent, {"messages": "What's the weather like in Seoul?"}
+    )
+
+"""
+You might notice that you can't access the tool because the session is closed.
+"""
+
+await astream_graph(agent, {"messages": "What's the weather like in Seoul?"})
+
+"""
+Now let's change that to accessing the tool while maintaining an Async Session.
+"""
+
+# 1. Create client
+client = MultiServerMCPClient(
+    {
+        "weather": {
+            "url": "http://localhost:8005/sse",
+            "transport": "sse",
+        }
+    }
+)
+
+
+# 2. Explicitly initialize connection (this part is necessary)
+# Initialize
+await client.__aenter__()
+
+# Now tools are loaded
+print(client.get_tools())  # Tools are displayed
+
+"""
+Create an agent with langgraph(`create_react_agent`).
+"""
+
+# Create agent
+agent = create_react_agent(model, client.get_tools())
+
+"""
+Run the graph to see the results.
+"""
+
+await astream_graph(agent, {"messages": "What's the weather like in Seoul?"})
+
+"""
+## Stdio method
+
+The Stdio method is intended for use in a local environment.
+
+- Use standard input/output for communication
+"""
+
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+from langgraph.prebuilt import create_react_agent
+from langchain_mcp_adapters.tools import load_mcp_tools
+from langchain_anthropic import ChatAnthropic
+
+# Initialize Anthropic's Claude model
+model = ChatAnthropic(
+    model_name="claude-3-7-sonnet-latest", temperature=0, max_tokens=20000
+)
+
+# Set up StdIO server parameters
+# - command: Path to Python interpreter
+# - args: MCP server script to execute
+server_params = StdioServerParameters(
+    command="./.venv/bin/python",
+    args=["mcp_server_local.py"],
+)
+
+# Use StdIO client to communicate with the server
+async with stdio_client(server_params) as (read, write):
+    # Create client session
+    async with ClientSession(read, write) as session:
+        # Initialize connection
+        await session.initialize()
+
+        # Load MCP tools
+        tools = await load_mcp_tools(session)
+        print(tools)
+
+        # Create agent
+        agent = create_react_agent(model, tools)
+
+        # Stream agent responses
+        await astream_graph(agent, {"messages": "What's the weather like in Seoul?"})
+
+"""
+## Use MCP server with RAG deployed
+
+- File: `mcp_server_rag.py`
+
+Use the `mcp_server_rag.py` file that we built with langchain in advance.
+
+It uses stdio communication to get information about the tools, where it gets the `retriever` tool, which is the tool defined in `mcp_server_rag.py`. This file **doesn't** need to be running on the server beforehand.
+"""
+
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+from langchain_mcp_adapters.tools import load_mcp_tools
+from langgraph.prebuilt import create_react_agent
+from langchain_anthropic import ChatAnthropic
+from utils import astream_graph
+
+# Initialize Anthropic's Claude model
+model = ChatAnthropic(
+    model_name="claude-3-7-sonnet-latest", temperature=0, max_tokens=20000
+)
+
+# Set up StdIO server parameters for the RAG server
+server_params = StdioServerParameters(
+    command="./.venv/bin/python",
+    args=["./mcp_server_rag.py"],
+)
+
+# Use StdIO client to communicate with the RAG server
+async with stdio_client(server_params) as (read, write):
+    # Create client session
+    async with ClientSession(read, write) as session:
+        # Initialize connection
+        await session.initialize()
+
+        # Load MCP tools (in this case, the retriever tool)
+        tools = await load_mcp_tools(session)
+
+        # Create and run the agent
+        agent = create_react_agent(model, tools)
+
+        # Stream agent responses
+        await astream_graph(
+            agent,
+            {
+                "messages": "Search for the name of the generative AI developed by Samsung Electronics"
+            },
+        )
+
+"""
+## Use a mix of SSE and Stdio methods
+
+- File: `mcp_server_rag.py` communicates over Stdio
+- `langchain-dev-docs` communicates via SSE
+
+Use a mix of SSE and Stdio methods.
+"""
+
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langgraph.prebuilt import create_react_agent
+from langchain_anthropic import ChatAnthropic
+
+# Initialize Anthropic's Claude model
+model = ChatAnthropic(
+    model_name="claude-3-7-sonnet-latest", temperature=0, max_tokens=20000
+)
+
+# 1. Create multi-server MCP client
+client = MultiServerMCPClient(
+    {
+        "document-retriever": {
+            "command": "./.venv/bin/python",
+            # Update with the absolute path to mcp_server_rag.py file
+            "args": ["./mcp_server_rag.py"],
+            # Communicate via stdio (using standard input/output)
+            "transport": "stdio",
+        },
+        "langchain-dev-docs": {
+            # Make sure the SSE server is running
+            "url": "https://teddynote.io/mcp/langchain/sse",
+            # Communicate via SSE (Server-Sent Events)
+            "transport": "sse",
+        },
+    }
+)
+
+
+# 2. Initialize connection explicitly through async context manager
+await client.__aenter__()
+
+"""
+Create an agent using `create_react_agent` in langgraph.
+"""
+
+from langgraph.checkpoint.memory import MemorySaver
+from langchain_core.runnables import RunnableConfig
+
+prompt = (
+    "You are a smart agent. "
+    "Use `retriever` tool to search on AI related documents and answer questions."
+    "Use `langchain-dev-docs` tool to search on langchain / langgraph related documents and answer questions."
+    "Answer in English."
+)
+agent = create_react_agent(
+    model, client.get_tools(), prompt=prompt, checkpointer=MemorySaver()
+)
+
+"""
+Use the `retriever` tool defined in `mcp_server_rag.py` that you built to perform the search.
+"""
+
+config = RunnableConfig(recursion_limit=30, thread_id=1)
+await astream_graph(
+    agent,
+    {
+        "messages": "Use the `retriever` tool to search for the name of the generative AI developed by Samsung Electronics"
+    },
+    config=config,
+)
+
+"""
+This time, we'll use the `langchain-dev-docs` tool to perform the search.
+"""
+
+config = RunnableConfig(recursion_limit=30, thread_id=1)
+await astream_graph(
+    agent,
+    {
+        "messages": "Please tell me about the definition of self-rag by referring to the langchain-dev-docs"
+    },
+    config=config,
+)
+
+"""
+Use `MemorySaver` to maintain short-term memory, so multi-turn conversations are possible.
+"""
+
+await astream_graph(
+    agent,
+    {"messages": "Summarize the previous content in bullet points"},
+    config=config,
+)
+
+"""
+## LangChain-integrated tools + MCP tools
+
+Here we confirm that tools integrated into LangChain can be used in conjunction with existing MCP-only tools.
+"""
+
+from langchain_community.tools.tavily_search import TavilySearchResults
+
+# Initialize the Tavily search tool (news type, news from the last 3 days)
+tavily = TavilySearchResults(max_results=3, topic="news", days=3)
+
+# Use it together with existing MCP tools
+tools = client.get_tools() + [tavily]
+
+"""
+Create an agent using `create_react_agent` in langgraph.
+"""
+
+from langgraph.checkpoint.memory import MemorySaver
+from langchain_core.runnables import RunnableConfig
+
+prompt = "You are a smart agent with various tools. Answer questions in English."
+agent = create_react_agent(model, tools, prompt=prompt, checkpointer=MemorySaver())
+
+"""
+Perform a search using the newly added `tavily` tool.
+"""
+
+await astream_graph(
+    agent, {"messages": "Tell me about today's news for me"}, config=config
+)
+
+"""
+You can see that the `retriever` tool is working smoothly.
+"""
+
+await astream_graph(
+    agent,
+    {
+        "messages": "Use the `retriever` tool to search for the name of the generative AI developed by Samsung Electronics"
+    },
+    config=config,
+)
+
+"""
+## Smithery MCP Server
+
+- Link: https://smithery.ai/
+
+List of tools used:
+
+- Sequential Thinking: https://smithery.ai/server/@smithery-ai/server-sequential-thinking
+  - MCP server providing tools for dynamic and reflective problem-solving through structured thinking processes
+- Desktop Commander: https://smithery.ai/server/@wonderwhy-er/desktop-commander
+  - Run terminal commands and manage files with various editing capabilities. Coding, shell and terminal, task automation
+
+**Note**
+
+- When importing tools provided by smithery in JSON format, you must set `"transport": "stdio"` as shown in the example below.
+"""
+
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langgraph.prebuilt import create_react_agent
+from langchain_anthropic import ChatAnthropic
+
+# Initialize LLM model
+model = ChatAnthropic(model="claude-3-7-sonnet-latest", temperature=0, max_tokens=20000)
+
+# 1. Create client
+client = MultiServerMCPClient(
+    {
+        "server-sequential-thinking": {
+            "command": "npx",
+            "args": [
+                "-y",
+                "@smithery/cli@latest",
+                "run",
+                "@smithery-ai/server-sequential-thinking",
+                "--key",
+                "your_smithery_api_key",
+            ],
+            "transport": "stdio",  # Add communication using stdio method
+        },
+        "desktop-commander": {
+            "command": "npx",
+            "args": [
+                "-y",
+                "@smithery/cli@latest",
+                "run",
+                "@wonderwhy-er/desktop-commander",
+                "--key",
+                "your_smithery_api_key",
+            ],
+            "transport": "stdio",  # Add communication using stdio method
+        },
+        "document-retriever": {
+            "command": "./.venv/bin/python",
+            # Update with the absolute path to the mcp_server_rag.py file
+            "args": ["./mcp_server_rag.py"],
+            # Communication using stdio (standard input/output)
+            "transport": "stdio",
+        },
+    }
+)
+
+
+# 2. Explicitly initialize connection
+await client.__aenter__()
+
+"""
+Create an agent using `create_react_agent` in langgraph.
+"""
+
+from langgraph.checkpoint.memory import MemorySaver
+from langchain_core.runnables import RunnableConfig
+
+# Set up configuration
+config = RunnableConfig(recursion_limit=30, thread_id=3)
+
+# Create agent
+agent = create_react_agent(model, client.get_tools(), checkpointer=MemorySaver())
+
+"""
+`Desktop Commander` 도구를 사용하여 터미널 명령을 실행합니다.
+"""
+
+await astream_graph(
+    agent,
+    {
+        "messages": "Draw the folder structure including the current path as a tree. However, exclude the .venv folder from the output."
+    },
+    config=config,
+)
+
+"""
+We'll use the `Sequential Thinking` tool to see if we can accomplish a relatively complex task.
+"""
+
+await astream_graph(
+    agent,
+    {
+        "messages": (
+            "Use the `retriever` tool to search for information about generative AI developed by Samsung Electronics, "
+            "and then use the `Sequential Thinking` tool to write a report."
+        )
+    },
+    config=config,
+)
+
+
+
+================================================
+FILE: MCP-HandsOn-KOR.ipynb
+================================================
+# Jupyter notebook converted to Python script.
+
+"""
+# MCP + LangGraph 핸즈온 튜토리얼
+
+- 작성자: [테디노트](https://youtube.com/c/teddynote)
+- 강의: [패스트캠퍼스 RAG 비법노트](https://fastcampus.co.kr/data_online_teddy)
+
+**참고자료**
+- https://modelcontextprotocol.io/introduction
+- https://github.com/langchain-ai/langchain-mcp-adapters
+"""
+
+"""
+## 환경설정
+
+아래 설치 방법을 참고하여 `uv` 를 설치합니다.
+
+**uv 설치 방법**
+
+```bash
+# macOS/Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows (PowerShell)
+irm https://astral.sh/uv/install.ps1 | iex
+```
+
+**의존성 설치**
+
+```bash
+uv pip install -r requirements.txt
+```
+"""
+
+"""
+환경변수를 가져옵니다.
+"""
+
+from dotenv import load_dotenv
+
+load_dotenv(override=True)
+
+"""
+## MultiServerMCPClient
+"""
+
+"""
+사전에 `mcp_server_remote.py` 를 실행해둡니다. 터미널을 열고 가상환경이 활성화 되어 있는 상태에서 서버를 실행해 주세요.
+
+> 명령어
+```bash
+source .venv/bin/activate
+python mcp_server_remote.py
+```
+
+`async with` 로 일시적인 Session 연결을 생성 후 해제
+"""
+
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langgraph.prebuilt import create_react_agent
+from utils import ainvoke_graph, astream_graph
+from langchain_anthropic import ChatAnthropic
+
+model = ChatAnthropic(
+    model_name="claude-3-7-sonnet-latest", temperature=0, max_tokens=20000
+)
+
+async with MultiServerMCPClient(
+    {
+        "weather": {
+            # 서버의 포트와 일치해야 합니다.(8005번 포트)
+            "url": "http://localhost:8005/sse",
+            "transport": "sse",
+        }
+    }
+) as client:
+    print(client.get_tools())
+    agent = create_react_agent(model, client.get_tools())
+    answer = await astream_graph(agent, {"messages": "서울의 날씨는 어떠니?"})
+
+"""
+다음의 경우에는 session 이 닫혔기 때문에 도구에 접근할 수 없는 것을 확인할 수 있습니다.
+"""
+
+await astream_graph(agent, {"messages": "서울의 날씨는 어떠니?"})
+
+"""
+이제 그럼 Async Session 을 유지하며 도구에 접근하는 방식으로 변경해 보겠습니다.
+"""
+
+# 1. 클라이언트 생성
+client = MultiServerMCPClient(
+    {
+        "weather": {
+            "url": "http://localhost:8005/sse",
+            "transport": "sse",
+        }
+    }
+)
+
+
+# 2. 명시적으로 연결 초기화 (이 부분이 필요함)
+# 초기화
+await client.__aenter__()
+
+# 이제 도구가 로드됨
+print(client.get_tools())  # 도구가 표시됨
+
+"""
+langgraph 의 에이전트를 생성합니다.
+"""
+
+# 에이전트 생성
+agent = create_react_agent(model, client.get_tools())
+
+"""
+그래프를 실행하여 결과를 확인합니다.
+"""
+
+await astream_graph(agent, {"messages": "서울의 날씨는 어떠니?"})
+
+"""
+## Stdio 통신 방식
+
+Stdio 통신 방식은 로컬 환경에서 사용하기 위해 사용합니다.
+
+- 통신을 위해 표준 입력/출력 사용
+
+참고: 아래의 python 경로는 수정하세요!
+"""
+
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+from langgraph.prebuilt import create_react_agent
+from langchain_mcp_adapters.tools import load_mcp_tools
+from langchain_anthropic import ChatAnthropic
+
+# Anthropic의 Claude 모델 초기화
+model = ChatAnthropic(
+    model_name="claude-3-7-sonnet-latest", temperature=0, max_tokens=20000
+)
+
+# StdIO 서버 파라미터 설정
+# - command: Python 인터프리터 경로
+# - args: 실행할 MCP 서버 스크립트
+server_params = StdioServerParameters(
+    command="./.venv/bin/python",
+    args=["mcp_server_local.py"],
+)
+
+# StdIO 클라이언트를 사용하여 서버와 통신
+async with stdio_client(server_params) as (read, write):
+    # 클라이언트 세션 생성
+    async with ClientSession(read, write) as session:
+        # 연결 초기화
+        await session.initialize()
+
+        # MCP 도구 로드
+        tools = await load_mcp_tools(session)
+        print(tools)
+
+        # 에이전트 생성
+        agent = create_react_agent(model, tools)
+
+        # 에이전트 응답 스트리밍
+        await astream_graph(agent, {"messages": "서울의 날씨는 어떠니?"})
+
+"""
+## RAG 를 구축한 MCP 서버 사용
+
+- 파일: `mcp_server_rag.py`
+
+사전에 langchain 으로 구축한 `mcp_server_rag.py` 파일을 사용합니다.
+
+stdio 통신 방식으로 도구에 대한 정보를 가져옵니다. 여기서 도구는 `retriever` 도구를 가져오게 되며, 이 도구는 `mcp_server_rag.py` 에서 정의된 도구입니다. 이 파일은 사전에 서버에서 실행되지 **않아도** 됩니다.
+"""
+
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+from langchain_mcp_adapters.tools import load_mcp_tools
+from langgraph.prebuilt import create_react_agent
+from langchain_anthropic import ChatAnthropic
+from utils import astream_graph
+
+# Anthropic의 Claude 모델 초기화
+model = ChatAnthropic(
+    model_name="claude-3-7-sonnet-latest", temperature=0, max_tokens=20000
+)
+
+# RAG 서버를 위한 StdIO 서버 파라미터 설정
+server_params = StdioServerParameters(
+    command="./.venv/bin/python",
+    args=["./mcp_server_rag.py"],
+)
+
+# StdIO 클라이언트를 사용하여 RAG 서버와 통신
+async with stdio_client(server_params) as (read, write):
+    # 클라이언트 세션 생성
+    async with ClientSession(read, write) as session:
+        # 연결 초기화
+        await session.initialize()
+
+        # MCP 도구 로드 (여기서는 retriever 도구)
+        tools = await load_mcp_tools(session)
+
+        # 에이전트 생성 및 실행
+        agent = create_react_agent(model, tools)
+
+        # 에이전트 응답 스트리밍
+        await astream_graph(
+            agent, {"messages": "삼성전자가 개발한 생성형 AI의 이름을 검색해줘"}
+        )
+
+"""
+## SSE 방식과 StdIO 방식 혼합 사용
+
+- 파일: `mcp_server_rag.py` 는 StdIO 방식으로 통신
+- `langchain-dev-docs` 는 SSE 방식으로 통신
+
+SSE 방식과 StdIO 방식을 혼합하여 사용합니다.
+"""
+
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langgraph.prebuilt import create_react_agent
+from langchain_anthropic import ChatAnthropic
+
+# Anthropic의 Claude 모델 초기화
+model = ChatAnthropic(
+    model_name="claude-3-7-sonnet-latest", temperature=0, max_tokens=20000
+)
+
+# 1. 다중 서버 MCP 클라이언트 생성
+client = MultiServerMCPClient(
+    {
+        "document-retriever": {
+            "command": "./.venv/bin/python",
+            # mcp_server_rag.py 파일의 절대 경로로 업데이트해야 합니다
+            "args": ["./mcp_server_rag.py"],
+            # stdio 방식으로 통신 (표준 입출력 사용)
+            "transport": "stdio",
+        },
+        "langchain-dev-docs": {
+            # SSE 서버가 실행 중인지 확인하세요
+            "url": "https://teddynote.io/mcp/langchain/sse",
+            # SSE(Server-Sent Events) 방식으로 통신
+            "transport": "sse",
+        },
+    }
+)
+
+
+# 2. 비동기 컨텍스트 매니저를 통한 명시적 연결 초기화
+await client.__aenter__()
+
+"""
+langgraph 의 `create_react_agent` 를 사용하여 에이전트를 생성합니다.
+"""
+
+from langgraph.checkpoint.memory import MemorySaver
+from langchain_core.runnables import RunnableConfig
+
+prompt = (
+    "You are a smart agent. "
+    "Use `retriever` tool to search on AI related documents and answer questions."
+    "Use `langchain-dev-docs` tool to search on langchain / langgraph related documents and answer questions."
+    "Answer in Korean."
+)
+agent = create_react_agent(
+    model, client.get_tools(), prompt=prompt, checkpointer=MemorySaver()
+)
+
+"""
+구축해 놓은 `mcp_server_rag.py` 에서 정의한 `retriever` 도구를 사용하여 검색을 수행합니다.
+"""
+
+config = RunnableConfig(recursion_limit=30, thread_id=1)
+await astream_graph(
+    agent,
+    {
+        "messages": "`retriever` 도구를 사용해서 삼성전자가 개발한 생성형 AI 이름을 검색해줘"
+    },
+    config=config,
+)
+
+"""
+이번에는 `langchain-dev-docs` 도구를 사용하여 검색을 수행합니다.
+"""
+
+config = RunnableConfig(recursion_limit=30, thread_id=1)
+await astream_graph(
+    agent,
+    {"messages": "langgraph-dev-docs 참고해서 self-rag 의 정의에 대해서 알려줘"},
+    config=config,
+)
+
+"""
+`MemorySaver` 를 사용하여 단기 기억을 유지합니다. 따라서, multi-turn 대화도 가능합니다.
+"""
+
+await astream_graph(
+    agent, {"messages": "이전의 내용을 bullet point 로 요약해줘"}, config=config
+)
+
+"""
+## LangChain 에 통합된 도구 + MCP 도구
+
+여기서는 LangChain 에 통합된 도구를 기존의 MCP 로만 이루어진 도구와 함께 사용이 가능한지 테스트 합니다.
+"""
+
+from langchain_community.tools.tavily_search import TavilySearchResults
+
+# Tavily 검색 도구를 초기화 합니다. (news 타입, 최근 3일 내 뉴스)
+tavily = TavilySearchResults(max_results=3, topic="news", days=3)
+
+# 기존의 MCP 도구와 함께 사용합니다.
+tools = client.get_tools() + [tavily]
+
+"""
+langgraph 의 `create_react_agent` 를 사용하여 에이전트를 생성합니다.
+"""
+
+from langgraph.checkpoint.memory import MemorySaver
+from langchain_core.runnables import RunnableConfig
+
+# 재귀 제한 및 스레드 아이디 설정
+config = RunnableConfig(recursion_limit=30, thread_id=2)
+
+# 프롬프트 설정
+prompt = "You are a smart agent with various tools. Answer questions in Korean."
+
+# 에이전트 생성
+agent = create_react_agent(model, tools, prompt=prompt, checkpointer=MemorySaver())
+
+"""
+새롭게 추가한 `tavily` 도구를 사용하여 검색을 수행합니다.
+"""
+
+await astream_graph(agent, {"messages": "오늘 뉴스 찾아줘"}, config=config)
+
+"""
+`retriever` 도구가 원활하게 작동하는 것을 확인할 수 있습니다.
+"""
+
+await astream_graph(
+    agent,
+    {
+        "messages": "`retriever` 도구를 사용해서 삼성전자가 개발한 생성형 AI 이름을 검색해줘"
+    },
+    config=config,
+)
+
+"""
+## Smithery 에서 제공하는 MCP 서버
+
+- 링크: https://smithery.ai/
+"""
+
+"""
+사용한 도구 목록은 아래와 같습니다.
+
+- Sequential Thinking: https://smithery.ai/server/@smithery-ai/server-sequential-thinking
+  - 구조화된 사고 프로세스를 통해 역동적이고 성찰적인 문제 해결을 위한 도구를 제공하는 MCP 서버
+- Desktop Commander: https://smithery.ai/server/@wonderwhy-er/desktop-commander
+  - 다양한 편집 기능으로 터미널 명령을 실행하고 파일을 관리하세요. 코딩, 셸 및 터미널, 작업 자동화
+
+**참고**
+
+- smithery 에서 제공하는 도구를 JSON 형식으로 가져올때, 아래의 예시처럼 `"transport": "stdio"` 로 꼭 설정해야 합니다.
+"""
+
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langgraph.prebuilt import create_react_agent
+from langchain_anthropic import ChatAnthropic
+
+# LLM 모델 초기화
+model = ChatAnthropic(model="claude-3-7-sonnet-latest", temperature=0, max_tokens=20000)
+
+# 1. 클라이언트 생성
+client = MultiServerMCPClient(
+    {
+        "server-sequential-thinking": {
+            "command": "npx",
+            "args": [
+                "-y",
+                "@smithery/cli@latest",
+                "run",
+                "@smithery-ai/server-sequential-thinking",
+                "--key",
+                "89a4780a-53b7-4b7b-92e9-a29815f2669b",
+            ],
+            "transport": "stdio",  # stdio 방식으로 통신을 추가합니다.
+        },
+        "desktop-commander": {
+            "command": "npx",
+            "args": [
+                "-y",
+                "@smithery/cli@latest",
+                "run",
+                "@wonderwhy-er/desktop-commander",
+                "--key",
+                "89a4780a-53b7-4b7b-92e9-a29815f2669b",
+            ],
+            "transport": "stdio",  # stdio 방식으로 통신을 추가합니다.
+        },
+        "document-retriever": {
+            "command": "./.venv/bin/python",
+            # mcp_server_rag.py 파일의 절대 경로로 업데이트해야 합니다
+            "args": ["./mcp_server_rag.py"],
+            # stdio 방식으로 통신 (표준 입출력 사용)
+            "transport": "stdio",
+        },
+    }
+)
+
+
+# 2. 명시적으로 연결 초기화
+await client.__aenter__()
+
+"""
+langgraph 의 `create_react_agent` 를 사용하여 에이전트를 생성합니다.
+"""
+
+from langgraph.checkpoint.memory import MemorySaver
+from langchain_core.runnables import RunnableConfig
+
+config = RunnableConfig(recursion_limit=30, thread_id=3)
+agent = create_react_agent(model, client.get_tools(), checkpointer=MemorySaver())
+
+"""
+`Desktop Commander` 도구를 사용하여 터미널 명령을 실행합니다.
+"""
+
+await astream_graph(
+    agent,
+    {
+        "messages": "현재 경로를 포함한 하위 폴더 구조를 tree 로 그려줘. 단, .venv 폴더는 제외하고 출력해줘."
+    },
+    config=config,
+)
+
+"""
+이번에는 `Sequential Thinking` 도구를 사용하여 비교적 복잡한 작업을 수행할 수 있는지 확인합니다.
+"""
+
+await astream_graph(
+    agent,
+    {
+        "messages": (
+            "`retriever` 도구를 사용해서 삼성전자가 개발한 생성형 AI 관련 내용을 검색하고 "
+            "`Sequential Thinking` 도구를 사용해서 보고서를 작성해줘."
+        )
+    },
+    config=config,
+)
+
+
+
+================================================
+FILE: mcp_server_local.py
+================================================
+from mcp.server.fastmcp import FastMCP
+
+# Initialize FastMCP server with configuration
+mcp = FastMCP(
+    "Weather",  # Name of the MCP server
+    instructions="You are a weather assistant that can answer questions about the weather in a given location.",  # Instructions for the LLM on how to use this tool
+    host="0.0.0.0",  # Host address (0.0.0.0 allows connections from any IP)
+    port=8005,  # Port number for the server
+)
+
+
+@mcp.tool()
+async def get_weather(location: str) -> str:
+    """
+    Get current weather information for the specified location.
+
+    This function simulates a weather service by returning a fixed response.
+    In a production environment, this would connect to a real weather API.
+
+    Args:
+        location (str): The name of the location (city, region, etc.) to get weather for
+
+    Returns:
+        str: A string containing the weather information for the specified location
+    """
+    # Return a mock weather response
+    # In a real implementation, this would call a weather API
+    return f"It's always Sunny in {location}"
+
+
+if __name__ == "__main__":
+    # Start the MCP server with stdio transport
+    # stdio transport allows the server to communicate with clients
+    # through standard input/output streams, making it suitable for
+    # local development and testing
+    mcp.run(transport="stdio")
+
+
+
+================================================
+FILE: mcp_server_rag.py
+================================================
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_community.document_loaders import PyMuPDFLoader
+from langchain_community.vectorstores import FAISS
+from langchain_openai import OpenAIEmbeddings
+from mcp.server.fastmcp import FastMCP
+from dotenv import load_dotenv
+from typing import Any
+
+# Load environment variables from .env file (contains API keys)
+load_dotenv(override=True)
+
+
+def create_retriever() -> Any:
+    """
+    Creates and returns a document retriever based on FAISS vector store.
+
+    This function performs the following steps:
+    1. Loads a PDF document(place your PDF file in the data folder)
+    2. Splits the document into manageable chunks
+    3. Creates embeddings for each chunk
+    4. Builds a FAISS vector store from the embeddings
+    5. Returns a retriever interface to the vector store
+
+    Returns:
+        Any: A retriever object that can be used to query the document database
+    """
+    # Step 1: Load Documents
+    # PyMuPDFLoader is used to extract text from PDF files
+    loader = PyMuPDFLoader("data/sample.pdf")
+    docs = loader.load()
+
+    # Step 2: Split Documents
+    # Recursive splitter divides documents into chunks with some overlap to maintain context
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=50)
+    split_documents = text_splitter.split_documents(docs)
+
+    # Step 3: Create Embeddings
+    # OpenAI's text-embedding-3-small model is used to convert text chunks into vector embeddings
+    embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+
+    # Step 4: Create Vector Database
+    # FAISS is an efficient similarity search library that stores vector embeddings
+    # and allows for fast retrieval of similar vectors
+    vectorstore = FAISS.from_documents(documents=split_documents, embedding=embeddings)
+
+    # Step 5: Create Retriever
+    # The retriever provides an interface to search the vector database
+    # and retrieve documents relevant to a query
+    retriever = vectorstore.as_retriever()
+    return retriever
+
+
+# Initialize FastMCP server with configuration
+mcp = FastMCP(
+    "Retriever",
+    instructions="A Retriever that can retrieve information from the database.",
+    host="0.0.0.0",
+    port=8005,
+)
+
+
+@mcp.tool()
+async def retrieve(query: str) -> str:
+    """
+    Retrieves information from the document database based on the query.
+
+    This function creates a retriever, queries it with the provided input,
+    and returns the concatenated content of all retrieved documents.
+
+    Args:
+        query (str): The search query to find relevant information
+
+    Returns:
+        str: Concatenated text content from all retrieved documents
+    """
+    # Create a new retriever instance for each query
+    # Note: In production, consider caching the retriever for better performance
+    retriever = create_retriever()
+
+    # Use the invoke() method to get relevant documents based on the query
+    retrieved_docs = retriever.invoke(query)
+
+    # Join all document contents with newlines and return as a single string
+    return "\n".join([doc.page_content for doc in retrieved_docs])
+
+
+if __name__ == "__main__":
+    # Run the MCP server with stdio transport for integration with MCP clients
+    mcp.run(transport="stdio")
+
+
+
+================================================
+FILE: mcp_server_remote.py
+================================================
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP(
+    "Weather",  # Name of the MCP server
+    instructions="You are a weather assistant that can answer questions about the weather in a given location.",  # Instructions for the LLM on how to use this tool
+    host="0.0.0.0",  # Host address (0.0.0.0 allows connections from any IP)
+    port=8005,  # Port number for the server
+)
+
+
+@mcp.tool()
+async def get_weather(location: str) -> str:
+    """
+    Get current weather information for the specified location.
+
+    This function simulates a weather service by returning a fixed response.
+    In a production environment, this would connect to a real weather API.
+
+    Args:
+        location (str): The name of the location (city, region, etc.) to get weather for
+
+    Returns:
+        str: A string containing the weather information for the specified location
+    """
+    # Return a mock weather response
+    # In a real implementation, this would call a weather API
+    return f"It's always Sunny in {location}"
+
+
+if __name__ == "__main__":
+    # Print a message indicating the server is starting
+    print("mcp remote server is running...")
+
+    # Start the MCP server with SSE transport
+    # Server-Sent Events (SSE) transport allows the server to communicate with clients
+    # over HTTP, making it suitable for remote/distributed deployments
+    mcp.run(transport="sse")
+
+
+
+================================================
+FILE: mcp_server_time.py
+================================================
+from mcp.server.fastmcp import FastMCP
+from datetime import datetime
+import pytz
+from typing import Optional
+
+# Initialize FastMCP server with configuration
+mcp = FastMCP(
+    "TimeService",  # Name of the MCP server
+    instructions="You are a time assistant that can provide the current time for different timezones.",  # Instructions for the LLM on how to use this tool
+    host="0.0.0.0",  # Host address (0.0.0.0 allows connections from any IP)
+    port=8005,  # Port number for the server
+)
+
+
+@mcp.tool()
+async def get_current_time(timezone: Optional[str] = "Asia/Seoul") -> str:
+    """
+    Get current time information for the specified timezone.
+
+    This function returns the current system time for the requested timezone.
+
+    Args:
+        timezone (str, optional): The timezone to get current time for. Defaults to "Asia/Seoul".
+
+    Returns:
+        str: A string containing the current time information for the specified timezone
+    """
+    try:
+        # Get the timezone object
+        tz = pytz.timezone(timezone)
+
+        # Get current time in the specified timezone
+        current_time = datetime.now(tz)
+
+        # Format the time as a string
+        formatted_time = current_time.strftime("%Y-%m-%d %H:%M:%S %Z")
+
+        return f"Current time in {timezone} is: {formatted_time}"
+    except pytz.exceptions.UnknownTimeZoneError:
+        return f"Error: Unknown timezone '{timezone}'. Please provide a valid timezone."
+    except Exception as e:
+        return f"Error getting time: {str(e)}"
+
+
+if __name__ == "__main__":
+    # Start the MCP server with stdio transport
+    # stdio transport allows the server to communicate with clients
+    # through standard input/output streams, making it suitable for
+    # local development and testing
+    mcp.run(transport="stdio")
+
+
+
+================================================
+FILE: packages.txt
+================================================
+curl
+gnupg
+ca-certificates
+nodejs
+npm
+
+
+================================================
+FILE: pyproject.toml
+================================================
+[project]
+name = "langgraph-mcp-agents"
+version = "0.1.0"
+description = "LangGraph Agent with MCP Adapters"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "nest-asyncio>=1.6.0",
+    "faiss-cpu>=1.10.0",
+    "jupyter>=1.1.1",
+    "langchain-anthropic>=0.3.10",
+    "langchain-community>=0.3.20",
+    "langchain-mcp-adapters>=0.0.7",
+    "langchain-openai>=0.3.11",
+    "langgraph>=0.3.21",
+    "mcp[cli]>=1.6.0",
+    "notebook>=7.3.3",
+    "pymupdf>=1.25.4",
+    "python-dotenv>=1.1.0",
+    "streamlit>=1.44.1",
+]
+
+
+
+================================================
+FILE: README_KOR.md
+================================================
+# LangGraph 에이전트 + MCP
+
+[![English](https://img.shields.io/badge/Language-English-blue)](README.md) [![Korean](https://img.shields.io/badge/Language-한국어-red)](README_KOR.md)
+
+[![GitHub](https://img.shields.io/badge/GitHub-langgraph--mcp--agents-black?logo=github)](https://github.com/teddylee777/langgraph-mcp-agents)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
+[![Python](https://img.shields.io/badge/Python-≥3.12-blue?logo=python&logoColor=white)](https://www.python.org/)
+[![Version](https://img.shields.io/badge/Version-0.1.0-orange)](https://github.com/teddylee777/langgraph-mcp-agents)
+
+![project demo](./assets/project-demo.png)
+
+## 프로젝트 개요
+
+![project architecture](./assets/architecture.png)
+
+`LangChain-MCP-Adapters`는 **LangChain AI**에서 제공하는 툴킷으로, AI 에이전트가 Model Context Protocol(MCP)을 통해 외부 도구 및 데이터 소스와 상호작용할 수 있게 해줍니다. 이 프로젝트는 MCP 도구를 통해 다양한 데이터 소스와 API에 접근할 수 있는 ReAct 에이전트를 배포하기 위한 사용자 친화적인 인터페이스를 제공합니다.
+
+### 특징
+
+- **Streamlit 인터페이스**: MCP 도구가 포함된 LangGraph `ReAct Agent`와 상호작용하기 위한 사용자 친화적인 웹 인터페이스
+- **도구 관리**: UI를 통해 MCP 도구를 추가, 제거 및 구성(Smithery JSON 형식 지원). 애플리케이션을 재시작하지 않고도 동적으로 이루어집니다.
+- **스트리밍 응답**: 에이전트 응답과 도구 호출을 실시간으로 확인
+- **대화 기록**: 에이전트와의 대화 추적 및 관리
+
+## MCP 아키텍처
+
+MCP(Model Context Protocol)는 세 가지 주요 구성 요소로 이루어져 있습니다.
+
+1. **MCP 호스트**: Claude Desktop, IDE 또는 LangChain/LangGraph와 같이 MCP를 통해 데이터에 접근하고자 하는 프로그램.
+
+2. **MCP 클라이언트**: 서버와 1:1 연결을 유지하는 프로토콜 클라이언트로, 호스트와 서버 사이의 중개자 역할을 합니다.
+
+3. **MCP 서버**: 표준화된 모델 컨텍스트 프로토콜을 통해 특정 기능을 노출하는 경량 프로그램으로, 주요 데이터 소스 역할을 합니다.
+
+## Docker 로 빠른 실행
+
+로컬 Python 환경을 설정하지 않고도 Docker를 사용하여 이 프로젝트를 쉽게 실행할 수 있습니다.
+
+### 필수 요구사항(Docker Desktop)
+
+아래의 링크에서 Docker Desktop을 설치합니다.
+
+- [Docker Desktop 설치](https://www.docker.com/products/docker-desktop/)
+
+### Docker Compose로 실행하기
+
+1. `dockers` 디렉토리로 이동
+
+```bash
+cd dockers
+```
+
+2. 프로젝트 루트 디렉토리에 API 키가 포함된 `.env` 파일 생성.
+
+```bash
+cp .env.example .env
+```
+
+발급 받은 API 키를 `.env` 파일에 입력합니다.
+
+(참고) 모든 API 키가 필요하지 않습니다. 필요한 경우에만 입력하세요.
+- `ANTHROPIC_API_KEY`: Anthropic API 키를 입력할 경우 "claude-3-7-sonnet-latest", "claude-3-5-sonnet-latest", "claude-3-haiku-latest" 모델을 사용합니다.
+- `OPENAI_API_KEY`: OpenAI API 키를 입력할 경우 "gpt-4o", "gpt-4o-mini" 모델을 사용합니다.
+- `LANGSMITH_API_KEY`: LangSmith API 키를 입력할 경우 LangSmith tracing을 사용합니다.
+
+```bash
+ANTHROPIC_API_KEY=your_anthropic_api_key
+OPENAI_API_KEY=your_openai_api_key
+LANGSMITH_API_KEY=your_langsmith_api_key
+LANGSMITH_PROJECT=LangGraph-MCP-Agents
+LANGSMITH_TRACING=true
+LANGSMITH_ENDPOINT=https://api.smith.langchain.com
+```
+
+(신규 기능) 로그인/로그아웃 기능 사용
+
+로그인 기능을 사용시 `USE_LOGIN`을 `true`로 설정하고, `USER_ID`와 `USER_PASSWORD`를 입력합니다.
+
+```bash
+USE_LOGIN=true
+USER_ID=admin
+USER_PASSWORD=admin123
+```
+
+만약, 로그인 기능을 사용하고 싶지 않다면, `USE_LOGIN`을 `false`로 설정합니다.
+
+```bash
+USE_LOGIN=false
+```
+
+3. 시스템 아키텍처에 맞는 Docker Compose 파일 선택.
+
+**AMD64/x86_64 아키텍처(Intel/AMD 프로세서)**
+
+```bash
+# 컨테이너 실행
+docker compose -f docker-compose-KOR.yaml up -d
+```
+
+**ARM64 아키텍처(Apple Silicon M1/M2/M3/M4)**
+
+```bash
+# 컨테이너 실행
+docker compose -f docker-compose-KOR-mac.yaml up -d
+```
+
+4. 브라우저에서 http://localhost:8585 로 애플리케이션 접속
+
+(참고)
+- 포트나 다른 설정을 수정해야 하는 경우, 빌드 전에 해당 docker-compose-KOR.yaml 파일을 편집하세요.
+
+## 소스코드로 부터 직접 설치
+
+1. 이 저장소를 클론합니다
+
+```bash
+git clone https://github.com/teddynote-lab/langgraph-mcp-agents.git
+cd langgraph-mcp-agents
+```
+
+2. 가상 환경을 생성하고 uv를 사용하여 의존성을 설치합니다
+
+```bash
+uv venv
+uv pip install -r requirements.txt
+source .venv/bin/activate  # Windows의 경우: .venv\Scripts\activate
+```
+
+3. API 키가 포함된 `.env` 파일을 생성합니다(`.env.example` 에서 복사)
+
+```bash
+cp .env.example .env
+```
+
+발급 받은 API 키를 `.env` 파일에 입력합니다.
+
+(참고) 모든 API 키가 필요하지 않습니다. 필요한 경우에만 입력하세요.
+- `ANTHROPIC_API_KEY`: Anthropic API 키를 입력할 경우 "claude-3-7-sonnet-latest", "claude-3-5-sonnet-latest", "claude-3-haiku-latest" 모델을 사용합니다.
+- `OPENAI_API_KEY`: OpenAI API 키를 입력할 경우 "gpt-4o", "gpt-4o-mini" 모델을 사용합니다.
+- `LANGSMITH_API_KEY`: LangSmith API 키를 입력할 경우 LangSmith tracing을 사용합니다.
+
+```bash
+ANTHROPIC_API_KEY=your_anthropic_api_key
+OPENAI_API_KEY=your_openai_api_key(optional)
+LANGSMITH_API_KEY=your_langsmith_api_key
+LANGSMITH_PROJECT=LangGraph-MCP-Agents
+LANGSMITH_TRACING=true
+LANGSMITH_ENDPOINT=https://api.smith.langchain.com
+```
+
+4. (신규 기능) 로그인/로그아웃 기능 사용
+
+로그인 기능을 사용시 `USE_LOGIN`을 `true`로 설정하고, `USER_ID`와 `USER_PASSWORD`를 입력합니다.
+
+```bash
+USE_LOGIN=true
+USER_ID=admin
+USER_PASSWORD=admin123
+```
+
+만약, 로그인 기능을 사용하고 싶지 않다면, `USE_LOGIN`을 `false`로 설정합니다.
+
+```bash
+USE_LOGIN=false
+```
+
+## 사용법
+
+1. Streamlit 애플리케이션을 시작합니다. (한국어 버전 파일은 `app_KOR.py` 입니다.)
+
+```bash
+streamlit run app_KOR.py
+```
+
+2. 애플리케이션이 브라우저에서 실행되어 메인 인터페이스를 표시합니다.
+
+3. 사이드바를 사용하여 MCP 도구를 추가하고 구성합니다
+
+유용한 MCP 서버를 찾으려면 [Smithery](https://smithery.ai/)를 방문하세요.
+
+먼저, 사용하고자 하는 도구를 선택합니다.
+
+오른쪽의 JSON 구성에서 COPY 버튼을 누릅니다.
+
+![copy from Smithery](./assets/smithery-copy-json.png)
+
+복사된 JSON 문자열을 `Tool JSON` 섹션에 붙여넣습니다.
+
+<img src="./assets/add-tools.png" alt="tool json" style="width: auto; height: auto;">
+
+`Add Tool` 버튼을 눌러 "Registered Tools List" 섹션에 추가합니다.
+
+마지막으로, "Apply" 버튼을 눌러 새로운 도구로 에이전트를 초기화하도록 변경사항을 적용합니다.
+
+<img src="./assets/apply-tool-configuration.png" alt="tool json" style="width: auto; height: auto;">
+
+4. 에이전트의 상태를 확인합니다.
+
+![check status](./assets/check-status.png)
+
+5. 채팅 인터페이스에서 질문을 하여 구성된 MCP 도구를 활용하는 ReAct 에이전트와 상호작용합니다.
+
+![project demo](./assets/project-demo.png)
+
+## 핸즈온 튜토리얼
+
+개발자가 MCP와 LangGraph의 통합 작동 방식에 대해 더 깊이 알아보려면, 포괄적인 Jupyter 노트북 튜토리얼을 제공합니다:
+
+- 링크: [MCP-HandsOn-KOR.ipynb](./MCP-HandsOn-KOR.ipynb)
+
+이 핸즈온 튜토리얼은 다음 내용을 다룹니다.
+
+1. **MCP 클라이언트 설정** - MCP 서버에 연결하기 위한 MultiServerMCPClient 구성 및 초기화 방법 학습
+2. **로컬 MCP 서버 통합** - SSE 및 Stdio 메서드를 통해 로컬에서 실행 중인 MCP 서버에 연결
+3. **RAG 통합** - 문서 검색 기능을 위해 MCP를 사용하여 리트리버 도구 접근
+4. **혼합 전송 방법** - 하나의 에이전트에서 다양한 전송 프로토콜(SSE 및 Stdio) 결합
+5. **LangChain 도구 + MCP** - MCP 도구와 함께 네이티브 LangChain 도구 통합
+
+이 튜토리얼은 MCP 도구를 LangGraph 에이전트에 구축하고 통합하는 방법을 이해하는 데 도움이 되는 단계별 설명이 포함된 실용적인 예제를 제공합니다.
+
+## 라이선스
+
+MIT License 
+
+## 튜토리얼 비디오 보기(한국어)
+
+[![Tutorial Video Thumbnail](https://img.youtube.com/vi/ISrYHGg2C2c/maxresdefault.jpg)](https://youtu.be/ISrYHGg2C2c?si=eWmKFVUS1BLtPm5U)
+
+## 참고 자료
+
+- https://github.com/langchain-ai/langchain-mcp-adapters
+
+
+
+
+================================================
+FILE: requirements.txt
+================================================
+faiss-cpu>=1.10.0
+jupyter>=1.1.1
+langchain-anthropic>=0.3.10
+langchain-community>=0.3.20
+langchain-mcp-adapters>=0.0.7
+langchain-openai>=0.3.11
+langgraph>=0.3.21
+mcp>=1.6.0
+notebook>=7.3.3
+pymupdf>=1.25.4
+python-dotenv>=1.1.0
+streamlit>=1.44.1 
+nest-asyncio>=1.6.0
+
+
+================================================
+FILE: utils.py
+================================================
+from typing import Any, Dict, List, Callable, Optional
+from langchain_core.messages import BaseMessage
+from langchain_core.runnables import RunnableConfig
+from langgraph.graph.state import CompiledStateGraph
+import uuid
+
+
+def random_uuid():
+    return str(uuid.uuid4())
+
+
+async def astream_graph(
+    graph: CompiledStateGraph,
+    inputs: dict,
+    config: Optional[RunnableConfig] = None,
+    node_names: List[str] = [],
+    callback: Optional[Callable] = None,
+    stream_mode: str = "messages",
+    include_subgraphs: bool = False,
+) -> Dict[str, Any]:
+    """
+    LangGraph의 실행 결과를 비동기적으로 스트리밍하고 직접 출력하는 함수입니다.
+
+    Args:
+        graph (CompiledStateGraph): 실행할 컴파일된 LangGraph 객체
+        inputs (dict): 그래프에 전달할 입력값 딕셔너리
+        config (Optional[RunnableConfig]): 실행 설정 (선택적)
+        node_names (List[str], optional): 출력할 노드 이름 목록. 기본값은 빈 리스트
+        callback (Optional[Callable], optional): 각 청크 처리를 위한 콜백 함수. 기본값은 None
+            콜백 함수는 {"node": str, "content": Any} 형태의 딕셔너리를 인자로 받습니다.
+        stream_mode (str, optional): 스트리밍 모드 ("messages" 또는 "updates"). 기본값은 "messages"
+        include_subgraphs (bool, optional): 서브그래프 포함 여부. 기본값은 False
+
+    Returns:
+        Dict[str, Any]: 최종 결과 (선택적)
+    """
+    config = config or {}
+    final_result = {}
+
+    def format_namespace(namespace):
+        return namespace[-1].split(":")[0] if len(namespace) > 0 else "root graph"
+
+    prev_node = ""
+
+    if stream_mode == "messages":
+        async for chunk_msg, metadata in graph.astream(
+            inputs, config, stream_mode=stream_mode
+        ):
+            curr_node = metadata["langgraph_node"]
+            final_result = {
+                "node": curr_node,
+                "content": chunk_msg,
+                "metadata": metadata,
+            }
+
+            # node_names가 비어있거나 현재 노드가 node_names에 있는 경우에만 처리
+            if not node_names or curr_node in node_names:
+                # 콜백 함수가 있는 경우 실행
+                if callback:
+                    result = callback({"node": curr_node, "content": chunk_msg})
+                    if hasattr(result, "__await__"):
+                        await result
+                # 콜백이 없는 경우 기본 출력
+                else:
+                    # 노드가 변경된 경우에만 구분선 출력
+                    if curr_node != prev_node:
+                        print("\n" + "=" * 50)
+                        print(f"🔄 Node: \033[1;36m{curr_node}\033[0m 🔄")
+                        print("- " * 25)
+
+                    # Claude/Anthropic 모델의 토큰 청크 처리 - 항상 텍스트만 추출
+                    if hasattr(chunk_msg, "content"):
+                        # 리스트 형태의 content (Anthropic/Claude 스타일)
+                        if isinstance(chunk_msg.content, list):
+                            for item in chunk_msg.content:
+                                if isinstance(item, dict) and "text" in item:
+                                    print(item["text"], end="", flush=True)
+                        # 문자열 형태의 content
+                        elif isinstance(chunk_msg.content, str):
+                            print(chunk_msg.content, end="", flush=True)
+                    # 그 외 형태의 chunk_msg 처리
+                    else:
+                        print(chunk_msg, end="", flush=True)
+
+                prev_node = curr_node
+
+    elif stream_mode == "updates":
+        # 에러 수정: 언패킹 방식 변경
+        # REACT 에이전트 등 일부 그래프에서는 단일 딕셔너리만 반환함
+        async for chunk in graph.astream(
+            inputs, config, stream_mode=stream_mode, subgraphs=include_subgraphs
+        ):
+            # 반환 형식에 따라 처리 방법 분기
+            if isinstance(chunk, tuple) and len(chunk) == 2:
+                # 기존 예상 형식: (namespace, chunk_dict)
+                namespace, node_chunks = chunk
+            else:
+                # 단일 딕셔너리만 반환하는 경우 (REACT 에이전트 등)
+                namespace = []  # 빈 네임스페이스 (루트 그래프)
+                node_chunks = chunk  # chunk 자체가 노드 청크 딕셔너리
+
+            # 딕셔너리인지 확인하고 항목 처리
+            if isinstance(node_chunks, dict):
+                for node_name, node_chunk in node_chunks.items():
+                    final_result = {
+                        "node": node_name,
+                        "content": node_chunk,
+                        "namespace": namespace,
+                    }
+
+                    # node_names가 비어있지 않은 경우에만 필터링
+                    if len(node_names) > 0 and node_name not in node_names:
+                        continue
+
+                    # 콜백 함수가 있는 경우 실행
+                    if callback is not None:
+                        result = callback({"node": node_name, "content": node_chunk})
+                        if hasattr(result, "__await__"):
+                            await result
+                    # 콜백이 없는 경우 기본 출력
+                    else:
+                        # 노드가 변경된 경우에만 구분선 출력 (messages 모드와 동일하게)
+                        if node_name != prev_node:
+                            print("\n" + "=" * 50)
+                            print(f"🔄 Node: \033[1;36m{node_name}\033[0m 🔄")
+                            print("- " * 25)
+
+                        # 노드의 청크 데이터 출력 - 텍스트 중심으로 처리
+                        if isinstance(node_chunk, dict):
+                            for k, v in node_chunk.items():
+                                if isinstance(v, BaseMessage):
+                                    # BaseMessage의 content 속성이 텍스트나 리스트인 경우를 처리
+                                    if hasattr(v, "content"):
+                                        if isinstance(v.content, list):
+                                            for item in v.content:
+                                                if (
+                                                    isinstance(item, dict)
+                                                    and "text" in item
+                                                ):
+                                                    print(
+                                                        item["text"], end="", flush=True
+                                                    )
+                                        else:
+                                            print(v.content, end="", flush=True)
+                                    else:
+                                        v.pretty_print()
+                                elif isinstance(v, list):
+                                    for list_item in v:
+                                        if isinstance(list_item, BaseMessage):
+                                            if hasattr(list_item, "content"):
+                                                if isinstance(list_item.content, list):
+                                                    for item in list_item.content:
+                                                        if (
+                                                            isinstance(item, dict)
+                                                            and "text" in item
+                                                        ):
+                                                            print(
+                                                                item["text"],
+                                                                end="",
+                                                                flush=True,
+                                                            )
+                                                else:
+                                                    print(
+                                                        list_item.content,
+                                                        end="",
+                                                        flush=True,
+                                                    )
+                                            else:
+                                                list_item.pretty_print()
+                                        elif (
+                                            isinstance(list_item, dict)
+                                            and "text" in list_item
+                                        ):
+                                            print(list_item["text"], end="", flush=True)
+                                        else:
+                                            print(list_item, end="", flush=True)
+                                elif isinstance(v, dict) and "text" in v:
+                                    print(v["text"], end="", flush=True)
+                                else:
+                                    print(v, end="", flush=True)
+                        elif node_chunk is not None:
+                            if hasattr(node_chunk, "__iter__") and not isinstance(
+                                node_chunk, str
+                            ):
+                                for item in node_chunk:
+                                    if isinstance(item, dict) and "text" in item:
+                                        print(item["text"], end="", flush=True)
+                                    else:
+                                        print(item, end="", flush=True)
+                            else:
+                                print(node_chunk, end="", flush=True)
+
+                        # 구분선을 여기서 출력하지 않음 (messages 모드와 동일하게)
+
+                    prev_node = node_name
+            else:
+                # 딕셔너리가 아닌 경우 전체 청크 출력
+                print("\n" + "=" * 50)
+                print(f"🔄 Raw output 🔄")
+                print("- " * 25)
+                print(node_chunks, end="", flush=True)
+                # 구분선을 여기서 출력하지 않음
+                final_result = {"content": node_chunks}
+
+    else:
+        raise ValueError(
+            f"Invalid stream_mode: {stream_mode}. Must be 'messages' or 'updates'."
+        )
+
+    # 필요에 따라 최종 결과 반환
+    return final_result
+
+
+async def ainvoke_graph(
+    graph: CompiledStateGraph,
+    inputs: dict,
+    config: Optional[RunnableConfig] = None,
+    node_names: List[str] = [],
+    callback: Optional[Callable] = None,
+    include_subgraphs: bool = True,
+) -> Dict[str, Any]:
+    """
+    LangGraph 앱의 실행 결과를 비동기적으로 스트리밍하여 출력하는 함수입니다.
+
+    Args:
+        graph (CompiledStateGraph): 실행할 컴파일된 LangGraph 객체
+        inputs (dict): 그래프에 전달할 입력값 딕셔너리
+        config (Optional[RunnableConfig]): 실행 설정 (선택적)
+        node_names (List[str], optional): 출력할 노드 이름 목록. 기본값은 빈 리스트
+        callback (Optional[Callable], optional): 각 청크 처리를 위한 콜백 함수. 기본값은 None
+            콜백 함수는 {"node": str, "content": Any} 형태의 딕셔너리를 인자로 받습니다.
+        include_subgraphs (bool, optional): 서브그래프 포함 여부. 기본값은 True
+
+    Returns:
+        Dict[str, Any]: 최종 결과 (마지막 노드의 출력)
+    """
+    config = config or {}
+    final_result = {}
+
+    def format_namespace(namespace):
+        return namespace[-1].split(":")[0] if len(namespace) > 0 else "root graph"
+
+    # subgraphs 매개변수를 통해 서브그래프의 출력도 포함
+    async for chunk in graph.astream(
+        inputs, config, stream_mode="updates", subgraphs=include_subgraphs
+    ):
+        # 반환 형식에 따라 처리 방법 분기
+        if isinstance(chunk, tuple) and len(chunk) == 2:
+            # 기존 예상 형식: (namespace, chunk_dict)
+            namespace, node_chunks = chunk
+        else:
+            # 단일 딕셔너리만 반환하는 경우 (REACT 에이전트 등)
+            namespace = []  # 빈 네임스페이스 (루트 그래프)
+            node_chunks = chunk  # chunk 자체가 노드 청크 딕셔너리
+
+        # 딕셔너리인지 확인하고 항목 처리
+        if isinstance(node_chunks, dict):
+            for node_name, node_chunk in node_chunks.items():
+                final_result = {
+                    "node": node_name,
+                    "content": node_chunk,
+                    "namespace": namespace,
+                }
+
+                # node_names가 비어있지 않은 경우에만 필터링
+                if node_names and node_name not in node_names:
+                    continue
+
+                # 콜백 함수가 있는 경우 실행
+                if callback is not None:
+                    result = callback({"node": node_name, "content": node_chunk})
+                    # 코루틴인 경우 await
+                    if hasattr(result, "__await__"):
+                        await result
+                # 콜백이 없는 경우 기본 출력
+                else:
+                    print("\n" + "=" * 50)
+                    formatted_namespace = format_namespace(namespace)
+                    if formatted_namespace == "root graph":
+                        print(f"🔄 Node: \033[1;36m{node_name}\033[0m 🔄")
+                    else:
+                        print(
+                            f"🔄 Node: \033[1;36m{node_name}\033[0m in [\033[1;33m{formatted_namespace}\033[0m] 🔄"
+                        )
+                    print("- " * 25)
+
+                    # 노드의 청크 데이터 출력
+                    if isinstance(node_chunk, dict):
+                        for k, v in node_chunk.items():
+                            if isinstance(v, BaseMessage):
+                                v.pretty_print()
+                            elif isinstance(v, list):
+                                for list_item in v:
+                                    if isinstance(list_item, BaseMessage):
+                                        list_item.pretty_print()
+                                    else:
+                                        print(list_item)
+                            elif isinstance(v, dict):
+                                for node_chunk_key, node_chunk_value in v.items():
+                                    print(f"{node_chunk_key}:\n{node_chunk_value}")
+                            else:
+                                print(f"\033[1;32m{k}\033[0m:\n{v}")
+                    elif node_chunk is not None:
+                        if hasattr(node_chunk, "__iter__") and not isinstance(
+                            node_chunk, str
+                        ):
+                            for item in node_chunk:
+                                print(item)
+                        else:
+                            print(node_chunk)
+                    print("=" * 50)
+        else:
+            # 딕셔너리가 아닌 경우 전체 청크 출력
+            print("\n" + "=" * 50)
+            print(f"🔄 Raw output 🔄")
+            print("- " * 25)
+            print(node_chunks)
+            print("=" * 50)
+            final_result = {"content": node_chunks}
+
+    # 최종 결과 반환
+    return final_result
+
+
+
+================================================
+FILE: .env.example
+================================================
+ANTHROPIC_API_KEY=sk-ant-api03...
+OPENAI_API_KEY=sk-proj-o0gulL2J2a...
+LANGSMITH_API_KEY=lsv2_sk_ed22...
+LANGSMITH_TRACING=true
+LANGSMITH_ENDPOINT=https://api.smith.langchain.com
+LANGSMITH_PROJECT=LangGraph-MCP-Agents
+
+USE_LOGIN=true
+USER_ID=admin
+USER_PASSWORD=admin1234
+
+
+================================================
+FILE: .python-version
+================================================
+3.12
+
+
+
+
+================================================
+FILE: dockers/config.json
+================================================
+{
+  "get_current_time": {
+    "command": "python",
+    "args": [
+      "./mcp_server_time.py"
+    ],
+    "transport": "stdio"
+  }
+}
+
+
+================================================
+FILE: dockers/docker-compose-KOR-mac.yaml
+================================================
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILDPLATFORM: ${BUILDPLATFORM:-linux/arm64}
+        TARGETPLATFORM: "linux/arm64"
+    image: teddylee777/langgraph-mcp-agents:KOR-0.2.1
+    platform: "linux/arm64"
+    ports:
+      - "8585:8585"
+    env_file:
+      - ./.env
+    environment:
+      - PYTHONUNBUFFERED=1
+      # Mac-specific optimizations
+      - NODE_OPTIONS=--max_old_space_size=2048
+      # Delegated file system performance for macOS
+      - PYTHONMALLOC=malloc
+      - USE_LOGIN=${USE_LOGIN:-false}
+      - USER_ID=${USER_ID:-}
+      - USER_PASSWORD=${USER_PASSWORD:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - NODE_OPTIONS=${NODE_OPTIONS:-}
+    volumes:
+      - ./data:/app/data:cached
+      - ./config.json:/app/config.json
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8585/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+
+
+================================================
+FILE: dockers/docker-compose-KOR.yaml
+================================================
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILDPLATFORM: ${BUILDPLATFORM:-linux/amd64}
+        TARGETPLATFORM: ${TARGETPLATFORM:-linux/amd64}
+    image: teddylee777/langgraph-mcp-agents:KOR-0.2.1
+    platform: ${TARGETPLATFORM:-linux/amd64}
+    ports:
+      - "8585:8585"
+    volumes:
+      - ./.env:/app/.env:ro
+      - ./data:/app/data:rw
+      - ./config.json:/app/config.json
+    env_file:
+      - ./.env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - USE_LOGIN=${USE_LOGIN:-false}
+      - USER_ID=${USER_ID:-}
+      - USER_PASSWORD=${USER_PASSWORD:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - NODE_OPTIONS=${NODE_OPTIONS:-}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8585/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+
+
+================================================
+FILE: dockers/docker-compose-mac.yaml
+================================================
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILDPLATFORM: ${BUILDPLATFORM:-linux/arm64}
+        TARGETPLATFORM: "linux/arm64"
+    image: teddylee777/langgraph-mcp-agents:0.2.1
+    platform: "linux/arm64"
+    ports:
+      - "8585:8585"
+    env_file:
+      - ./.env
+    environment:
+      - PYTHONUNBUFFERED=1
+      # Mac-specific optimizations
+      - NODE_OPTIONS=--max_old_space_size=2048
+      # Delegated file system performance for macOS
+      - PYTHONMALLOC=malloc
+      - USE_LOGIN=${USE_LOGIN:-false}
+      - USER_ID=${USER_ID:-}
+      - USER_PASSWORD=${USER_PASSWORD:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - NODE_OPTIONS=${NODE_OPTIONS:-}
+    volumes:
+      - ./data:/app/data:cached
+      - ./config.json:/app/config.json
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8585/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+
+
+================================================
+FILE: dockers/docker-compose.yaml
+================================================
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILDPLATFORM: ${BUILDPLATFORM:-linux/amd64}
+        TARGETPLATFORM: ${TARGETPLATFORM:-linux/amd64}
+    image: teddylee777/langgraph-mcp-agents:0.2.1
+    platform: ${TARGETPLATFORM:-linux/amd64}
+    ports:
+      - "8585:8585"
+    volumes:
+      # Optionally, you can remove this volume if you don’t need the file at runtime
+      - ./.env:/app/.env:ro
+      - ./data:/app/data:rw
+      - ./config.json:/app/config.json
+    env_file:
+      - ./.env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - USE_LOGIN=${USE_LOGIN:-false}
+      - USER_ID=${USER_ID:-}
+      - USER_PASSWORD=${USER_PASSWORD:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - NODE_OPTIONS=${NODE_OPTIONS:-}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8585/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+
+
+================================================
+FILE: dockers/.env.example
+================================================
+ANTHROPIC_API_KEY=sk-ant-api03...
+OPENAI_API_KEY=sk-proj-o0gulL2J2a...
+LANGSMITH_API_KEY=lsv2_sk_ed22...
+LANGSMITH_TRACING=true
+LANGSMITH_ENDPOINT=https://api.smith.langchain.com
+LANGSMITH_PROJECT=LangGraph-MCP-Agents
+
+USE_LOGIN=true
+USER_ID=admin
+USER_PASSWORD=admin1234
+

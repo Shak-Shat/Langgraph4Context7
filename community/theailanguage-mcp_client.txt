@@ -1,0 +1,1947 @@
+Directory structure:
+└── theailanguage-mcp_client/
+    ├── README.md
+    ├── client.py
+    ├── client_sse.py
+    ├── langchain_mcp_client.py
+    ├── langchain_mcp_client_wconfig.py
+    ├── LICENSE
+    ├── main.py
+    ├── requirements.txt
+    ├── streamlit_client_sse.py
+    ├── streamlit_client_stdio.py
+    ├── streamlit_client_ui.py
+    ├── theailanguage_config.json
+    ├── .python-version
+    ├── assets/
+    └── conversations/
+        ├── conversation_20250412104241.json
+        └── conversation_20250412125618.json
+
+================================================
+FILE: README.md
+================================================
+# 🚀 MCP Client with Gemini AI
+
+[📢 Subscribe to The AI Language on YouTube!](https://youtube.com/@theailanguage?sub_confirmation=1)
+
+Welcome! This project features multiple MCP clients integrated with **Google Gemini AI** to execute tasks via the **Model Context Protocol (MCP)** — with and without LangChain.
+
+Happy building, and don’t forget to subscribe!  
+
+
+## MCP Client Options
+
+This repository includes **four MCP client options** for various use cases:
+
+| Option | Client Script | LangChain | Config Support | Transport | Tutorial |
+|--------|-------------------------------|------------|----------------|-----------|----------|
+| 1 | `client.py` | ❌ | ❌ | STDIO | [Legacy Client](https://youtu.be/GAPncIfnDwg) |
+| 2 | `langchain_mcp_client.py` | ✅ | ❌ | STDIO | [LangChain Client](https://youtu.be/hccNm88bk6w) |
+| 3 | `langchain_mcp_client_wconfig.py` | ✅ | ✅ | STDIO | [Multi-Server](https://youtu.be/nCnBWVv2uTA) |
+| 4 | `client_sse.py` | ❌ | ❌ | SSE (Loca & Web) | [SSE Client](https://youtu.be/s0YJNcT1XMA) |
+
+If you want to add or reuse MCP Servers, check out [the MCP Servers repo](https://github.com/modelcontextprotocol/servers).
+
+---
+
+## ✪ Features
+
+✅ Connects to an MCP server (STDIO or SSE)  
+✅ Uses **Google Gemini AI** to interpret user prompts  
+✅ Allows **Gemini to call MCP tools** via server  
+✅ Executes tool commands and returns results  
+✅ (Upcoming) Maintains context and history for conversations  
+
+---
+
+### Running the MCP Client
+
+Choose the appropriate command for your preferred client:
+
+- **Legacy STDIO** — `uv run client.py path/to/server.py`
+- **LangChain STDIO** — `uv run langchain_mcp_client.py path/to/server.py`
+- **LangChain Multi-Server STDIO** — `uv run langchain_mcp_client_wconfig.py path/to/config.json`
+- **SSE Client** — `uv run client_sse.py sse_server_url`
+
+### Project Structure
+
+```
+mcp-client-gemini/
+├── client.py                        # Basic client (STDIO)
+├── langchain_mcp_client.py         # LangChain + Gemini
+├── langchain_mcp_client_wconfig.py # LangChain + config.json (multi-server)
+├── client_sse.py                   # SSE transport client (local or remote)
+├── .env                            # API key environment file
+├── README.md                       # Project documentation
+├── requirements.txt                # Dependency list
+├── .gitignore                      # Git ignore rules
+├── LICENSE                         # License information
+```
+
+### How It Works
+
+1. You send a prompt:
+   > Create a file named test.txt
+2. The prompt is sent to **Google Gemini AI**.
+3. Gemini uses available **MCP tools** to determine a response.
+4. The selected tool is executed on the **connected server**.
+5. The AI returns results and maintains **conversation context** (if supported).
+
+## 🤝 Contributing
+
+At this time, this project does **not accept external code contributions**.
+
+This is to keep licensing simple and avoid any shared copyright.
+
+You're very welcome to:
+✅ Report bugs or request features (via GitHub Issues)  
+✅ Fork the repo and build your own version  
+✅ Suggest documentation improvements
+
+If you'd like to collaborate in another way, feel free to open a discussion!
+
+
+
+
+================================================
+FILE: client.py
+================================================
+# Import necessary libraries
+import asyncio  # For handling asynchronous operations
+import os       # For environment variable access
+import sys      # For system-specific parameters and functions
+import json     # For handling JSON data (used when printing function declarations)
+
+# Import MCP client components
+from typing import Optional  # For type hinting optional values
+from contextlib import AsyncExitStack  # For managing multiple async tasks
+from mcp import ClientSession, StdioServerParameters  # MCP session management
+from mcp.client.stdio import stdio_client  # MCP client for standard I/O communication
+
+# Import Google's Gen AI SDK
+from google import genai
+from google.genai import types
+from google.genai.types import Tool, FunctionDeclaration
+from google.genai.types import GenerateContentConfig
+
+from dotenv import load_dotenv  # For loading API keys from a .env file
+
+# Load environment variables from .env file
+load_dotenv()
+
+class MCPClient:
+    def __init__(self):
+        """Initialize the MCP client and configure the Gemini API."""
+        self.session: Optional[ClientSession] = None  # MCP session for communication
+        self.exit_stack = AsyncExitStack()  # Manages async resource cleanup
+
+        # Retrieve the Gemini API key from environment variables
+        gemini_api_key = os.getenv("GEMINI_API_KEY")
+        if not gemini_api_key:
+            raise ValueError("GEMINI_API_KEY not found. Please add it to your .env file.")
+
+        # Configure the Gemini AI client
+        self.genai_client = genai.Client(api_key=gemini_api_key)
+
+    async def connect_to_server(self, server_script_path: str):
+        """Connect to the MCP server and list available tools."""
+
+        # Determine whether the server script is written in Python or JavaScript
+        # This allows us to execute the correct command to start the MCP server
+        command = "python" if server_script_path.endswith('.py') else "node"
+
+        # Define the parameters for connecting to the MCP server
+        server_params = StdioServerParameters(command=command, args=[server_script_path])
+
+        # Establish communication with the MCP server using standard input/output (stdio)
+        stdio_transport = await self.exit_stack.enter_async_context(stdio_client(server_params))
+
+        # Extract the read/write streams from the transport object
+        self.stdio, self.write = stdio_transport
+
+        # Initialize the MCP client session, which allows interaction with the server
+        self.session = await self.exit_stack.enter_async_context(ClientSession(self.stdio, self.write))
+
+        # Send an initialization request to the MCP server
+        await self.session.initialize()
+
+        # Request the list of available tools from the MCP server
+        response = await self.session.list_tools()
+        tools = response.tools  # Extract the tool list from the response
+
+        # Print a message showing the names of the tools available on the server
+        print("\nConnected to server with tools:", [tool.name for tool in tools])
+
+        # Convert MCP tools to Gemini format
+        self.function_declarations = convert_mcp_tools_to_gemini(tools)
+
+
+    async def process_query(self, query: str) -> str:
+        """
+        Process a user query using the Gemini API and execute tool calls if needed.
+
+        Args:
+            query (str): The user's input query.
+
+        Returns:
+            str: The response generated by the Gemini model.
+        """
+
+        # Format user input as a structured Content object for Gemini
+        user_prompt_content = types.Content(
+            role='user',  # Indicates that this is a user message
+            parts=[types.Part.from_text(text=query)]  # Convert the text query into a Gemini-compatible format
+        )
+
+        # Send user input to Gemini AI and include available tools for function calling
+        response = self.genai_client.models.generate_content(
+            model='gemini-2.0-flash-001',  # Specifies which Gemini model to use
+            contents=[user_prompt_content],  # Send user input to Gemini
+            config=types.GenerateContentConfig(
+                tools=self.function_declarations,  # Pass the list of available MCP tools for Gemini to use
+            ),
+        )
+
+        # Initialize variables to store final response text and assistant messages
+        final_text = []  # Stores the final formatted response
+        assistant_message_content = []  # Stores assistant responses
+
+        # Process the response received from Gemini
+        for candidate in response.candidates:
+            if candidate.content.parts:  # Ensure response has content
+                for part in candidate.content.parts:
+                    if isinstance(part, types.Part):  # Check if part is a valid Gemini response unit
+                        if part.function_call:  # If Gemini suggests a function call, process it
+                            # Extract function call details
+                            function_call_part = part  # Store the function call response
+                            tool_name = function_call_part.function_call.name  # Name of the MCP tool Gemini wants to call
+                            tool_args = function_call_part.function_call.args  # Arguments required for the tool execution
+
+                            # Print debug info: Which tool is being called and with what arguments
+                            print(f"\n[Gemini requested tool call: {tool_name} with args {tool_args}]")
+
+                            # Execute the tool using the MCP server
+                            try:
+                                result = await self.session.call_tool(tool_name, tool_args)  # Call MCP tool with arguments
+                                function_response = {"result": result.content}  # Store the tool's output
+                            except Exception as e:
+                                function_response = {"error": str(e)}  # Handle errors if tool execution fails
+
+                            # Format the tool response for Gemini in a way it understands
+                            function_response_part = types.Part.from_function_response(
+                                name=tool_name,  # Name of the function/tool executed
+                                response=function_response  # The result of the function execution
+                            )
+
+                            # Structure the tool response as a Content object for Gemini
+                            function_response_content = types.Content(
+                                role='tool',  # Specifies that this response comes from a tool
+                                parts=[function_response_part]  # Attach the formatted response part
+                            )
+
+                            # Send tool execution results back to Gemini for processing
+                            response = self.genai_client.models.generate_content(
+                                model='gemini-2.0-flash-001',  # Use the same model
+                                contents=[
+                                    user_prompt_content,  # Include original user query
+                                    function_call_part,  # Include Gemini's function call request
+                                    function_response_content,  # Include tool execution result
+                                ],
+                                config=types.GenerateContentConfig(
+                                    tools=self.function_declarations,  # Provide the available tools for continued use
+                                ),
+                            )
+
+                            # Extract final response text from Gemini after processing the tool call
+                            final_text.append(response.candidates[0].content.parts[0].text)
+                        else:
+                            # If no function call was requested, simply add Gemini's text response
+                            final_text.append(part.text)
+
+        # Return the combined response as a single formatted string
+        return "\n".join(final_text)
+
+
+    async def chat_loop(self):
+        """Run an interactive chat session with the user."""
+        print("\nMCP Client Started! Type 'quit' to exit.")
+
+        while True:
+            query = input("\nQuery: ").strip()
+            if query.lower() == 'quit':
+                break
+
+            # Process the user's query and display the response
+            response = await self.process_query(query)
+            print("\n" + response)
+
+    async def cleanup(self):
+        """Clean up resources before exiting."""
+        await self.exit_stack.aclose()
+
+def clean_schema(schema):
+    """
+    Recursively removes 'title' fields from the JSON schema.
+
+    Args:
+        schema (dict): The schema dictionary.
+
+    Returns:
+        dict: Cleaned schema without 'title' fields.
+    """
+    if isinstance(schema, dict):
+        schema.pop("title", None)  # Remove title if present
+
+        # Recursively clean nested properties
+        if "properties" in schema and isinstance(schema["properties"], dict):
+            for key in schema["properties"]:
+                schema["properties"][key] = clean_schema(schema["properties"][key])
+
+    return schema
+
+def convert_mcp_tools_to_gemini(mcp_tools):
+    """
+    Converts MCP tool definitions to the correct format for Gemini API function calling.
+
+    Args:
+        mcp_tools (list): List of MCP tool objects with 'name', 'description', and 'inputSchema'.
+
+    Returns:
+        list: List of Gemini Tool objects with properly formatted function declarations.
+    """
+    gemini_tools = []
+
+    for tool in mcp_tools:
+        # Ensure inputSchema is a valid JSON schema and clean it
+        parameters = clean_schema(tool.inputSchema)
+
+        # Construct the function declaration
+        function_declaration = FunctionDeclaration(
+            name=tool.name,
+            description=tool.description,
+            parameters=parameters  # Now correctly formatted
+        )
+
+        # Wrap in a Tool object
+        gemini_tool = Tool(function_declarations=[function_declaration])
+        gemini_tools.append(gemini_tool)
+
+    return gemini_tools
+
+
+
+async def main():
+    """Main function to start the MCP client."""
+    if len(sys.argv) < 2:
+        print("Usage: python client.py <path_to_server_script>")
+        sys.exit(1)
+
+    client = MCPClient()
+    try:
+        # Connect to the MCP server and start the chat loop
+        await client.connect_to_server(sys.argv[1])
+        await client.chat_loop()
+    finally:
+        # Ensure resources are cleaned up
+        await client.cleanup()
+
+if __name__ == "__main__":
+    # Run the main function within the asyncio event loop
+    asyncio.run(main())
+
+
+
+
+
+================================================
+FILE: client_sse.py
+================================================
+#!/usr/bin/env python
+"""
+client_sse.py
+
+This file implements an MCP client that connects to an MCP server using SSE (Server-Sent Events) transport.
+SSE is a technology that allows a server to push real-time updates to a client over a single, persistent HTTP connection.
+Unlike websockets, SSE provides one-way communication from the server to the client, which is useful for streaming updates.
+
+This client also uses Google's Gemini SDK for AI model integration. The Gemini API can perform natural language processing
+tasks and, when needed, call external tools (in this case, MCP tools) to perform specific functions.
+
+A stream manager (or stream context) in this code is responsible for managing the lifecycle of the SSE connection,
+ensuring that the connection is properly opened and closed. We use asynchronous context managers to handle these resources safely.
+"""
+
+import asyncio            # For asynchronous programming
+import os                 # For accessing environment variables
+import sys                # For command-line argument handling
+import json               # For JSON processing
+from typing import Optional  # For type annotations, e.g., indicating that a variable may be None
+
+# Import ClientSession from the MCP package. This object manages communication with the MCP server.
+from mcp import ClientSession
+
+# Import the SSE client helper. This is assumed to be an asynchronous context manager that provides the connection streams.
+# These streams represent the channels over which data is sent and received via SSE.
+from mcp.client.sse import sse_client
+
+# Import components from the Gemini SDK for AI-based function calling and natural language processing.
+from google import genai
+from google.genai import types
+from google.genai.types import Tool, FunctionDeclaration
+from google.genai.types import GenerateContentConfig
+
+# Import dotenv to load environment variables from a .env file (e.g., API keys).
+from dotenv import load_dotenv
+
+# Load environment variables from the .env file so that our API keys and other settings are available.
+load_dotenv()
+
+
+class MCPClient:
+    def __init__(self):
+        """
+        Initialize the MCP client.
+        
+        This constructor sets up:
+         - The Gemini AI client using an API key from the environment variables.
+         - Placeholders for the client session and the stream context (which manages the SSE connection).
+        
+        The Gemini client is used to generate content (e.g., processing user queries) and can request to call tools.
+        """
+        # Placeholder for the MCP session that will manage communication with the MCP server.
+        self.session: Optional[ClientSession] = None
+        
+        # These will hold our context managers for the SSE connection.
+        self._streams_context = None  # Manages the SSE stream lifecycle
+        self._session_context = None  # Manages the MCP session lifecycle
+
+        # Retrieve the Gemini API key from environment variables.
+        gemini_api_key = os.getenv("GEMINI_API_KEY")
+        if not gemini_api_key:
+            raise ValueError("GEMINI_API_KEY not found. Please add it to your .env file.")
+
+        # Initialize the Gemini client with the API key. This client is used to communicate with the Gemini AI models.
+        self.genai_client = genai.Client(api_key=gemini_api_key)
+
+    async def connect_to_sse_server(self, server_url: str):
+        """
+        Connect to an MCP server that uses SSE transport.
+        
+        Steps performed in this function:
+         1. Open an SSE connection using the provided server URL.
+         2. Use the connection streams to create an MCP ClientSession.
+         3. Initialize the MCP session, which sets up the protocol for communication.
+         4. Retrieve and display the list of available tools from the MCP server.
+        
+        Args:
+            server_url (str): The URL of the MCP server that supports SSE.
+        """
+        # 1. Open an SSE connection to the server.
+        #    The sse_client function returns an async context manager that yields the streams (data channels) for communication.
+        self._streams_context = sse_client(url=server_url)
+        # Enter the asynchronous context to get the streams. This ensures proper resource management.
+        streams = await self._streams_context.__aenter__()
+        # 'streams' is expected to be a tuple (like (reader, writer)) that the ClientSession can use.
+
+        # 2. Create an MCP ClientSession using the streams provided by the SSE connection.
+        #    The ClientSession object handles sending and receiving messages following the MCP protocol.
+        self._session_context = ClientSession(*streams)
+        self.session: ClientSession = await self._session_context.__aenter__()
+
+        # 3. Initialize the MCP session.
+        #    This step typically sends an initialization message to the server to negotiate capabilities and start the protocol.
+        await self.session.initialize()
+
+        # 4. Retrieve and list available tools from the MCP server.
+        #    This helps confirm that the connection is working and shows what functions or tools are available.
+        print("Initialized SSE client...")
+        print("Listing tools...")
+        response = await self.session.list_tools()
+        tools = response.tools
+        print("\nConnected to server with tools:", [tool.name for tool in tools])
+
+        # Convert the MCP tool definitions to a format compatible with the Gemini API for function calling.
+        self.function_declarations = convert_mcp_tools_to_gemini(tools)
+
+    async def cleanup(self):
+        """
+        Clean up resources by properly closing the SSE session and stream contexts.
+        
+        As we used asynchronous context managers (which are like 'with' blocks for async code), we need to manually call their exit methods.
+        This ensures that all network connections and resources are gracefully closed when the client is finished.
+        """
+        # If the MCP session context was created, exit it to close the session.
+        if self._session_context:
+            await self._session_context.__aexit__(None, None, None)
+        # If the SSE stream context was created, exit it to close the underlying SSE connection.
+        if self._streams_context:
+            await self._streams_context.__aexit__(None, None, None)
+
+    async def process_query(self, query: str) -> str:
+        """
+        Process a user query using the Gemini API. If Gemini requests a tool call (via function calling),
+        this function will call the tool on the MCP server and send the result back to Gemini for a final response.
+        
+        Steps:
+         1. Format the user's query as a structured content object.
+         2. Send the query to Gemini and include available MCP tool declarations.
+         3. Check if Gemini's response contains a function call; if so, execute the tool and send back the response.
+         4. Return the final processed text from Gemini.
+        
+        Args:
+            query (str): The input query from the user.
+        
+        Returns:
+            str: The final text response generated by the Gemini model.
+        """
+        # 1. Create a Gemini Content object representing the user's query.
+        #    This object includes a role (user) and the query text wrapped in a part.
+        user_prompt_content = types.Content(
+            role='user',
+            parts=[types.Part.from_text(text=query)]
+        )
+
+        # 2. Send the query to the Gemini model.
+        #    We include available tool declarations so Gemini knows it can request function calls.
+        response = self.genai_client.models.generate_content(
+            model='gemini-2.0-flash-001',  # Name of the Gemini model to use.
+            contents=[user_prompt_content],
+            config=types.GenerateContentConfig(
+                tools=self.function_declarations,  # Pass in the list of MCP tools formatted for Gemini.
+            ),
+        )
+
+        # Prepare a list to accumulate the final response text.
+        final_text = []
+
+        # 3. Process each candidate response from Gemini.
+        for candidate in response.candidates:
+            if candidate.content.parts:  # Ensure that the response has parts (sections).
+                for part in candidate.content.parts:
+                    # If the part includes a function call, Gemini is asking us to run an MCP tool.
+                    if part.function_call:
+                        # Extract the name of the tool and its arguments from the function call.
+                        tool_name = part.function_call.name
+                        tool_args = part.function_call.args
+                        print(f"\n[Gemini requested tool call: {tool_name} with args {tool_args}]")
+
+                        # Attempt to call the specified tool on the MCP server.
+                        try:
+                            result = await self.session.call_tool(tool_name, tool_args)
+                            # Wrap the result in a dictionary under the key "result".
+                            function_response = {"result": result.content}
+                        except Exception as e:
+                            # If an error occurs, capture the error message.
+                            function_response = {"error": str(e)}
+
+                        # Create a Gemini function response part using the result of the tool call.
+                        function_response_part = types.Part.from_function_response(
+                            name=tool_name,
+                            response=function_response
+                        )
+
+                        # Wrap the function response part in a Content object marked as coming from a tool.
+                        function_response_content = types.Content(
+                            role='tool',
+                            parts=[function_response_part]
+                        )
+
+                        # 4. Send the original query, the function call, and the tool response back to Gemini.
+                        #    Gemini will process this combined input to generate the final answer.
+                        response = self.genai_client.models.generate_content(
+                            model='gemini-2.0-flash-001',
+                            contents=[
+                                user_prompt_content,       # Original user query.
+                                part,                      # The function call that was requested.
+                                function_response_content, # The response from executing the tool.
+                            ],
+                            config=types.GenerateContentConfig(
+                                tools=self.function_declarations,
+                            ),
+                        )
+
+                        # Append the text from the first part of Gemini's new candidate response.
+                        final_text.append(response.candidates[0].content.parts[0].text)
+                    else:
+                        # If there is no function call, just use the text provided by Gemini.
+                        final_text.append(part.text)
+
+        # 5. Combine all parts of the response into a single string to be returned.
+        return "\n".join(final_text)
+
+    async def chat_loop(self):
+        """
+        Run an interactive chat loop in the terminal.
+        
+        This function allows the user to type queries one after the other. The loop continues until the user types 'quit'.
+        Each query is processed using the process_query method, and the response is printed to the console.
+        """
+        print("\nMCP Client Started! Type 'quit' to exit.")
+
+        while True:
+            # Prompt the user to enter a query.
+            query = input("\nQuery: ").strip()
+            if query.lower() == 'quit':
+                break  # Exit the loop if the user types 'quit'
+
+            # Process the query through the Gemini model and MCP server tool calls.
+            response = await self.process_query(query)
+            # Print the final response.
+            print("\n" + response)
+
+
+def clean_schema(schema):
+    """
+    Recursively remove 'title' fields from a JSON schema.
+    
+    Some JSON schemas include a 'title' field that is not needed for our tool function calls.
+    This function goes through the schema and removes any 'title' entries, including nested ones.
+    
+    Args:
+        schema (dict): A dictionary representing a JSON schema.
+    
+    Returns:
+        dict: The cleaned JSON schema without any 'title' fields.
+    """
+    if isinstance(schema, dict):
+        # Remove the 'title' key if it exists.
+        schema.pop("title", None)
+        # If the schema has a "properties" key (common in JSON schemas) and it's a dict, process each property.
+        if "properties" in schema and isinstance(schema["properties"], dict):
+            for key in schema["properties"]:
+                schema["properties"][key] = clean_schema(schema["properties"][key])
+    return schema
+
+
+def convert_mcp_tools_to_gemini(mcp_tools):
+    """
+    Convert MCP tool definitions into Gemini-compatible function declarations.
+    
+    Each MCP tool contains information such as its name, description, and an input JSON schema.
+    This function cleans the JSON schema (by removing unnecessary fields) and then creates a Gemini FunctionDeclaration.
+    The function declarations are then wrapped in Gemini Tool objects.
+    
+    Args:
+        mcp_tools (list): A list of MCP tool objects with attributes 'name', 'description', and 'inputSchema'.
+    
+    Returns:
+        list: A list of Gemini Tool objects ready for function calling.
+    """
+    gemini_tools = []
+
+    for tool in mcp_tools:
+        # Clean the input schema to remove extraneous fields like 'title'
+        parameters = clean_schema(tool.inputSchema)
+
+        # Create a function declaration that describes how Gemini should call this tool.
+        function_declaration = FunctionDeclaration(
+            name=tool.name,
+            description=tool.description,
+            parameters=parameters
+        )
+
+        # Wrap the function declaration in a Gemini Tool object.
+        gemini_tool = Tool(function_declarations=[function_declaration])
+        gemini_tools.append(gemini_tool)
+
+    return gemini_tools
+
+
+async def main():
+    """
+    Main entry point for the client.
+    
+    This function:
+     - Checks that a server URL is provided as a command-line argument.
+     - Creates an instance of MCPClient.
+     - Connects to the MCP server via SSE.
+     - Enters an interactive chat loop to process user queries.
+     - Cleans up all resources (like the SSE connection) when finished.
+    
+    Usage:
+        python client_sse.py <server_url>
+    """
+    if len(sys.argv) < 2:
+        print("Usage: python client_sse.py <server_url>")
+        sys.exit(1)
+
+    client = MCPClient()
+    try:
+        # Connect to the MCP server using the provided SSE URL.
+        await client.connect_to_sse_server(sys.argv[1])
+        # Start the interactive chat loop for user queries.
+        await client.chat_loop()
+    finally:
+        # Ensure that all resources and network connections are properly closed.
+        await client.cleanup()
+
+if __name__ == "__main__":
+    # Run the main function using the asyncio event loop.
+    asyncio.run(main())
+
+
+
+================================================
+FILE: langchain_mcp_client.py
+================================================
+#!/usr/bin/env python
+"""
+langchain_mcp_client.py
+
+This file implements an MCP client that:
+  - Connects to an MCP server via a stdio connection.
+  - Loads the available MCP tools using the adapter function load_mcp_tools.
+  - Instantiates the ChatGoogleGenerativeAI model (Google Gemini) using your GOOGLE_API_KEY.
+  - Creates a React agent using LangGraph’s prebuilt agent (create_react_agent) with the LLM and tools.
+  - Runs an interactive asynchronous chat loop for processing user queries.
+
+Detailed explanations:
+  - Retries (max_retries=2): If an API call fails due to transient errors (e.g., network issues),
+    the call will automatically be retried up to 2 times. Increase this if you experience temporary failures.
+  - Temperature (set to 0): Controls randomness. A temperature of 0 yields deterministic responses.
+    Higher values (e.g., 0.7) yield more creative, varied responses.
+  - GOOGLE_API_KEY: Required for authentication with Google’s generative AI service.
+  
+Responses are printed as JSON using a custom encoder to handle non-serializable objects.
+"""
+
+import asyncio                        # For asynchronous operations
+import os                             # To access environment variables
+import sys                            # For command-line argument processing
+import json                           # For pretty-printing JSON output
+from contextlib import AsyncExitStack # Ensures all async resources are properly closed
+from typing import Optional, List     # For type hints
+
+# ---------------------------
+# MCP Client Imports
+# ---------------------------
+from mcp import ClientSession, StdioServerParameters  # MCP session management and startup parameters
+from mcp.client.stdio import stdio_client            # For connecting to the MCP server over stdio
+
+# ---------------------------
+# Agent and LLM Imports
+# ---------------------------
+from langchain_mcp_adapters.tools import load_mcp_tools  # Adapter to load MCP tools correctly
+from langgraph.prebuilt import create_react_agent        # Prebuilt React agent from LangGraph
+from langchain_google_genai import ChatGoogleGenerativeAI  # Google Gemini LLM wrapper
+
+# ---------------------------
+# Environment Setup
+# ---------------------------
+from dotenv import load_dotenv
+load_dotenv()  # Loads environment variables from a .env file (e.g., GOOGLE_API_KEY)
+
+# ---------------------------
+# Custom JSON Encoder
+# ---------------------------
+class CustomEncoder(json.JSONEncoder):
+    """
+    Custom JSON encoder that handles objects with a 'content' attribute.
+    
+    If an object has a 'content' attribute, it returns a dictionary with the object's type and its content.
+    Otherwise, it falls back to the default encoding.
+    """
+    def default(self, o):
+        if hasattr(o, "content"):
+            return {"type": o.__class__.__name__, "content": o.content}
+        return super().default(o)
+
+# ---------------------------
+# LLM Instantiation
+# ---------------------------
+# Create an instance of the Google Gemini LLM.
+llm = ChatGoogleGenerativeAI(
+    model="gemini-1.5-pro",     # Gemini model to use
+    temperature=0,              # 0 = deterministic output; increase for more creativity
+    max_retries=2,              # Automatically retry API calls up to 2 times for transient errors
+    google_api_key=os.getenv("GOOGLE_API_KEY")  # Google API key must be set in your environment or .env file
+)
+
+# ---------------------------
+# MCP Server Script Argument
+# ---------------------------
+if len(sys.argv) < 2:
+    print("Usage: python client_langchain_google_genai_bind_tools.py <path_to_server_script>")
+    sys.exit(1)
+server_script = sys.argv[1]
+
+# ---------------------------
+# MCP Server Parameters
+# ---------------------------
+# Configure parameters to launch the MCP server.
+server_params = StdioServerParameters(
+    command="python" if server_script.endswith(".py") else "node",
+    args=[server_script],
+)
+
+# Global variable to hold the active MCP session.
+# This is a simple holder with a "session" attribute for use by the tool adapter.
+mcp_client = None
+
+# ---------------------------
+# Main Asynchronous Function: run_agent
+# ---------------------------
+async def run_agent():
+    """
+    Connect to the MCP server, load MCP tools, create a React agent, and run an interactive chat loop.
+    
+    Steps:
+      1. Open a stdio connection to the MCP server.
+      2. Create and initialize an MCP session.
+      3. Store the session in a global holder (mcp_client) for tool access.
+      4. Load MCP tools using load_mcp_tools.
+      5. Create a React agent using create_react_agent with the LLM and loaded tools.
+      6. Enter an interactive loop: for each user query, invoke the agent asynchronously using ainvoke,
+         then print the response as formatted JSON using our custom encoder.
+    """
+    global mcp_client
+    async with stdio_client(server_params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()  # Initialize MCP session
+            # Set global mcp_client to a simple object holding the session.
+            mcp_client = type("MCPClientHolder", (), {"session": session})()
+            # Load MCP tools using the adapter; this handles awaiting and conversion.
+            tools = await load_mcp_tools(session)
+            # Create a React agent using the LLM and the loaded tools.
+            agent = create_react_agent(llm, tools)
+            print("MCP Client Started! Type 'quit' to exit.")
+            while True:
+                query = input("\nQuery: ").strip()
+                if query.lower() == "quit":
+                    break
+                # The agent expects input as a dict with key "messages".
+                response = await agent.ainvoke({"messages": query})
+                # Format the response as JSON using the custom encoder.
+                try:
+                    formatted = json.dumps(response, indent=2, cls=CustomEncoder)
+                except Exception as e:
+                    formatted = str(response)
+                print("\nResponse:")
+                print(formatted)
+    return
+
+# ---------------------------
+# Main Execution Block
+# ---------------------------
+if __name__ == "__main__":
+    asyncio.run(run_agent())
+
+
+
+================================================
+FILE: langchain_mcp_client_wconfig.py
+================================================
+#!/usr/bin/env python
+"""
+langchain_mcp_client_wconfig.py
+
+This file implements a LangChain MCP client that:
+  - Loads configuration from a JSON file specified by the THEAILANGUAGE_CONFIG environment variable.
+  - Connects to one or more MCP servers defined in the config.
+  - Loads available MCP tools from each connected server.
+  - Uses the Google Gemini API (via LangChain) to create a React agent with access to all tools.
+  - Runs an interactive chat loop where user queries are processed by the agent.
+
+Detailed explanations:
+  - Retries (max_retries=2): If an API call fails due to transient issues (e.g., timeouts), it will retry up to 2 times.
+  - Temperature (set to 0): A value of 0 means fully deterministic output; increase this for more creative responses.
+  - Environment Variable: THEAILANGUAGE_CONFIG should point to a config JSON that defines all MCP servers.
+"""
+
+import asyncio                        # For asynchronous operations
+import os                             # To access environment variables and file paths
+import sys                            # For system-specific parameters and error handling
+import json                           # For reading and writing JSON data
+from contextlib import AsyncExitStack # For managing multiple asynchronous context managers
+
+# ---------------------------
+# MCP Client Imports
+# ---------------------------
+from mcp import ClientSession, StdioServerParameters  # For managing MCP client sessions and server parameters
+from mcp.client.stdio import stdio_client             # For establishing a stdio connection to an MCP server
+
+# ---------------------------
+# Agent and LLM Imports
+# ---------------------------
+from langchain_mcp_adapters.tools import load_mcp_tools  # Adapter to convert MCP tools to LangChain compatible tools
+from langgraph.prebuilt import create_react_agent        # Function to create a prebuilt React agent using LangGraph
+from langchain_google_genai import ChatGoogleGenerativeAI  # Wrapper for the Google Gemini API via LangChain
+
+# ---------------------------
+# Environment Setup
+# ---------------------------
+from dotenv import load_dotenv
+load_dotenv()  # Load environment variables from a .env file (e.g., GOOGLE_API_KEY)
+
+# ---------------------------
+# Custom JSON Encoder for LangChain objects
+# ---------------------------
+class CustomEncoder(json.JSONEncoder):
+    """
+    Custom JSON encoder to handle non-serializable objects returned by LangChain.
+    If the object has a 'content' attribute (such as HumanMessage or ToolMessage), serialize it accordingly.
+    """
+    def default(self, o):
+        # Check if the object has a 'content' attribute
+        if hasattr(o, "content"):
+            # Return a dictionary containing the type and content of the object
+            return {"type": o.__class__.__name__, "content": o.content}
+        # Otherwise, use the default serialization
+        return super().default(o)
+
+# ---------------------------
+# Function: read_config_json
+# ---------------------------
+def read_config_json():
+    """
+    Reads the MCP server configuration JSON.
+
+    Priority:
+      1. Try to read the path from the THEAILANGUAGE_CONFIG environment variable.
+      2. If not set, fallback to a default file 'theailanguage_config.json' in the same directory.
+
+    Returns:
+        dict: Parsed JSON content with MCP server definitions.
+    """
+    # Attempt to get the config file path from the environment variable
+    config_path = os.getenv("THEAILANGUAGE_CONFIG")
+
+    if not config_path:
+        # If environment variable is not set, use a default config file in the same directory as this script
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        config_path = os.path.join(script_dir, "theailanguage_config.json")
+        print(f"⚠️  THEAILANGUAGE_CONFIG not set. Falling back to: {config_path}")
+
+    try:
+        # Open and read the JSON config file
+        with open(config_path, "r") as f:
+            return json.load(f)
+    except Exception as e:
+        # If reading fails, print an error and exit the program
+        print(f"❌ Failed to read config file at '{config_path}': {e}")
+        sys.exit(1)
+
+# ---------------------------
+# Google Gemini LLM Instantiation
+# ---------------------------
+llm = ChatGoogleGenerativeAI(
+    model="gemini-2.0-flash",             # Specify the Google Gemini model variant to use
+    temperature=0,                            # Set temperature to 0 for deterministic responses
+    max_retries=2,                            # Set maximum retries for API calls to 2 in case of transient errors
+    google_api_key=os.getenv("GOOGLE_API_KEY")  # Retrieve the Google API key from environment variables
+)
+
+# ---------------------------
+# Main Function: run_agent
+# ---------------------------
+async def run_agent():
+    """
+    Connects to all MCP servers defined in the configuration, loads their tools, creates a unified React agent,
+    and starts an interactive loop to query the agent.
+    """
+    config = read_config_json()  # Load MCP server configuration from the JSON file
+    mcp_servers = config.get("mcpServers", {})  # Retrieve the MCP server definitions from the config
+    if not mcp_servers:
+        print("❌ No MCP servers found in the configuration.")
+        return
+
+    tools = []  # Initialize an empty list to hold all the tools from the connected servers
+
+    # Use AsyncExitStack to manage and cleanly close multiple asynchronous resources
+    async with AsyncExitStack() as stack:
+        # Iterate over each MCP server defined in the configuration
+        for server_name, server_info in mcp_servers.items():
+            print(f"\n🔗 Connecting to MCP Server: {server_name}...")
+
+            # Create StdioServerParameters using the command and arguments specified for the server
+            server_params = StdioServerParameters(
+                command=server_info["command"],
+                args=server_info["args"]
+            )
+
+            try:
+                # Establish a stdio connection to the server using the server parameters
+                read, write = await stack.enter_async_context(stdio_client(server_params))
+                # Create a client session using the read and write streams from the connection
+                session = await stack.enter_async_context(ClientSession(read, write))
+                # Initialize the session (e.g., perform handshake or setup operations)
+                await session.initialize()
+
+                # Load the MCP tools from the connected server using the adapter function
+                server_tools = await load_mcp_tools(session)
+
+                # Iterate over each tool and add it to the aggregated tools list
+                for tool in server_tools:
+                    print(f"\n🔧 Loaded tool: {tool.name}")
+                    tools.append(tool)
+
+                print(f"\n✅ {len(server_tools)} tools loaded from {server_name}.")
+            except Exception as e:
+                # Handle any errors that occur during connection or tool loading for the server
+                print(f"❌ Failed to connect to server {server_name}: {e}")
+
+        # If no tools were loaded from any server, exit the function
+        if not tools:
+            print("❌ No tools loaded from any server. Exiting.")
+            return
+
+        # Create a React agent using the Google Gemini LLM and the list of aggregated tools
+        agent = create_react_agent(llm, tools)
+
+        # Start the interactive chat loop
+        print("\n🚀 MCP Client Ready! Type 'quit' to exit.")
+        while True:
+            # Prompt the user to enter a query
+            query = input("\nQuery: ").strip()
+            if query.lower() == "quit":
+                # Exit the loop if the user types 'quit'
+                break
+
+            # Invoke the agent asynchronously with the query as the input message
+            response = await agent.ainvoke({"messages": query})
+
+            # Format and print the agent's response as nicely formatted JSON
+            print("\nResponse:")
+            try:
+                formatted = json.dumps(response, indent=2, cls=CustomEncoder)
+                print(formatted)
+            except Exception:
+                # If JSON formatting fails, simply print the raw response
+                print(str(response))
+
+# ---------------------------
+# Entry Point
+# ---------------------------
+if __name__ == "__main__":
+    # Run the asynchronous run_agent function using asyncio's event loop
+    asyncio.run(run_agent())
+
+
+
+================================================
+FILE: LICENSE
+================================================
+This project is licensed under the GNU General Public License v3.0.
+
+You can find the full text of the license at: https://www.gnu.org/licenses/gpl-3.0.html
+
+ADDITIONAL DISCLAIMER:
+
+THIS SOFTWARE IS PROVIDED "AS IS," WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NON-INFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+BY USING THIS SOFTWARE, YOU AGREE THAT YOU ASSUME ALL RISKS ASSOCIATED WITH ITS USE. YOU ALSO AGREE THAT UNDER NO CIRCUMSTANCES WILL YOU ATTEMPT TO HOLD THE AUTHORS LIABLE FOR ANY OUTCOME RELATED TO THE USE OF THIS SOFTWARE.
+
+
+================================================
+FILE: main.py
+================================================
+def main():
+    print("Hello from mcp-client!")
+
+
+if __name__ == "__main__":
+    main()
+
+
+
+================================================
+FILE: requirements.txt
+================================================
+altair==5.5.0
+annotated-types==0.7.0
+anyio==4.8.0
+attrs==25.3.0
+blinker==1.9.0
+cachetools==5.5.2
+certifi==2025.1.31
+charset-normalizer==3.4.1
+click==8.1.8
+filetype==1.2.0
+gitdb==4.0.12
+GitPython==3.1.44
+google-ai-generativelanguage==0.6.15
+google-api-core==2.24.2
+google-api-python-client==2.165.0
+google-auth==2.38.0
+google-auth-httplib2==0.2.0
+google-genai==1.5.0
+google-generativeai==0.8.4
+googleapis-common-protos==1.69.2
+grpcio==1.71.0
+grpcio-status==1.71.0
+h11==0.14.0
+httpcore==1.0.7
+httplib2==0.22.0
+httpx==0.28.1
+httpx-sse==0.4.0
+idna==3.10
+Jinja2==3.1.6
+jsonpatch==1.33
+jsonpointer==3.0.0
+jsonschema==4.23.0
+jsonschema-specifications==2024.10.1
+langchain==0.3.21
+langchain-core==0.3.46
+langchain-google-genai==2.0.10
+langchain-mcp-adapters==0.0.5
+langchain-text-splitters==0.3.7
+langgraph==0.3.18
+langgraph-checkpoint==2.0.21
+langgraph-prebuilt==0.1.3
+langgraph-sdk==0.1.58
+langsmith==0.3.18
+MarkupSafe==3.0.2
+mcp==1.4.1
+mcp-client @ file:///Users/theailanguage/mcp/clients/mcp-client
+msgpack==1.1.0
+narwhals==1.34.1
+nest-asyncio==1.6.0
+numpy==2.2.4
+orjson==3.10.15
+ormsgpack==1.9.1
+packaging==24.2
+pandas==2.2.3
+pillow==11.1.0
+proto-plus==1.26.1
+protobuf==5.29.4
+pyarrow==19.0.1
+pyasn1==0.6.1
+pyasn1_modules==0.4.1
+pydantic==2.10.6
+pydantic-settings==2.8.1
+pydantic_core==2.27.2
+pydeck==0.9.1
+pyparsing==3.2.1
+python-dateutil==2.9.0.post0
+python-dotenv==1.0.1
+pytz==2025.2
+PyYAML==6.0.2
+referencing==0.36.2
+requests==2.32.3
+requests-toolbelt==1.0.0
+rpds-py==0.24.0
+rsa==4.9
+six==1.17.0
+smmap==5.0.2
+sniffio==1.3.1
+SQLAlchemy==2.0.39
+sse-starlette==2.2.1
+starlette==0.46.1
+streamlit==1.44.1
+tenacity==9.0.0
+toml==0.10.2
+tornado==6.4.2
+tqdm==4.67.1
+typing-inspection==0.4.0
+typing_extensions==4.12.2
+tzdata==2025.2
+uritemplate==4.1.1
+urllib3==2.3.0
+uvicorn==0.34.0
+websockets==14.2
+xxhash==3.5.0
+zstandard==0.23.0
+
+
+
+================================================
+FILE: streamlit_client_sse.py
+================================================
+#!/usr/bin/env python
+"""
+streamlit_client_sse.py
+
+*********************************************
+WARNING! - 
+CODE NOT FULLY IMPLEMENTED, 
+PLEASE USE AS A STARTING POINT TO EXPLORE 
+*********************************************
+
+This file implements the MCP client using SSE transport for the The AI Language project.
+It is designed for integration with a Streamlit UI. It provides a helper function 
+process_single_query(query, server_url) that:
+
+  - Instantiates an MCP client,
+  - Connects to an MCP server via SSE using the provided server URL,
+  - Processes a query via the Gemini API (and MCP tool calls),
+  - Cleans up the connection, and
+  - Returns the response as a string.
+
+Additionally, an optional interactive chat loop is provided for standalone testing.
+"""
+
+import asyncio
+import os
+import sys
+import json
+from typing import Optional
+
+# ---------------------------
+# MCP Client Imports
+# ---------------------------
+from mcp import ClientSession
+from mcp.client.sse import sse_client
+
+# ---------------------------
+# Gemini SDK Imports
+# ---------------------------
+from google import genai
+from google.genai import types
+from google.genai.types import Tool, FunctionDeclaration, GenerateContentConfig
+
+# ---------------------------
+# Environment Setup
+# ---------------------------
+from dotenv import load_dotenv
+load_dotenv()  # Loads env variables such as GEMINI_API_KEY
+
+# ---------------------------
+# Helper Functions for Schema and Tool Conversion
+# ---------------------------
+def clean_schema(schema):
+    """
+    Recursively remove 'title' fields from a JSON schema.
+    """
+    if isinstance(schema, dict):
+        schema.pop("title", None)
+        if "properties" in schema and isinstance(schema["properties"], dict):
+            for key in schema["properties"]:
+                schema["properties"][key] = clean_schema(schema["properties"][key])
+    return schema
+
+def convert_mcp_tools_to_gemini(mcp_tools):
+    """
+    Convert MCP tool definitions into Gemini-compatible tool declarations.
+    """
+    gemini_tools = []
+    for tool in mcp_tools:
+        parameters = clean_schema(tool.inputSchema)
+        function_declaration = FunctionDeclaration(
+            name=tool.name,
+            description=tool.description,
+            parameters=parameters
+        )
+        gemini_tool = Tool(function_declarations=[function_declaration])
+        gemini_tools.append(gemini_tool)
+    return gemini_tools
+
+# ---------------------------
+# MCPClient Class for SSE
+# ---------------------------
+class MCPClient:
+    def __init__(self):
+        """
+        Initialize the MCP client.
+        Sets up placeholders for the MCP session and connection context, 
+        and instantiates the Gemini API client with the API key.
+        """
+        self.session: Optional[ClientSession] = None
+        self._streams_context = None  # For managing the SSE connection lifecycle
+        self._session_context = None  # For managing the MCP session
+        gemini_api_key = os.getenv("GEMINI_API_KEY")
+        if not gemini_api_key:
+            raise ValueError("GEMINI_API_KEY not found. Please add it to your .env file.")
+        self.genai_client = genai.Client(api_key=gemini_api_key)
+
+    async def connect_to_sse_server(self, server_url: str):
+        """
+        Connects to an MCP server using SSE.
+        - Opens an SSE connection via sse_client.
+        - Creates and initializes an MCP ClientSession.
+        - Retrieves the available tools and converts them for Gemini.
+        """
+        self._streams_context = sse_client(url=server_url)
+        streams = await self._streams_context.__aenter__()
+        self._session_context = ClientSession(*streams)
+        self.session = await self._session_context.__aenter__()
+        await self.session.initialize()
+        print("Initialized SSE client...")
+        print("Listing tools...")
+        response = await self.session.list_tools()
+        tools = response.tools
+        print("\nConnected to server with tools:", [tool.name for tool in tools])
+        self.function_declarations = convert_mcp_tools_to_gemini(tools)
+
+    async def cleanup(self):
+        """
+        Closes all open contexts to clean up network resources.
+        """
+        if self._session_context:
+            await self._session_context.__aexit__(None, None, None)
+        if self._streams_context:
+            await self._streams_context.__aexit__(None, None, None)
+
+    async def process_query(self, query: str) -> str:
+        """
+        Processes a user query using the Gemini API and MCP tool calls.
+        Steps:
+          1. Formats the query as a Gemini Content object.
+          2. Generates content through the Gemini API.
+          3. If a tool call is requested, executes it and re-invokes Gemini.
+          4. Returns the final aggregated text.
+        """
+        user_prompt_content = types.Content(
+            role='user',
+            parts=[types.Part.from_text(text=query)]
+        )
+        response = self.genai_client.models.generate_content(
+            model='gemini-2.0-flash-001',
+            contents=[user_prompt_content],
+            config=GenerateContentConfig(
+                tools=self.function_declarations,
+            ),
+        )
+        final_text = []
+        for candidate in response.candidates:
+            if candidate.content.parts:
+                for part in candidate.content.parts:
+                    if part.function_call:
+                        tool_name = part.function_call.name
+                        tool_args = part.function_call.args
+                        print(f"\n[Gemini requested tool call: {tool_name} with args {tool_args}]")
+                        try:
+                            result = await self.session.call_tool(tool_name, tool_args)
+                            function_response = {"result": result.content}
+                        except Exception as e:
+                            function_response = {"error": str(e)}
+                        function_response_part = types.Part.from_function_response(
+                            name=tool_name,
+                            response=function_response
+                        )
+                        function_response_content = types.Content(
+                            role='tool',
+                            parts=[function_response_part]
+                        )
+                        response = self.genai_client.models.generate_content(
+                            model='gemini-2.0-flash-001',
+                            contents=[
+                                user_prompt_content,
+                                part,
+                                function_response_content,
+                            ],
+                            config=GenerateContentConfig(
+                                tools=self.function_declarations,
+                            ),
+                        )
+                        final_text.append(response.candidates[0].content.parts[0].text)
+                    else:
+                        final_text.append(part.text)
+        return "\n".join(final_text)
+
+# ---------------------------
+# Helper Function for Streamlit UI Integration
+# ---------------------------
+async def process_single_query(query: str, server_url: str) -> str:
+    """
+    Processes a single query using the SSE client.
+    
+    Steps:
+      - Instantiates an MCPClient.
+      - Connects to the SSE server using the provided server URL.
+      - Invokes the process_query method to process the query.
+      - Cleans up the connection.
+      - Returns the final response.
+    
+    Args:
+        query (str): The user query.
+        server_url (str): The SSE server URL.
+    
+    Returns:
+        str: The processed response.
+    """
+    client = MCPClient()
+    try:
+        await client.connect_to_sse_server(server_url)
+        response = await client.process_query(query)
+        return response
+    except Exception as e:
+        return f"Error processing query via SSE: {e}"
+    finally:
+        await client.cleanup()
+
+# ---------------------------
+# Optional: Standalone Interactive Chat Loop for Testing
+# ---------------------------
+async def interactive_chat_loop():
+    if len(sys.argv) < 2:
+        print("Usage: python streamlit_client_sse.py <server_url>")
+        sys.exit(1)
+    server_url = sys.argv[1]
+    client = MCPClient()
+    try:
+        await client.connect_to_sse_server(server_url)
+        print("\nMCP SSE Client Ready! Type 'quit' to exit.")
+        while True:
+            query = input("\nQuery: ").strip()
+            if query.lower() == "quit":
+                break
+            response = await client.process_query(query)
+            print("\nResponse:")
+            print(response)
+    finally:
+        await client.cleanup()
+
+if __name__ == "__main__":
+    asyncio.run(interactive_chat_loop())
+
+
+================================================
+FILE: streamlit_client_stdio.py
+================================================
+#!/usr/bin/env python
+"""
+streamlit_client_stdio.py
+
+This file implements a LangChain MCP client that:
+  - Loads configuration from a JSON file specified by the THEAILANGUAGE_CONFIG environment variable.
+  - Connects to one or more MCP servers defined in the config.
+  - Loads available MCP tools from each connected server.
+  - Uses the Google Gemini API (via LangChain) to create a React agent with access to all tools.
+  - Runs an interactive chat loop where user queries are processed by the agent.
+
+Detailed explanations:
+  - Retries (max_retries=2): If an API call fails due to transient issues (e.g., timeouts), it will retry up to 2 times.
+  - Temperature (set to 0): A value of 0 means fully deterministic output; increase this for more creative responses.
+  - Environment Variable: THEAILANGUAGE_CONFIG should point to a config JSON that defines all MCP servers.
+"""
+
+import asyncio                        # For asynchronous operations
+import os                             # To access environment variables and file paths
+import sys                            # For system-specific parameters and error handling
+import json                           # For reading and writing JSON data
+from contextlib import AsyncExitStack # For managing multiple asynchronous context managers
+
+# ---------------------------
+# MCP Client Imports
+# ---------------------------
+from mcp import ClientSession, StdioServerParameters  # For managing MCP client sessions and server parameters
+from mcp.client.stdio import stdio_client             # For establishing a stdio connection to an MCP server
+
+# ---------------------------
+# Agent and LLM Imports
+# ---------------------------
+from langchain_mcp_adapters.tools import load_mcp_tools  # Adapter to convert MCP tools to LangChain compatible tools
+from langgraph.prebuilt import create_react_agent        # Function to create a prebuilt React agent using LangGraph
+from langchain_google_genai import ChatGoogleGenerativeAI  # Wrapper for the Google Gemini API via LangChain
+
+# ---------------------------
+# Environment Setup
+# ---------------------------
+from dotenv import load_dotenv
+load_dotenv()  # Load environment variables from a .env file (e.g., GOOGLE_API_KEY)
+
+# ---------------------------
+# Custom JSON Encoder for LangChain objects
+# ---------------------------
+class CustomEncoder(json.JSONEncoder):
+    """
+    Custom JSON encoder to handle non-serializable objects returned by LangChain.
+    If the object has a 'content' attribute (such as HumanMessage or ToolMessage), serialize it accordingly.
+    """
+    def default(self, o):
+        # Check if the object has a 'content' attribute
+        if hasattr(o, "content"):
+            # Return a dictionary containing the type and content of the object
+            return {"type": o.__class__.__name__, "content": o.content}
+        # Otherwise, use the default serialization
+        return super().default(o)
+
+# ---------------------------
+# Function: read_config_json
+# ---------------------------
+def read_config_json():
+    """
+    Reads the MCP server configuration JSON.
+
+    Priority:
+      1. Try to read the path from the THEAILANGUAGE_CONFIG environment variable.
+      2. If not set, fallback to a default file 'theailanguage_config.json' in the same directory.
+
+    Returns:
+        dict: Parsed JSON content with MCP server definitions.
+    """
+    # Attempt to get the config file path from the environment variable
+    config_path = os.getenv("THEAILANGUAGE_CONFIG")
+
+    if not config_path:
+        # If environment variable is not set, use a default config file in the same directory as this script
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        config_path = os.path.join(script_dir, "theailanguage_config.json")
+        print(f"⚠️  THEAILANGUAGE_CONFIG not set. Falling back to: {config_path}")
+
+    try:
+        # Open and read the JSON config file
+        with open(config_path, "r") as f:
+            return json.load(f)
+    except Exception as e:
+        # If reading fails, print an error and exit the program
+        print(f"❌ Failed to read config file at '{config_path}': {e}")
+        sys.exit(1)
+
+
+# ---------------------------
+# Main Function: run_agent
+# ---------------------------
+async def run_agent(query: str) -> str:
+    """
+    Connects to all MCP servers defined in the configuration, loads their tools, creates a unified React agent,
+    and starts an interactive loop to query the agent.
+    """
+    # ---------------------------
+    # Google Gemini LLM Instantiation
+    # ---------------------------
+    llm = ChatGoogleGenerativeAI(
+        model="gemini-2.0-flash",             # Specify the Google Gemini model variant to use
+        temperature=0,                            # Set temperature to 0 for deterministic responses
+        max_retries=2,                            # Set maximum retries for API calls to 2 in case of transient errors
+        google_api_key=os.getenv("GOOGLE_API_KEY")  # Retrieve the Google API key from environment variables
+    )
+
+    config = read_config_json()  # Load MCP server configuration from the JSON file
+    mcp_servers = config.get("mcpServers", {})  # Retrieve the MCP server definitions from the config
+    if not mcp_servers:
+        print("❌ No MCP servers found in the configuration.")
+        return
+
+    tools = []  # Initialize an empty list to hold all the tools from the connected servers
+
+    # Use AsyncExitStack to manage and cleanly close multiple asynchronous resources
+    async with AsyncExitStack() as stack:
+        # Iterate over each MCP server defined in the configuration
+        for server_name, server_info in mcp_servers.items():
+            print(f"\n🔗 Connecting to MCP Server: {server_name}...")
+
+            # Create StdioServerParameters using the command and arguments specified for the server
+            server_params = StdioServerParameters(
+                command=server_info["command"],
+                args=server_info["args"]
+            )
+
+            try:
+                # Establish a stdio connection to the server using the server parameters
+                read, write = await stack.enter_async_context(stdio_client(server_params))
+                # Create a client session using the read and write streams from the connection
+                session = await stack.enter_async_context(ClientSession(read, write))
+                # Initialize the session (e.g., perform handshake or setup operations)
+                await session.initialize()
+
+                # Load the MCP tools from the connected server using the adapter function
+                server_tools = await load_mcp_tools(session)
+
+                # Iterate over each tool and add it to the aggregated tools list
+                for tool in server_tools:
+                    print(f"\n🔧 Loaded tool: {tool.name}")
+                    tools.append(tool)
+
+                print(f"\n✅ {len(server_tools)} tools loaded from {server_name}.")
+            except Exception as e:
+                # Handle any errors that occur during connection or tool loading for the server
+                print(f"❌ Failed to connect to server {server_name}: {e}")
+
+        # If no tools were loaded from any server, exit the function
+        if not tools:
+            print("❌ No tools loaded from any server. Exiting.")
+            return
+
+        # Create a React agent using the Google Gemini LLM and the list of aggregated tools
+        agent = create_react_agent(llm, tools)
+
+        # Invoke the agent asynchronously with the query as the input message
+        response = await agent.ainvoke({"messages": query})
+
+        # Format and print the agent's response as nicely formatted JSON
+        print("\nResponse:")
+        try:
+            formatted = json.dumps(response, indent=2, cls=CustomEncoder)
+            print(formatted)
+        except Exception:
+            # If JSON formatting fails, simply print the raw response
+            print(str(response))
+        
+        # If the response is a dict with "messages" list, extract the last AIMessage's content
+        if isinstance(response, dict) and "messages" in response:
+            for message in reversed(response["messages"]):
+                if hasattr(message, "content"):
+                    return message.content
+            return "⚠️ No AI response found in messages"
+
+# ---------------------------
+# Entry Point
+# ---------------------------
+if __name__ == "__main__":
+    # Run the asynchronous run_agent function using asyncio's event loop
+    asyncio.run(run_agent())
+
+
+
+
+================================================
+FILE: streamlit_client_ui.py
+================================================
+# ============================
+# IMPORTS
+# ============================
+
+# Streamlit is the core library used to build the interactive web app UI
+# Install: pip install streamlit
+import streamlit as st
+
+# asyncio is used to run asynchronous I/O, especially for MCP tool communication
+import asyncio
+
+# os provides filesystem interaction like checking if files exist or reading directories
+import os
+
+# json is used to read and write conversation data to JSON files
+import json
+
+# datetime is used to timestamp conversation logs and messages
+import datetime
+
+# nest_asyncio allows nested use of asyncio event loops, useful in interactive notebooks or Streamlit
+# Install: pip install nest_asyncio
+import nest_asyncio
+
+# PIL (Python Imaging Library) is used to load, crop, and style images like the logo
+# Install: pip install pillow
+from PIL import Image, ImageOps, ImageDraw
+
+# HTML components for more advanced customization (not used directly here but imported if needed)
+from streamlit.components.v1 import html
+
+# Allow asyncio event loop reuse (important for Streamlit apps that rerun on input change)
+nest_asyncio.apply()
+
+
+# ============================
+# SESSION STATE INITIALIZATION
+# ============================
+
+# Initialize conversation list if not already present in session state
+if "conversation" not in st.session_state:
+    st.session_state.conversation = []
+
+# Default config dict for selecting between client types and config files
+if "client_config" not in st.session_state:
+    st.session_state.client_config = {
+        "client_type": "STDIO",
+        "server_url": "",
+        "stdio_config": None
+    }
+
+# Placeholder for reusable client object (SSE, not implemented here)
+if "client_instance" not in st.session_state:
+    st.session_state.client_instance = None
+
+# Theme toggle (not used yet, but initialized)
+if "dark_mode" not in st.session_state:
+    st.session_state.dark_mode = False
+
+# List to store logs for user debug/tracing
+if "logs" not in st.session_state:
+    st.session_state.logs = []
+
+# Trigger to identify form submission via Enter key
+if "submit_triggered" not in st.session_state:
+    st.session_state.submit_triggered = False
+
+# Flag to prevent infinite rerun loops after processing a query
+if "query_executed" not in st.session_state:
+    st.session_state.query_executed = False
+
+# Holds the current query to be executed after submission
+if "pending_query" not in st.session_state:
+    st.session_state.pending_query = ""
+
+
+# ============================
+# UTILITY FUNCTIONS
+# ============================
+
+# Run a coroutine in an event loop; fallback for environments like Streamlit
+def run_async_in_event_loop(coro):
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(coro)
+
+    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    return future.result()
+
+# Logging utility: logs messages with timestamp to both console and UI logs
+def add_log(message: str):
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    log_message = f"{timestamp} - {message}"
+    st.session_state.logs.append(log_message)
+    print(log_message)
+
+
+# ============================
+# SIDEBAR: SETTINGS & LOG VIEW
+# ============================
+
+with st.sidebar:
+    st.header("Settings")
+
+    # Client selection (only STDIO is implemented currently)
+    client_type = st.radio("Select Client Type:", options=["STDIO", "SSE (not implemented)"], index=0)
+    st.session_state.client_config["client_type"] = client_type
+    add_log(f"Client type set to: {client_type}")
+
+    # STDIO: Load config.json or fallback to default
+    uploaded_file = st.file_uploader("Upload config.json for STDIO", type="json")
+    if uploaded_file is not None:
+        config_path = "theailanguage_config.json"
+        with open(config_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        st.success("STDIO config saved as theailanguage_config.json")
+        st.session_state.client_config["stdio_config"] = config_path
+        add_log(f"STDIO config uploaded and saved as: {config_path}")
+    else:
+        default_config = "theailanguage_config.json"
+        if os.path.exists(default_config):
+            st.info(f"Using default config: {default_config}")
+            st.session_state.client_config["stdio_config"] = default_config
+            add_log(f"Using default STDIO config: {default_config}")
+        else:
+            st.warning("No STDIO config provided and default file 'theailanguage_config.json' not found.")
+            add_log("No STDIO config found.")
+
+    st.markdown("---")
+    st.header("Load Conversation")
+
+    # List and allow loading previous conversations
+    conversations_dir = "conversations"
+    os.makedirs(conversations_dir, exist_ok=True)
+    conversation_files = os.listdir(conversations_dir)
+    if conversation_files:
+        for filename in conversation_files:
+            filepath = os.path.join(conversations_dir, filename)
+            with open(filepath, "r") as f:
+                conv = json.load(f)
+            preview = conv[0]["message"][:20] if conv else "No message"
+            if st.button(f"Load {filename}"):
+                st.session_state.conversation = conv
+                st.success(f"Loaded conversation from {filename}")
+                add_log(f"Loaded conversation from {filename}")
+    else:
+        st.info("No saved conversations found.")
+
+    st.markdown("---")
+    with st.expander("Log Output"):
+        st.text_area("Logs", "\n".join(st.session_state.logs), height=200)
+
+
+# ============================
+# MAIN CHAT UI
+# ============================
+
+# Render circular logo and title
+col1, col2 = st.columns([1, 6])
+with col1:
+    raw_logo = Image.open("assets/logo.jpg")
+    size = min(raw_logo.size)
+    mask = Image.new('L', (size, size), 0)
+    draw = ImageDraw.Draw(mask)
+    draw.ellipse((0, 0, size, size), fill=255)
+    circular_logo = ImageOps.fit(raw_logo, (size, size), centering=(0.5, 0.5))
+    circular_logo.putalpha(mask)
+    st.image(circular_logo, use_container_width=True)
+
+with col2:
+    st.title("The AI Language - MCP Client")
+
+# Render YouTube call to action as clickable link
+st.markdown(
+    "[**Subscribe to our YouTube – Get Free Access to Code. Click Here!**](https://youtube.com/@theailanguage?sub_confirmation=1)",
+    unsafe_allow_html=True
+)
+
+# Show past conversation
+for msg in st.session_state.conversation:
+    timestamp = msg.get("timestamp", "")
+    sender = msg.get("sender", "")
+    message = msg.get("message", "")
+    st.markdown(f"**[{timestamp}] {sender}:** {message}")
+
+# Callback function: sets the submit_triggered flag when enter is pressed
+def submit_on_enter():
+    if st.session_state.query_input.strip():
+        st.session_state.submit_triggered = True
+        st.session_state.pending_query = st.session_state.query_input
+
+# Input box: on pressing enter, triggers the callback
+st.text_input(
+    "Your Query:",
+    key="query_input",
+    placeholder="Type your query here",
+    on_change=submit_on_enter
+)
+
+# Buttons for sending message, starting new conversation, and saving conversation
+send_button = st.button("Send")
+new_conv_button = st.button("\U0001F4DD New Conversation")
+save_conv_button = st.button("\U0001F4BE Save Conversation")
+
+
+# ============================
+# CORE LOGIC FOR QUERY HANDLING
+# ============================
+
+# Async function that uses the STDIO backend to fetch a response
+async def process_query_stdio(query: str) -> str:
+    add_log("Processing query in STDIO mode.")
+    try:
+        from streamlit_client_stdio import run_agent
+    except ImportError as e:
+        add_log(f"Error importing run_agent: {e}")
+        return f"Error importing run_agent: {e}"
+
+    result = await run_agent(query)
+    add_log("STDIO query processed.")
+    return result
+
+# Append user and assistant messages, and mark query executed
+async def handle_query(query: str):
+    if query.strip().lower() == "quit":
+        st.session_state.conversation = []
+        add_log("Conversation reset (quit command).")
+    else:
+        user_ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        st.session_state.conversation.append({
+            "sender": "User",
+            "message": query,
+            "timestamp": user_ts
+        })
+        add_log(f"User query appended: {query}")
+        response_text = await process_query_stdio(query)
+        st.session_state.conversation.append({
+            "sender": "MCP",
+            "message": response_text,
+            "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        })
+        add_log("MCP response appended to conversation.")
+        st.session_state.query_executed = True
+
+
+# ============================
+# MAIN TRIGGER LOGIC
+# ============================
+
+# Check for send button or enter key press, and ensure rerun doesn't loop
+if (send_button or st.session_state.submit_triggered) and not st.session_state.query_executed:
+    query = st.session_state.pending_query.strip()
+    if query:
+        run_async_in_event_loop(handle_query(query))
+        st.session_state.submit_triggered = False
+
+# Rerun Streamlit app after query completes to refresh UI
+if st.session_state.query_executed:
+    st.session_state.query_executed = False
+    st.rerun()
+
+# New conversation
+if new_conv_button:
+    st.session_state.conversation = []
+    add_log("New conversation started.")
+    st.rerun()
+
+# Save conversation to a file
+if save_conv_button:
+    conversations_dir = "conversations"
+    os.makedirs(conversations_dir, exist_ok=True)
+    filename = f"conversation_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}.json"
+    filepath = os.path.join(conversations_dir, filename)
+    with open(filepath, "w") as f:
+        json.dump(st.session_state.conversation, f, indent=2)
+    add_log(f"Conversation saved as {filename}.")
+    st.success(f"Conversation saved as {filename}")
+
+
+
+================================================
+FILE: theailanguage_config.json
+================================================
+{
+    "mcpServers": {
+        "terminal_server": {
+            "command": "docker",
+            "args": [
+                "run",
+                "-i",
+                "--rm",
+                "--init",
+                "-e",
+                "DOCKER_CONTAINER=true",
+                "-v",
+                "/Users/theailanguage/mcp/workspace:/root/mcp/workspace",
+                "terminal_server_docker"
+            ]
+        },
+        "fetch": {
+            "command": "docker",
+            "args": [
+                "run",
+                "-i",
+                "--rm",
+                "mcp_fetch_server_test"
+            ]
+        }
+    }
+}
+
+
+================================================
+FILE: .python-version
+================================================
+3.13
+
+
+
+
+================================================
+FILE: conversations/conversation_20250412104241.json
+================================================
+[
+  {
+    "sender": "User",
+    "message": "hi",
+    "timestamp": "2025-04-12 10:41:11"
+  },
+  {
+    "sender": "MCP",
+    "message": "Hi! How can I help you today?",
+    "timestamp": "2025-04-12 10:41:15"
+  }
+]
+
+
+================================================
+FILE: conversations/conversation_20250412125618.json
+================================================
+[
+  {
+    "sender": "User",
+    "message": "Hi",
+    "timestamp": "2025-04-12 12:52:35"
+  },
+  {
+    "sender": "MCP",
+    "message": "Hi there! How can I help you today?",
+    "timestamp": "2025-04-12 12:52:38"
+  },
+  {
+    "sender": "User",
+    "message": "Create a file streamlit_success.txt with the text \"streamlit success\" using the run command tool",
+    "timestamp": "2025-04-12 12:54:55"
+  },
+  {
+    "sender": "MCP",
+    "message": "I have created the file streamlit_success.txt with the text \"streamlit success\".",
+    "timestamp": "2025-04-12 12:54:59"
+  }
+]
+

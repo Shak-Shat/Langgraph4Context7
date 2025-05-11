@@ -1,0 +1,869 @@
+Directory structure:
+└── lalanikarim-langgraph-mcp-pipeline/
+    ├── README.md
+    ├── ai-image-gen-pipeline.py
+    ├── app.py
+    ├── graph.py
+    ├── LICENSE
+    ├── workflow.json
+    └── .python-version
+
+================================================
+FILE: README.md
+================================================
+# AI Image Generation Pipeline with LangGraph and MCP
+
+This project demonstrates the use of the Model Context Protocol (MCP) with LangGraph to create workflows that generate prompts and AI-generated images based on a given topic. The project consists of three main files: `app.py`, `graph.py`, and `ai-image-gen-pipeline.py`. Each file showcases different aspects of using MCP with LangGraph, including the [LangGraph Functional API](https://langchain-ai.github.io/langgraph/reference/func/), [Graph API](https://langchain-ai.github.io/langgraph/), and integration within [Open WebUI Pipelines](https://docs.openwebui.com/pipelines/). These scripts utilize the [Comfy MCP Server](https://pypi.org/project/comfy-mcp-server/) to generate AI image prompts and AI images.
+
+## Files
+
+### app.py
+
+This script demonstrates the use of the LangGraph Functional API along with Human-in-the-Loop (HIL) interaction to generate prompts and AI-generated images based on a given topic. The workflow includes user feedback to approve generated prompts before generating the corresponding image.
+
+#### Key Components:
+- **Dependencies**: `aiosqlite`, `langgraph`, `langgraph-checkpoint-sqlite`, `mcp[cli]`.
+- **Functions**:
+  - `run_tool(tool: str, args: dict) -> str`: Runs a tool using the MCP server.
+  - `generate_prompt(topic: str) -> str`: Generates a prompt for a given topic.
+  - `generate_image(prompt: str) -> str`: Generates an image based on a given prompt.
+  - `get_feedback(topic: str, prompt: str) -> str`: Collects user feedback on the generated prompt.
+  - `workflow_func(saver)`: Defines the workflow function with checkpointing.
+- **Main Function**: 
+  - Parses command-line arguments to get thread id and optionally the topic and feedback.
+  - Initializes the workflow and runs it, based on the provided input.
+
+### graph.py
+
+This script demonstrates the use of the LangGraph Graph API along with Human-in-the-Loop (HIL) interaction to generate prompts and AI-generated images based on a given topic. The workflow includes user feedback to approve generated prompts before generating the corresponding image.
+
+#### Key Components:
+- **Dependencies**: `aiosqlite`, `langgraph`, `langgraph-checkpoint-sqlite`, `mcp[cli]`.
+- **Functions**:
+  - `run_tool(tool: str, args: dict) -> str`: Runs a tool using the MCP server.
+  - `generate_prompt(state: State) -> State`: Generates a prompt for a given topic and updates the state.
+  - `generate_image(state: State) -> State`: Generates an image based on a given prompt and updates the state.
+  - `prompt_feedback(state: State) -> State`: Collects user feedback on the generated prompt.
+  - `process_feedback(state: State) -> str`: Processes the user feedback to determine the next step in the workflow.
+- **Main Function**: 
+  - Parses command-line arguments to get the thread ID, topic, and feedback.
+  - Initializes the state graph and runs it based on the provided input.
+
+### ai-image-gen-pipeline.py
+
+This script demonstrates the integration of LangGraph API with Human-in-the-Loop (HIL) within [Open WebUI Pipelines](https://docs.openwebui.com/pipelines/). It defines a pipeline for generating prompts and images using MCP, including nodes for generating prompts, processing feedback, and generating images.
+
+#### Key Components:
+- **Dependencies**: `aiosqlite`, `langgraph`, `langgraph-checkpoint-sqlite`, `mcp[cli]`.
+- **Classes**:
+  - `Pipeline`: Defines the pipeline with nodes for generating prompts, processing feedback, and generating images.
+    - `Valves(BaseModel)`: Contains environment variables for MCP server configuration.
+- **Functions**:
+  - `inlet(body: dict, user: dict) -> dict`: Processes incoming messages.
+  - `outlet(body: dict, user: dict) -> dict`: Processes outgoing messages.
+  - `pipe(user_message: str, model_id: str, messages: List[dict], body: dict) -> Union[str, Generator, Iterator]`: Defines the main pipeline logic.
+  - `run_tool(tool: str, args: dict) -> str`: Runs a tool using the MCP server.
+  - `generate_prompt(state: State) -> State`: Generates a prompt for a given topic and updates the state.
+  - `generate_image(state: State) -> State`: Generates an image based on a given prompt and updates the state.
+  - `prompt_feedback(state: State) -> State`: Collects user feedback on the generated prompt.
+  - `process_feedback(state: State) -> str`: Processes the user feedback to determine the next step in the workflow.
+
+## Usage
+
+1. **Install Dependencies**: Ensure you have the required dependencies installed.
+   ```bash
+   pip install aiosqlite langgraph langgraph-checkpoint-sqlite mcp[cli] comfy-mcp-server
+   ```
+
+2. **Run the Application**:
+   - For `app.py`:
+     ```bash
+     python app.py --topic "Your topic here"
+     ```
+   - For `graph.py`:
+     ```bash
+     python graph.py --thread_id "your-thread-id" --topic "Your topic here" 
+     ```
+
+     For feedback:
+     ```bash
+     python graph.py --thread_id "your-thread-id" --feedback "y/n" 
+     ```
+
+3. **Using `uv` Utility**: You can also launch `app.py` and `graph.py` using the [uv](https://docs.astral.sh/uv/) utility. This utility manages Python version and dependency management, so there is no need to preinstall dependencies.
+   - For `app.py`:
+     ```bash
+     uv run app.py --topic "Your topic here"
+     ```
+   - For `graph.py`:
+     ```bash
+     uv run graph.py --thread_id "your-thread-id" --topic "Your topic here" 
+     ```
+
+     For feedback:
+     ```bash
+     uv run graph.py --thread_id "your-thread-id" --feedback "y/n" 
+     ```
+
+4. **Environment Variables**: Set the necessary environment variables for MCP server configuration.
+   ```bash
+   export COMFY_URL="comfy-url"
+   export COMFY_URL_EXTERNAL="comfy-url-external"
+   export COMFY_WORKFLOW_JSON_FILE="path-to-workflow-json-file"
+   export PROMPT_NODE_ID="prompt-node-id"
+   export OUTPUT_NODE_ID="output-node-id"
+   export OLLAMA_API_BASE="ollama-api-base"
+   export PROMPT_LLM="prompt-llm"
+   ```
+
+## Contributing
+
+Feel free to contribute to this project by submitting pull requests or issues. Ensure that any changes are well-documented and tested.
+
+## License
+
+This project is licensed under the MIT License.
+
+
+
+================================================
+FILE: ai-image-gen-pipeline.py
+================================================
+from typing import List, Union, Generator, Iterator
+from pydantic import BaseModel
+import os
+from langgraph.types import interrupt, Command
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+import asyncio
+from typing_extensions import TypedDict
+from langgraph.graph import StateGraph, START, END
+
+
+class State(TypedDict):
+    topic: str
+    prompt: str
+    user_feedback: str
+    image_url: str
+
+
+class Pipeline:
+    class Valves(BaseModel):
+        COMFY_URL: str
+        COMFY_URL_EXTERNAL: str
+        COMFY_WORKFLOW_JSON_FILE: str
+        PROMPT_NODE_ID: str
+        OUTPUT_NODE_ID: str
+        OLLAMA_API_BASE: str
+        PROMPT_LLM: str
+        pass
+
+    def __init__(self):
+        self.name = "Comfy MCP Langgraph HIL Pipeline"
+        self.valves = self.Valves(
+            **{
+                "COMFY_URL": os.getenv("COMFY_URL", "comfy-url"),
+                "COMFY_URL_EXTERNAL": os.getenv("COMFY_URL_EXTERNAL",
+                                                "comfy-url-external"),
+                "COMFY_WORKFLOW_JSON_FILE": os.getenv(
+                    "COMFY_WORKFLOW_JSON_FILE",
+                    "path-to-workflow-json-file"),
+                "PROMPT_NODE_ID": os.getenv("PROMPT_NODE_ID",
+                                            "prompt-node-id"),
+                "OUTPUT_NODE_ID": os.getenv("OUTPUT_NODE_ID",
+                                            "output-node-id"),
+                "OLLAMA_API_BASE": os.getenv("OLLAMA_API_BASE", "ollama-api-base"),
+                "PROMPT_LLM": os.getenv("PROMPT_LLM", "prompt-llm")
+            }
+        )
+        pass
+
+    async def on_startup(self):
+        print(f"on_startup:{__name__}")
+        self.server_params = StdioServerParameters(
+            command="uvx",
+            args=["comfy-mcp-server"],
+            env={
+                "COMFY_URL": self.valves.COMFY_URL,
+                "COMFY_URL_EXTERNAL": self.valves.COMFY_URL_EXTERNAL,
+                "COMFY_WORKFLOW_JSON_FILE": self.valves.COMFY_WORKFLOW_JSON_FILE,
+                "PROMPT_NODE_ID": self.valves.PROMPT_NODE_ID,
+                "OUTPUT_NODE_ID": self.valves.OUTPUT_NODE_ID,
+                "OUTPUT_MODE": "url",
+                "OLLAMA_API_BASE": self.valves.OLLAMA_API_BASE,
+                "PROMPT_LLM": self.valves.PROMPT_LLM,
+                "PATH": os.getenv("PATH"),
+            }
+        )
+        builder = StateGraph(State)
+        builder.add_node("generate_prompt", self.generate_prompt)
+        builder.add_node("prompt_feedback", self.prompt_feedback)
+        builder.add_node("generate_image", self.generate_image)
+        builder.add_edge(START, "generate_prompt")
+        builder.add_edge("generate_prompt", "prompt_feedback")
+        builder.add_conditional_edges("prompt_feedback", self.process_feedback)
+        builder.add_edge("generate_image", END)
+        self.builder = builder
+        pass
+
+    async def on_shutdown(self):
+        print(f"on_shutdown:{__name__}")
+        pass
+
+    async def on_valves_updated(self):
+        pass
+
+    async def inlet(self, body: dict, user: dict) -> dict:
+        print(f"inlet:{__name__}")
+
+        print(body)
+        print(user)
+
+        return body
+
+    async def outlet(self, body: dict, user: dict) -> dict:
+        print(f"outlet:{__name__}")
+
+        messages = body["messages"]
+        last_message = messages[-1]
+        if (last_message["role"] == "assistant"
+                and last_message["content"][:5] == "data:"):
+            image_url = last_message["content"]
+            content = messages[-2]["content"]
+            last_message["content"] = f"Generated: {content}"
+            last_message["files"] = [{"type": "image", "url": image_url}]
+            messages[-1] = last_message
+            body["messages"] = messages
+
+        return body
+
+    def pipe(
+        self, user_message: str, model_id: str, messages: List[dict], body: dict
+    ) -> Union[str, Generator, Iterator]:
+        print(f"pipe:{__name__}")
+
+        if body.get("title", False):
+            return user_message
+
+        thread_id = body.get("id")
+        config = {
+            "configurable": {
+                "thread_id": thread_id
+            }
+        }
+
+        async def apipe() -> str:
+            async with AsyncSqliteSaver.from_conn_string("checkpoints.sqlite") as saver:
+                graph = self.builder.compile(checkpointer=saver)
+                state = await graph.aget_state(config)
+                next = state.next[0] if len(state.next) > 0 else None
+                response = "Invalid input"
+
+                prompt = {"topic": user_message}
+                if next == "prompt_feedback":
+                    prompt = Command(resume=user_message)
+                async for item in graph.astream(prompt, config):
+                    step = list(item.keys())[0]
+                    print(f"Step: {step}")
+                    if "__interrupt__" in item:
+                        value = item['__interrupt__'][0].value
+                        print(
+                            f"Prompt: {value['prompt']}\n\nAction: {value['action']}")
+                        response = f"Prompt: {value['prompt']}\n\nAction: {value['action']}"
+                    elif "generate_image" in item:
+                        value = item['generate_image']
+                        print(f"Image: {value['image_url']}")
+                        image_url = value['image_url']
+                        if image_url[:4] == 'http' and image_url[-11:] == 'type=output':
+                            response = f"\n![image]({image_url})\n"
+                        else:
+                            response = image_url
+
+                return response
+
+        coro = apipe()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            print("asyncio.run")
+            result = asyncio.run(coro)
+        else:
+            print("loop.run_until_complete")
+            result = loop.run_until_complete(coro)
+
+        return result
+
+    async def run_tool(self, tool: str, args: dict) -> str:
+        async with stdio_client(self.server_params) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                return await session.call_tool(
+                    tool, arguments=args
+                )
+
+    async def generate_prompt(self, state: State) -> State:
+        topic = state["topic"]
+        result = await self.run_tool("generate_prompt", {"topic": topic})
+        # print(f"Tool: generate_prompt, Input: {topic}, Result: {result}")
+        state["prompt"] = result.content[0].text
+        return state
+
+    async def generate_image(self, state: State) -> State:
+        prompt = state["prompt"]
+        result = await self.run_tool("generate_image", {"prompt": prompt})
+        # print(f"Tool: generate_image, Input: {prompt}, Result: {result}")
+        state["image_url"] = result.content[0].text
+        return state
+
+    def prompt_feedback(self, state: State) -> State:
+        state["user_feedback"] = interrupt({
+            "topic": state["topic"],
+            "prompt": state["prompt"],
+            "action": "Do you like this prompt? (y/n)"
+        })
+        return state
+
+    def process_feedback(self, state: State) -> str:
+        user_feedback = state["user_feedback"]
+        if len(user_feedback.strip()) == 0 or user_feedback.lower().strip()[0] == "y":
+            return "generate_image"
+        return "generate_prompt"
+
+
+
+================================================
+FILE: app.py
+================================================
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#     "aiosqlite",
+#     "langgraph",
+#     "langgraph-checkpoint-sqlite==2.0.6",
+#     "mcp[cli]",
+# ]
+# ///
+from langgraph.func import entrypoint, task
+from langgraph.types import interrupt, Command
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+import os
+import asyncio
+import argparse
+import textwrap
+
+server_params = StdioServerParameters(
+    command="uvx",
+    args=["comfy-mcp-server"],
+    env={
+        "COMFY_URL": os.getenv("COMFY_URL"),
+        "COMFY_URL_EXTERNAL": os.getenv("COMFY_URL_EXTERNAL"),
+        "COMFY_WORKFLOW_JSON_FILE": os.getenv("COMFY_WORKFLOW_JSON_FILE"),
+        "PROMPT_NODE_ID": os.getenv("PROMPT_NODE_ID"),
+        "OUTPUT_NODE_ID": os.getenv("OUTPUT_NODE_ID"),
+        "OUTPUT_MODE": "url",
+        "OLLAMA_API_BASE": os.getenv("OLLAMA_API_BASE"),
+        "PROMPT_LLM": os.getenv("PROMPT_LLM"),
+        "PATH": os.getenv("PATH"),
+    }
+)
+
+
+async def run_tool(tool: str, args: dict) -> str:
+    async with stdio_client(server_params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            return await session.call_tool(
+                tool, arguments=args
+            )
+
+
+@task
+async def generate_prompt(topic: str) -> str:
+    result = await run_tool("generate_prompt", {"topic": topic})
+    # print(f"Tool: generate_prompt, Input: {topic}, Result: {result}")
+    return result.content[0].text
+
+
+@task
+async def generate_image(prompt: str) -> str:
+    result = await run_tool("generate_image", {"prompt": prompt})
+    # print(f"Tool: generate_image, Input: {prompt}, Result: {result}")
+    return result.content[0].text
+
+
+@task
+def get_feedback(topic: str, prompt: str) -> str:
+    feedback = interrupt({
+        "topic": topic,
+        "prompt": prompt,
+        "action": "Do you like this prompt (y/n)?",
+    })
+    return feedback
+
+
+def workflow_func(saver):
+    @entrypoint(checkpointer=saver)
+    async def workflow(topic: str) -> dict:
+        """A simple workflow that generates prompts and an ai generated image for a topic."""
+
+        is_approved = "n"
+        while is_approved.lower()[0] != "y":
+            prompt = await generate_prompt(topic)
+            is_approved = await get_feedback(topic, prompt)
+
+        image_url = await generate_image(prompt)
+        return {
+            "topic": topic,
+            "prompt": prompt,
+            "image_url": image_url
+        }
+    return workflow
+
+
+async def main():
+    parser = argparse.ArgumentParser(
+        prog="Comfy UI LangGraph MCP",
+        description="Simple script demonstrating MCP server from LangGraph Functional API with Human-in-the-Loop."
+    )
+    parser.add_argument("thread_id")
+    parser.add_argument("--topic")
+    parser.add_argument("--feedback")
+
+    args = parser.parse_args()
+    topic = args.topic
+    thread_id = args.thread_id
+    feedback = args.feedback
+
+    print(f"{thread_id=}")
+
+    config = {
+        "configurable": {
+            "thread_id": thread_id
+        }
+    }
+
+    prompt = topic
+    async with AsyncSqliteSaver.from_conn_string("checkpoints.sqlite") as saver:
+        workflow = workflow_func(saver)
+        state = await workflow.aget_state(config)
+
+        if state.values is not None and state.values != {}:
+            value = state.values
+            print(textwrap.dedent(f"""\
+            Topic: {value['topic']}
+            Prompt: {value['prompt']}
+            Image: {value['image_url']}
+            """))
+            return
+
+        current_interrupt = state.tasks[0].interrupts[0].value if len(
+            state.tasks) > 0 and len(state.tasks[0].interrupts) > 0 else None
+        if current_interrupt is not None:
+            value = current_interrupt
+            print(textwrap.dedent(f"""\
+            Topic: {value['topic']}
+            Prompt: {value['prompt']}
+            Action: {value['action']}
+            """))
+            if feedback is not None:
+                prompt = Command(resume=feedback)
+            else:
+                return
+
+        if prompt is not None:
+            async for item in workflow.astream(prompt, config, stream_mode="updates"):
+                step = list(item.keys())[0]
+                print(f"Step: {step}")
+                if "workflow" in item:
+                    # print(item)
+                    image_url = item['workflow']['image_url']
+                    print(f"Image URL: {image_url}")
+                if "__interrupt__" in item:
+                    # print(item)
+                    value = item['__interrupt__'][0].value
+                    print(textwrap.dedent(f"""\
+                    Prompt: {value['prompt']}
+                    {value['action']}: 
+                    """))
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+
+
+================================================
+FILE: graph.py
+================================================
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#     "aiosqlite",
+#     "langgraph",
+#     "langgraph-checkpoint-sqlite",
+#     "mcp[cli]",
+# ]
+# ///
+from typing_extensions import TypedDict
+from langgraph.graph import StateGraph, START, END
+from langgraph.types import interrupt, Command
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+from mcp import ClientSession, StdioServerParameters
+from mcp.client.stdio import stdio_client
+import os
+import asyncio
+import argparse
+
+server_params = StdioServerParameters(
+    command="uvx",
+    args=["comfy-mcp-server"],
+    env={
+        "COMFY_URL": os.getenv("COMFY_URL"),
+        "COMFY_URL_EXTERNAL": os.getenv("COMFY_URL_EXTERNAL"),
+        "COMFY_WORKFLOW_JSON_FILE": os.getenv("COMFY_WORKFLOW_JSON_FILE"),
+        "PROMPT_NODE_ID": os.getenv("PROMPT_NODE_ID"),
+        "OUTPUT_NODE_ID": os.getenv("OUTPUT_NODE_ID"),
+        "OUTPUT_MODE": "url",
+        "OLLAMA_API_BASE": os.getenv("OLLAMA_API_BASE"),
+        "PROMPT_LLM": os.getenv("PROMPT_LLM"),
+        "PATH": os.getenv("PATH"),
+    }
+)
+
+
+class State(TypedDict):
+    topic: str
+    prompt: str
+    user_feedback: str
+    image_url: str
+
+
+async def run_tool(tool: str, args: dict) -> str:
+    async with stdio_client(server_params) as (read, write):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            return await session.call_tool(
+                tool, arguments=args
+            )
+
+
+async def generate_prompt(state: State) -> State:
+    topic = state["topic"]
+    result = await run_tool("generate_prompt", {"topic": topic})
+    # print(f"Tool: generate_prompt, Input: {topic}, Result: {result}")
+    state["prompt"] = result.content[0].text
+    return state
+
+
+async def generate_image(state: State) -> State:
+    prompt = state["prompt"]
+    result = await run_tool("generate_image", {"prompt": prompt})
+    # print(f"Tool: generate_image, Input: {prompt}, Result: {result}")
+    state["image_url"] = result.content[0].text
+    return state
+
+
+def prompt_feedback(state: State) -> State:
+    state["user_feedback"] = interrupt({
+        "topic": state["topic"],
+        "prompt": state["prompt"],
+        "action": "Do you like this prompt? (y/n)"
+    })
+    return state
+
+
+def process_feedback(state: State) -> str:
+    user_feedback = state["user_feedback"]
+    if len(user_feedback.strip()) == 0 or user_feedback.lower().strip()[0] == "y":
+        return "generate_image"
+    return "generate_prompt"
+
+
+builder = StateGraph(State)
+builder.add_node("generate_prompt", generate_prompt)
+builder.add_node("prompt_feedback", prompt_feedback)
+builder.add_node("generate_image", generate_image)
+builder.add_edge(START, "generate_prompt")
+builder.add_edge("generate_prompt", "prompt_feedback")
+builder.add_conditional_edges("prompt_feedback", process_feedback)
+builder.add_edge("generate_image", END)
+
+
+async def main():
+    parser = argparse.ArgumentParser(
+        prog="Comfy UI LangGraph MCP",
+        description="Simple script demonstrating MCP server from LangGraph Graph API with Human-in-the-Loop."
+    )
+    parser.add_argument("thread_id")
+    parser.add_argument("--topic", default="A cat holding 'AIMUG' sign")
+    parser.add_argument("--feedback")
+
+    args = parser.parse_args()
+    thread_id = args.thread_id
+    topic = args.topic
+    feedback = args.feedback
+    print(f"{thread_id=}")
+
+    config = {
+        "configurable": {
+            "thread_id": thread_id,
+        }
+    }
+
+    prompt = {"topic": topic}
+    async with AsyncSqliteSaver.from_conn_string("checkpoints.sqlite") as saver:
+        graph = builder.compile(checkpointer=saver)
+        state = await graph.aget_state(config)
+        next = state.next[0] if len(state.next) > 0 else None
+        if next == "prompt_feedback" and feedback is not None:
+            prompt = Command(resume=feedback)
+        async for item in graph.astream(prompt, config):
+            step = list(item.keys())[0]
+            print(f"Step: {step}")
+            if "__interrupt__" in item:
+                value = item['__interrupt__'][0].value
+                print(
+                    f"Prompt: {value['prompt']}\n\nAction: {value['action']}")
+            elif "generate_image" in item:
+                value = item['generate_image']
+                print(f"Image: {value['image_url']}")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+
+
+================================================
+FILE: LICENSE
+================================================
+MIT License
+
+Copyright (c) 2025 Karim Lalani
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+
+================================================
+FILE: workflow.json
+================================================
+{
+  "6": {
+    "inputs": {
+      "text": "tileset, pixalated, 2d, sprites",
+      "clip": [
+        "11",
+        0
+      ]
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "CLIP Text Encode (Positive Prompt)"
+    }
+  },
+  "8": {
+    "inputs": {
+      "samples": [
+        "13",
+        0
+      ],
+      "vae": [
+        "10",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "9": {
+    "inputs": {
+      "filename_prefix": "ComfyUI",
+      "images": [
+        "8",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "10": {
+    "inputs": {
+      "vae_name": "ae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load VAE"
+    }
+  },
+  "11": {
+    "inputs": {
+      "clip_name1": "t5xxl_fp8_e4m3fn.safetensors",
+      "clip_name2": "clip_l.safetensors",
+      "type": "flux",
+      "device": "default"
+    },
+    "class_type": "DualCLIPLoader",
+    "_meta": {
+      "title": "DualCLIPLoader"
+    }
+  },
+  "12": {
+    "inputs": {
+      "unet_name": "flux1-dev.safetensors",
+      "weight_dtype": "default"
+    },
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Load Diffusion Model"
+    }
+  },
+  "13": {
+    "inputs": {
+      "noise": [
+        "25",
+        0
+      ],
+      "guider": [
+        "22",
+        0
+      ],
+      "sampler": [
+        "16",
+        0
+      ],
+      "sigmas": [
+        "17",
+        0
+      ],
+      "latent_image": [
+        "27",
+        0
+      ]
+    },
+    "class_type": "SamplerCustomAdvanced",
+    "_meta": {
+      "title": "SamplerCustomAdvanced"
+    }
+  },
+  "16": {
+    "inputs": {
+      "sampler_name": "euler"
+    },
+    "class_type": "KSamplerSelect",
+    "_meta": {
+      "title": "KSamplerSelect"
+    }
+  },
+  "17": {
+    "inputs": {
+      "scheduler": "simple",
+      "steps": 20,
+      "denoise": 1,
+      "model": [
+        "30",
+        0
+      ]
+    },
+    "class_type": "BasicScheduler",
+    "_meta": {
+      "title": "BasicScheduler"
+    }
+  },
+  "22": {
+    "inputs": {
+      "model": [
+        "30",
+        0
+      ],
+      "conditioning": [
+        "26",
+        0
+      ]
+    },
+    "class_type": "BasicGuider",
+    "_meta": {
+      "title": "BasicGuider"
+    }
+  },
+  "25": {
+    "inputs": {
+      "noise_seed": 1113224572589433
+    },
+    "class_type": "RandomNoise",
+    "_meta": {
+      "title": "RandomNoise"
+    }
+  },
+  "26": {
+    "inputs": {
+      "guidance": 3.5,
+      "conditioning": [
+        "6",
+        0
+      ]
+    },
+    "class_type": "FluxGuidance",
+    "_meta": {
+      "title": "FluxGuidance"
+    }
+  },
+  "27": {
+    "inputs": {
+      "width": 512,
+      "height": 512,
+      "batch_size": 1
+    },
+    "class_type": "EmptySD3LatentImage",
+    "_meta": {
+      "title": "EmptySD3LatentImage"
+    }
+  },
+  "30": {
+    "inputs": {
+      "max_shift": 1.15,
+      "base_shift": 0.5,
+      "width": 512,
+      "height": 512,
+      "model": [
+        "12",
+        0
+      ]
+    },
+    "class_type": "ModelSamplingFlux",
+    "_meta": {
+      "title": "ModelSamplingFlux"
+    }
+  }
+}
+
+
+================================================
+FILE: .python-version
+================================================
+3.11
+
+

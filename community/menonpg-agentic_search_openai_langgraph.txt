@@ -1,0 +1,415 @@
+Directory structure:
+└── menonpg-agentic_search_openai_langgraph/
+    ├── README.md
+    ├── agents.py
+    ├── app_gradio.py
+    ├── app_streamlit.py
+    ├── graph.py
+    ├── requirements.txt
+    ├── tools.py
+    ├── .env.example
+    └── samples/
+
+================================================
+FILE: README.md
+================================================
+# Agentic Search with OpenAI and LangGraph
+
+This repository enables AI-powered search and insights generation using LangGraph and OpenAI's GPT-4o, leveraging both Tavily and DuckDuckGo search tools. The project facilitates intelligent web searching and content processing to provide insightful responses based on user queries.
+
+## Table of Contents
+- [Introduction](#introduction)
+- [Features](#features)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Usage](#usage)
+- [Project Structure](#project-structure)
+- [Contributing](#contributing)
+- [License](#license)
+
+## Introduction
+This project integrates various tools and agents to perform web searches and generate insights. It uses LangGraph for state management and OpenAI's GPT-4o for natural language processing. The search functionality is powered by Tavily and DuckDuckGo, providing flexibility and robustness in obtaining information from the web.
+
+## Features
+- **Web Search:** Perform web searches using Tavily or DuckDuckGo.
+- **Content Processing:** Process and extract text from web pages.
+- **Insight Generation:** Generate insights based on the processed content.
+- **State Management:** Use LangGraph for managing states and workflows.
+- **Streamlit and Gradio Interfaces:** User interfaces for interaction.
+
+## Installation
+To get started, clone the repository and install the required dependencies:
+```bash
+git clone https://github.com/yourusername/agentic_search_openai_langgraph.git
+cd agentic_search_openai_langgraph
+pip install -r requirements.txt
+```
+
+## Configuration
+Create a `.env` file in the root directory of the project and add your API keys and other configuration details. You can use the `.env.example` file as a template:
+```bash
+cp .env.example .env
+```
+
+Edit the `.env` file to include your API keys:
+```plaintext
+LANGCHAIN_TRACING_V2=true
+LANGCHAIN_ENDPOINT=https://api.smith.langchain.com
+LANGCHAIN_API_KEY=your_langchain_api_key
+LANGCHAIN_PROJECT=your_langchain_project
+OPENAI_API_KEY=your_openai_api_key
+TAVILY_API_KEY=your_tavily_api_key
+```
+
+### Configuration in `tools.py`
+
+In `tools.py`, you can configure which search tool to use by modifying the `get_tools` function:
+
+```python
+def get_tools():
+    # return [internet_search]   # Uncomment this and comment the line below to use Tavily instead of DuckDuckGo Search.
+    return [internet_search_DDGO, process_content]  # Uncomment this and comment the line above to use DuckDuckGo Search instead of Tavily.
+```
+
+## Usage
+
+### Streamlit Interface
+To run the Streamlit application:
+```bash
+streamlit run app_st.py
+```
+This will launch a web interface where you can enter your query and get insights.
+
+#### Example of Streamlit App in Action
+
+Here is an example of the Streamlit application in action:
+
+![Streamlit App Example](samples/sample_search.png)
+
+
+### Gradio Interface
+To run the Gradio application:
+```bash
+python main.py
+```
+This will launch a Gradio interface for interaction.
+
+## Project Structure
+```
+agentic_search_openai_langgraph
+├── .env.example            # Example environment configuration file.
+├── agents.py               # Defines the agents and their behaviors.
+├── app_steamlit.py         # Streamlit application for user interaction.
+├── graph.py                # Manages the state graph and workflow execution.
+├── app_gradio.py           # Gradio application for user interaction.
+├── readme.md               # Project README file.
+├── requirements.txt        # Python dependencies.
+└── tools.py                # Defines the tools for web searching and content processing.
+```
+
+## Contributing
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+1. Fork the repository.
+2. Create a new branch (`git checkout -b feature-branch`).
+3. Make your changes.
+4. Commit your changes (`git commit -m 'Add some feature'`).
+5. Push to the branch (`git push origin feature-branch`).
+6. Open a Pull Request.
+
+## License
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+
+================================================
+FILE: agents.py
+================================================
+import functools, operator
+from typing import Annotated, Sequence, TypedDict
+
+from dotenv import load_dotenv
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain.agents import AgentExecutor, create_openai_tools_agent
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import BaseMessage, HumanMessage
+from langchain.output_parsers.openai_functions import JsonOutputFunctionsParser
+
+from tools import get_tools
+
+load_dotenv()
+
+# llm = ChatOpenAI(
+#   model="gpt-4-turbo-preview",
+#   temperature=0,
+#   verbose=True
+# )
+llm = ChatOpenAI(
+  model="gpt-4o",
+  temperature=0,
+  verbose=True
+)
+tools = get_tools()
+
+class AgentState(TypedDict):
+    messages: Annotated[Sequence[BaseMessage], operator.add]
+    next: str
+
+def create_agent(llm: ChatOpenAI, tools: list, system_prompt: str):
+  prompt = ChatPromptTemplate.from_messages([
+    ("system", system_prompt),
+    MessagesPlaceholder(variable_name="messages"),
+    MessagesPlaceholder(variable_name="agent_scratchpad"),
+  ])
+  agent = create_openai_tools_agent(llm, tools, prompt)
+  executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
+
+  return executor
+
+def agent_node(state, agent, name):
+  result = agent.invoke(state)
+  return {"messages": [HumanMessage(content=result["output"], name=name)]}
+
+def get_members():
+  return ["Web_Searcher", "Insight_Researcher"]
+
+def create_supervisor():
+  members = get_members()
+  system_prompt = (
+    f"""As a supervisor, your role is to oversee a dialogue between these"
+    " workers: {members}. Based on the user's request,"
+    " determine which worker should take the next action. Each worker is responsible for"
+    " executing a specific task and reporting back their findings and progress. Once all tasks are complete,"
+    " indicate with 'FINISH'.
+    """
+  )
+  options = ["FINISH"] + members
+
+  function_def = {
+    "name": "route",
+    "description": "Select the next role.",
+    "parameters": {
+        "title": "routeSchema",
+        "type": "object",
+        "properties": {"next": {"title": "Next", "anyOf": [{"enum": options}] }},
+        "required": ["next"],
+    },
+  }
+
+  prompt = ChatPromptTemplate.from_messages([
+    ("system", system_prompt),
+    MessagesPlaceholder(variable_name="messages"),
+    ("system", "Given the conversation above, who should act next? Or should we FINISH? Select one of: {options}"),
+  ]).partial(options=str(options), members=", ".join(members))
+
+  supervisor_chain = (prompt | llm.bind_functions(functions=[function_def], function_call="route") | JsonOutputFunctionsParser())
+
+  return supervisor_chain
+
+def create_search_agent():
+  search_agent = create_agent(llm, tools, "You are a web searcher. Search the internet for information.")
+  search_node = functools.partial(agent_node, agent=search_agent, name="Web_Searcher")
+
+  return search_node
+
+def create_insights_researcher_agent():
+  insights_research_agent = create_agent(llm, tools,
+    """You are a Insight Researcher. Do step by step.
+    Based on the provided content first identify the list of topics,
+    then search internet for each topic one by one
+    and finally find insights for each topic one by one.
+    Include the insights and sources in the final response
+    """)
+  insights_researcher_node = functools.partial(agent_node, agent=insights_research_agent, name="Insight_Researcher")
+
+  return insights_researcher_node
+
+
+================================================
+FILE: app_gradio.py
+================================================
+from dotenv import load_dotenv
+import gradio as gr
+
+from graph import run_graph
+
+load_dotenv()
+
+def main():
+  ui = gr.Interface(fn=run_graph, inputs="textbox", outputs="textbox")
+  ui.launch()
+
+if __name__ == "__main__":
+  main()
+
+
+================================================
+FILE: app_streamlit.py
+================================================
+import streamlit as st
+from dotenv import load_dotenv
+from graph import run_graph
+
+load_dotenv()
+
+def main():
+    st.title("AI-Powered Search and Insights")
+
+    user_input = st.text_area("Enter your query", height=100)
+
+    if st.button("Search and Analyze"):
+        with st.spinner("Searching and analyzing..."):
+            result = run_graph(user_input)
+            st.subheader("Results")
+            st.markdown(result, unsafe_allow_html=True)
+
+if __name__ == "__main__":
+    main()
+
+
+================================================
+FILE: graph.py
+================================================
+import json
+from langgraph.graph import StateGraph, END
+from langchain_core.messages import HumanMessage
+from agents import AgentState, create_supervisor, create_search_agent, create_insights_researcher_agent, get_members
+
+def build_graph():
+    supervisor_chain = create_supervisor()
+    search_node = create_search_agent()
+    insights_research_node = create_insights_researcher_agent()
+
+    graph_builder = StateGraph(AgentState)
+    graph_builder.add_node("Supervisor", supervisor_chain)
+    graph_builder.add_node("Web_Searcher", search_node)
+    graph_builder.add_node("Insight_Researcher", insights_research_node)
+
+    members = get_members()
+    for member in members:
+        graph_builder.add_edge(member, "Supervisor")
+
+    conditional_map = {k: k for k in members}
+    conditional_map["FINISH"] = END
+    graph_builder.add_conditional_edges("Supervisor", lambda x: x["next"], conditional_map)
+    graph_builder.set_entry_point("Supervisor")
+
+    graph = graph_builder.compile()
+
+    return graph
+
+def run_graph(input_message):
+    graph = build_graph()
+    response = graph.invoke({
+        "messages": [HumanMessage(content=input_message)]
+    })
+
+    # Extract the content
+    content = response['messages'][1].content
+
+    # Initialize results and references
+    result = ""
+    references = []
+
+    # Split content by lines and process
+    lines = content.split('\n')
+    for i, line in enumerate(lines):
+        if line.strip().startswith("[^"):  # Assuming references start with [^
+            references.append(line.strip())
+        else:
+            result += line + "\n"
+
+    # Format references
+    if references:
+        result += "\n\n**References:**\n"
+        for ref in references:
+            result += f"{ref}\n"
+
+    return result
+
+
+================================================
+FILE: requirements.txt
+================================================
+langchain==0.1.7
+langgraph
+langchain_openai
+langchainhub
+langsmith
+duckduckgo-search
+beautifulsoup4
+gradio
+python-dotenv
+
+
+================================================
+FILE: tools.py
+================================================
+import requests
+from langchain.tools import tool
+from duckduckgo_search import DDGS
+from bs4 import BeautifulSoup
+import os
+from dotenv import load_dotenv
+from langchain_community.tools.tavily_search import TavilySearchResults
+load_dotenv()
+
+TAVILY_API_KEY = os.getenv('TAVILY_API_KEY')
+
+@tool("internet_search_DDGO", return_direct=False)
+def internet_search_DDGO(query: str) -> str:
+
+  """Searches the internet using DuckDuckGo."""
+
+  with DDGS() as ddgs:
+    results = [r for r in ddgs.text(query, max_results=5)]
+    return results if results else "No results found."
+
+@tool("process_content", return_direct=False)
+def process_content(url: str) -> str:
+
+    """Processes content from a webpage."""
+
+    response = requests.get(url)
+    soup = BeautifulSoup(response.content, 'html.parser')
+    return soup.get_text()
+
+@tool("internet_search", return_direct=False)
+def internet_search(query: str) -> str:
+    """Searches the internet using Tavily."""
+    search_tool = TavilySearchResults(api_key=TAVILY_API_KEY, max_results=5)
+    results = search_tool.invoke(query)
+
+    # Log the raw results for debugging purposes
+    print("Raw results:", results)
+
+    if isinstance(results, list) and all(isinstance(result, dict) for result in results):
+        formatted_results = ""
+        references = []
+        for i, result in enumerate(results):
+            title = result.get('title', 'No Title')
+            url = result.get('url', 'No URL')
+            snippet = result.get('snippet', 'No Snippet')
+            formatted_results += f"{i+1}. {title}\n{snippet} [^{i+1}]\n\n"
+            references.append(f"[^{i+1}]: [{title}]({url})")
+
+        references_section = "\n**References:**\n" + "\n".join(references)
+        return formatted_results + references_section
+
+    else:
+        return "Unexpected result format. Please check the Tavily API response structure."
+
+def get_tools():
+    # return [internet_search]   # Uncomment this and comment the line below to use Tavily instead of DuckDuckGo Search. 
+    return [internet_search_DDGO, process_content]  # Uncomment this and comment the line above to use DuckDuckGo Search instead of Tavily.
+
+
+================================================
+FILE: .env.example
+================================================
+LANGCHAIN_TRACING_V2=true
+LANGCHAIN_ENDPOINT=https://api.smith.langchain.com
+LANGCHAIN_API_KEY=
+LANGCHAIN_PROJECT=
+OPENAI_API_KEY=
+
+

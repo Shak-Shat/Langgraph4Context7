@@ -1,0 +1,231 @@
+Directory structure:
+└── whitew1994ww-langgraphreceptionisttutorial/
+    ├── README.md
+    ├── caller_agent.py
+    ├── requirements.txt
+    ├── streamlit_app.py
+    └── tools.py
+
+================================================
+FILE: README.md
+================================================
+# LangGraph Tutorial
+
+This is a repo accompanying my youtube tutorial on using LangGraph to to create an assistant bot that can book and cancel appointments.
+
+To run the code here you will need to install the packages listed in the requirements.txt:
+
+```bash
+pip install -r requirements.txt
+```
+
+To run the streamlit app, you can use the following command:
+
+```bash
+streamlit run app.py
+```
+
+If you otherwise stumble on this repo, you can find the tutorial [here](https://www.youtube.com/watch?v=3Q9JY9n9f1A).
+
+Happy Agent Building!
+
+
+
+
+
+================================================
+FILE: caller_agent.py
+================================================
+from langchain_core.prompts import ChatPromptTemplate
+from langgraph.graph import StateGraph, END, MessagesState
+import datetime
+from tools import book_appointment, get_next_available_appointment, cancel_appointment
+from langchain_openai import ChatOpenAI
+from langgraph.prebuilt import ToolNode
+from langchain_core.messages import HumanMessage
+
+llm = ChatOpenAI(model='gpt-4o')
+
+CONVERSATION = []
+
+# Invoke model
+def receive_message_from_caller(message):
+    CONVERSATION.append(HumanMessage(content=message, type="human"))
+    state = {
+        "messages": CONVERSATION,
+    }
+    print(state)
+    new_state = caller_app.invoke(state)
+    CONVERSATION.extend(new_state["messages"][len(CONVERSATION):])
+
+
+# Edges
+def should_continue_caller(state: MessagesState):
+    messages = state["messages"]
+    last_message = messages[-1]
+    if not last_message.tool_calls:
+        return "end"
+    else:
+        return "continue"
+
+
+# Nodes
+def call_caller_model(state: MessagesState):
+    state["current_time"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    response = caller_model.invoke(state)
+    return {"messages": [response]}
+
+
+caller_tools = [book_appointment, get_next_available_appointment, cancel_appointment]
+tool_node = ToolNode(caller_tools)
+
+
+caller_pa_prompt = """You are a personal assistant, and need to help the user to book or cancel appointments, you should check the available appointments before booking anything. Be extremely polite, so much so that it is almost rude.
+Current time: {current_time}
+"""
+
+caller_chat_template = ChatPromptTemplate.from_messages([
+    ("system", caller_pa_prompt),
+    ("placeholder", "{messages}"),
+])
+
+caller_model = caller_chat_template | llm.bind_tools(caller_tools)
+
+
+
+# Graph 
+caller_workflow = StateGraph(MessagesState)
+
+# Add Nodes
+caller_workflow.add_node("agent", call_caller_model)
+caller_workflow.add_node("action", tool_node)
+
+# Add Edges
+caller_workflow.add_conditional_edges(
+    "agent",
+    should_continue_caller,
+    {
+        "continue": "action",
+        "end": END,
+    },
+)
+caller_workflow.add_edge("action", "agent")
+
+# Set Entry Point and build the graph
+caller_workflow.set_entry_point("agent")
+
+caller_app = caller_workflow.compile()
+
+
+
+================================================
+FILE: requirements.txt
+================================================
+langgraph 
+langchain_community 
+langchain_openai
+langchain_core
+streamlit
+ipykernel
+
+
+================================================
+FILE: streamlit_app.py
+================================================
+
+import os
+
+with open(".env", "r") as f:
+    for line in f:
+        key, value = line.split("=")
+        os.environ[key] = value.strip()
+
+import streamlit as st
+from caller_agent import CONVERSATION, receive_message_from_caller
+from tools import APPOINTMENTS
+from langchain_core.messages import HumanMessage
+import langsmith
+
+langsmith.debug = True                                                   
+
+st.set_page_config(layout="wide")           
+
+def submit_message():
+    receive_message_from_caller(st.session_state["message"])
+
+col1, col2 = st.columns(2)
+
+with col1:
+    st.subheader("Appointment Manager")
+
+    for message in CONVERSATION:
+        if type(message) == HumanMessage:
+            with st.chat_message("user"):
+                st.write(message.content)
+        else:
+            with st.chat_message("assistant"):
+                st.write(message.content)
+    
+    message = st.chat_input("Type message here", on_submit=submit_message, key="message")
+
+
+with col2:
+    st.header("Appointments")
+    st.write(APPOINTMENTS)
+
+
+
+================================================
+FILE: tools.py
+================================================
+from langchain_core.tools import tool
+import datetime
+
+
+APPOINTMENTS = []
+
+@tool
+def get_next_available_appointment():
+    """Returns the next available appointment"""
+    current_time = datetime.datetime.now()
+    return f"One appointment available at {current_time + datetime.timedelta(minutes=(30 - current_time.minute % 30))}"
+
+@tool
+def book_appointment(appointment_year: int, appointment_month: int, appointment_day: int, appointment_hour: int, appointment_minute: int, appointment_name: str):
+    """Book an appointment at the given time, you must know the exact time to book
+
+    Args:
+        appointment_year: The year of the appointment
+        appointment_month: The month of the appointment
+        appointment_day: The day of the appointment
+        appointment_hour: The hour of the appointment
+        appointment_minute: The minute of the appointment
+        appointment_name: The name of the person booking the appointment
+    """
+    time = datetime.datetime(appointment_year, appointment_month, appointment_day, appointment_hour, appointment_minute)
+    for appointment in APPOINTMENTS:
+        if appointment.time >= time and appointment.time < time + datetime.timedelta(minutes=30):
+            return f"Appointment at {time} is already booked"
+    APPOINTMENTS.append({"time": time, "name": appointment_name})
+    return f"Appointment booked for {time}"
+
+@tool
+def cancel_appointment(appointment_year: int, appointment_month: int, appointment_day: int, appointment_hour: int, appointment_minute: int):
+    """Cancel the appointment at the given time
+
+    Args:
+        appointment_year: The year of the appointment
+        appointment_month: The month of the appointment
+        appointment_day: The day of the appointment
+        appointment_hour: The hour of the appointment
+        appointment_minute: The minute of the appointment
+    """
+    time = datetime.datetime(appointment_year, appointment_month, appointment_day, appointment_hour, appointment_minute)
+    for appointment in APPOINTMENTS:
+        if appointment["time"] == time:
+            APPOINTMENTS.remove(appointment)
+            return f"Appointment at {time} cancelled"
+    return f"No appointment found at {time}"
+
+
+

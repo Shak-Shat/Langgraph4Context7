@@ -1,0 +1,1069 @@
+Directory structure:
+└── lucasboscatti-whatsapp-langgraph-agent-integration/
+    ├── readme.md
+    ├── env-example
+    ├── main.py
+    ├── requirements.txt
+    ├── system_prompt.py
+    ├── app/
+    │   ├── __init__.py
+    │   ├── agent.py
+    │   ├── config/
+    │   │   ├── __init__.py
+    │   │   ├── config.py
+    │   │   └── logging.py
+    │   ├── src/
+    │   │   └── wppconnect/
+    │   │       ├── __init__.py
+    │   │       └── api.py
+    │   └── utils/
+    │       ├── __init__.py
+    │       └── graph_utils.py
+    └── assets/
+
+================================================
+FILE: readme.md
+================================================
+# WhatsApp AI Agent powered by LangGraph & Groq
+
+This project implements a **WhatsApp AI Agent** that engages in natural conversations through WhatsApp, providing support and responses in both text and voice formats. Using **LangGraph**, **FastAPI**, **PostgreSQL**, and the **Groq** LLM, this agent can understand text messages, transcribe voice notes, and respond in a synthesized speech.
+
+👉 The agent acts as a therapist named Dr. Sofia, providing compassionate and empathetic guidance to users!
+
+💡 You can modify the agent's personality by editing the `system_prompt.py` file:
+
+```python
+prompt = """You are Dr. Sofia, a compassionate and empathetic therapist.
+Its goal is to provide supportive, non-judgmental guidance and help users 
+to explore your emotions and thoughts."""
+```
+
+<p align="center">
+  <img src="assets/wpp.png" />
+</p>
+
+---
+
+## Table of Contents
+1. [Key Features](#key-features)
+2. [Built With](#built-with)
+3. [Use Cases](#use-cases)
+4. [Project Structure](#project-structure)
+5. [Get Started](#get-started)
+6. [Development Notes](#development-notes)
+7. [Troubleshooting](#troubleshooting)
+
+---
+
+## Key Features
+
+The WhatsApp AI Agent provides:
+
+1. **Multi-Modal Communication:**
+   - Process both text and voice messages
+   - Respond with synthesized voice
+   - Transcribe voice messages using Whisper
+
+2. **Conversation Management:**
+   - Message aggregation with configurable wait time
+   - Persistent conversation state using PostgreSQL
+   - Support for multiple languages
+
+3. **Natural Language Understanding:**
+   - Powered by Groq's LLMs. Visit [Groq](https://groq.com/) to create your API key and see the available LLMs
+   - Contextual responses maintaining conversation flow
+   - Customizable system prompt for different personalities
+
+---
+
+## Built With
+
+- **LangGraph:** Enables sophisticated, stateful agent workflows
+- **FastAPI:** Provides the webhook endpoint and API infrastructure
+- **PostgreSQL:** Manages conversation states and history
+- **WPPConnect:** Handles WhatsApp integration
+- **Groq:** Powers the language model for natural conversations and transcribes voice messages to text
+- **gTTS:** Converts text responses to speech
+
+---
+
+## Use Cases
+
+This WhatsApp AI Agent is perfect for:
+- **Mental Health Support:** Providing initial emotional support and guidance
+- **Customer Service:** Automating responses in multiple modalities
+- **Educational Support:** Offering explanations and guidance
+- **Information Services:** Delivering information through voice and text
+
+---
+
+## Project Structure
+
+```
+.
+├── app/
+│   ├── agent.py               # LangGraph agent implementation
+│   ├── config/
+│   │   ├── config.py         # Configuration management
+│   │   └── logging.py        # Logging setup
+│   ├── src/
+│   │   └── wppconnect/
+│   │       └── api.py        # WhatsApp integration
+│   └── utils/
+│       └── graph_utils.py    # Graph utilities
+├── main.py                   # FastAPI application
+├── system_prompt.py          # Agent personality definition
+├── requirements.txt          # Project dependencies
+└── .env-example             # Environment variables template
+```
+
+---
+
+## Get Started
+
+### Prerequisites
+
+- Python 3.10+
+- PostgreSQL
+- Node.js 14+
+
+### Installation Steps
+
+1. **Clone WPPConnect Server:**
+   ```bash
+   git clone https://github.com/wppconnect-team/wppconnect-server.git
+   cd wppconnect-server
+   ```
+
+2. **Install WPPConnect Dependencies:**
+   ```bash
+   npm install
+   ```
+
+3. **Configure Webhook:**
+   - Open `src/config.ts`
+   - Update webhook configuration:
+   ```typescript
+   webhook: {
+       url: 'http://localhost:8000/webhook',
+   }
+   ```
+
+4. **Start WPPConnect Server:**
+   ```bash
+   npm run dev
+   ```
+
+5. **Configure WhatsApp Connection:**
+   a. Access Swagger UI at `http://localhost:21465/api-docs`
+   b. Generate Token:
+      - Execute the `generate-token` endpoint
+      - Copy the returned token (starts with `$`)
+   c. Configure Token:
+      - Add to `.env` as `WPPCONNECT_TOKEN`
+      - Authorize in Swagger UI
+   d. Start Session:
+      ```json
+      {
+        "webhook": "",
+        "waitQrCode": true
+      }
+      ```
+   e. Scan QR Code:
+      - Convert base64 to QR code at https://codebeautify.org/base64-to-image-converter
+      - Scan with WhatsApp
+
+6. **Set Up PostgreSQL:**
+   ⚠️ **Important Database Setup:**
+   - First run only: Uncomment in `agent.py`:
+     ```python
+     await checkpointer.setup()  # Uncomment for first execution
+     ```
+   - After first run: Comment out this line to avoid errors
+
+7. **Configure Environment:**
+   Copy `.env.example` to `.env` and configure:
+   ```env
+   # WPPConnect Configuration
+   WPPCONNECT_BASE_URL=http://localhost:21465
+   WPPCONNECT_SECRET_KEY=THISISMYSECURETOKEN
+   WPPCONNECT_SESSION_NAME=NERDWHATS_AMERICA
+   WPPCONNECT_TOKEN=your_generated_token
+
+   # GROQ Configuration
+   GROQ_API_KEY=your_groq_api_key
+
+   # Postgres Configuration
+   PSQL_USERNAME=db_user
+   PSQL_PASSWORD=db_password
+   PSQL_HOST=db_host
+   PSQL_PORT=5432
+   PSQL_DATABASE=db_name
+   PSQL_SSLMODE=db_sslmode
+   PSQL_CONNECTION_STRING=postgresql://${PSQL_USERNAME}:${PSQL_PASSWORD}@${PSQL_HOST}/${PSQL_DATABASE}?sslmode=${PSQL_SSLMODE}
+
+   # Whatsapp Configuration
+   WAIT_TIME=1
+   LANGUAGE=en
+   ```
+
+8. **Start the Application:**
+   ```bash
+   uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+   ```
+
+---
+
+## Development Notes
+
+- Adjust `WAIT_TIME` to balance response time and message aggregation
+- Set `LANGUAGE` based on your target audience
+- Monitor PostgreSQL storage for conversation histories
+
+### Resetting Conversations
+
+To start fresh conversations, run:
+```sql
+DO $$
+BEGIN
+    EXECUTE format('DELETE FROM checkpoint_blobs');
+    EXECUTE format('DELETE FROM checkpoint_migrations');
+    EXECUTE format('DELETE FROM checkpoint_writes');
+    EXECUTE format('DELETE FROM checkpoints');
+END $$;
+```
+⚠️ WARNING: This deletes ALL conversation histories. Backup important data first.
+
+---
+
+## Troubleshooting
+
+Common issues and solutions:
+
+1. **Database Connection Issues:**
+   - Verify PostgreSQL credentials
+   - Check connection string format
+   - Ensure database exists
+
+2. **WPPConnect Problems:**
+   - Confirm server is running
+   - Verify token authorization
+   - Check webhook URL configuration
+
+3. **Voice Message Issues:**
+   - Verify file permissions
+   - Check temporary storage space
+   - Confirm language configuration
+
+4. **Agent Response Problems:**
+   - Monitor Groq API status
+   - Verify PostgreSQL checkpointer setup
+
+For detailed error messages, check the application logs.
+
+---
+
+## License
+
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+
+---
+
+
+================================================
+FILE: env-example
+================================================
+# WPPConnect Configuration
+WPPCONNECT_BASE_URL=http://localhost:21465
+WPPCONNECT_SECRET_KEY=THISISMYSECURETOKEN
+WPPCONNECT_SESSION_NAME=NERDWHATS_AMERICA
+WPPCONNECT_TOKEN=your_generated_token
+
+# GROQ Configuration
+GROQ_API_KEY=your_groq_api_key
+
+# Postgres Configuration
+PSQL_USERNAME=db_user
+PSQL_PASSWORD=db_password
+PSQL_HOST=db_host
+PSQL_PORT=5432
+PSQL_DATABASE=db_name
+PSQL_SSLMODE=db_sslmode
+PSQL_CONNECTION_STRING=postgresql://${PSQL_USERNAME}:${PSQL_PASSWORD}@${PSQL_HOST}/${PSQL_DATABASE}?sslmode=${PSQL_SSLMODE}
+
+# Whatsapp Configuration
+WAIT_TIME=time_to_wait_before_inference
+LANGUAGE=transcription_langugage for example en (english) or pt (for brazilian portuguese)
+
+
+================================================
+FILE: main.py
+================================================
+import asyncio
+import base64
+import os
+import tempfile
+from collections import defaultdict
+from contextlib import asynccontextmanager
+from datetime import datetime
+from typing import Any, Dict
+
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+
+from app.agent import main
+from app.config.config import setup_groq_client
+from app.config.logging import setup_logger
+
+load_dotenv()
+
+WAIT_TIME = os.getenv("WAIT_TIME", 1)
+LANG = os.getenv("LANGUAGE")
+
+GROQ_CLIENT = setup_groq_client()
+
+logger = setup_logger()
+
+message_buffers = defaultdict(list)
+processing_tasks = {}
+
+
+class Sender(BaseModel):
+    """Simplified sender information"""
+
+    id: str
+    isUser: bool
+
+
+class WebhookMessage(BaseModel):
+    """Only the essential fields from the webhook message"""
+
+    event: str
+    session: str
+    body: str
+    type: str
+    isNewMsg: bool
+    sender: Sender
+    isGroupMsg: bool
+
+
+async def transcribe_base64_audio(base64_audio: str) -> str:
+    """Transcribe audio from base64 data using OpenAI Whisper"""
+    try:
+        # Decode base64 audio data
+        audio_data = base64.b64decode(base64_audio)
+
+        # Create temporary file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as tmp_file:
+            tmp_file.write(audio_data)
+            tmp_file_path = tmp_file.name
+
+        # Transcribe the audio
+        with open(tmp_file_path, "rb") as audio_file:
+            transcription = GROQ_CLIENT.audio.transcriptions.create(
+                model="whisper-large-v3", file=audio_file, language=LANG
+            )
+        return transcription.text
+    finally:
+        # Clean up temporary file
+        if os.path.exists(tmp_file_path):
+            os.unlink(tmp_file_path)
+
+
+async def process_aggregated_messages(
+    sender_id: str, session: str, is_user: bool, is_group: bool
+):
+    """Process messages after waiting period"""
+    try:
+        # Wait for X seconds to aggregate messages
+        await asyncio.sleep(int(WAIT_TIME))
+
+        # Get all messages for this sender
+        messages = message_buffers[sender_id]
+        if not messages:
+            return
+
+        # Combine all messages
+        combined_message = " ".join([msg for msg in messages])
+
+        # Clear the buffer
+        message_buffers[sender_id] = []
+
+        # Remove the task from processing_tasks
+        if sender_id in processing_tasks:
+            del processing_tasks[sender_id]
+
+        # Process the combined message
+        phone_number = sender_id.split("@")[0]
+
+        logger.info(
+            f"Processing aggregated messages for {sender_id}: {combined_message}"
+        )
+        agent_response = await main(phone_number, combined_message)
+
+        logger.info(f"Agent response for aggregated messages: {agent_response}")
+
+        return {
+            "status": "success",
+            "processed_data": {
+                "session": session,
+                "message": combined_message,
+                "sender_id": sender_id,
+                "is_user": is_user,
+                "is_group": is_group,
+            },
+            "agent_response": agent_response,
+        }
+
+    except Exception as e:
+        logger.error(f"Error processing aggregated messages: {str(e)}")
+        # Clear the buffer in case of error
+        message_buffers[sender_id] = []
+        if sender_id in processing_tasks:
+            del processing_tasks[sender_id]
+        raise
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Handle startup and shutdown events."""
+    logger.info("WebHook service starting up")
+    yield
+    logger.info("WebHook service shutting down")
+
+
+app = FastAPI(title="WPPConnect Message Parser", lifespan=lifespan)
+
+
+@app.post("/webhook")
+async def webhook_handler(data: Dict[str, Any]):
+    """
+    Handles incoming webhooks from WPPConnect, processing both text and audio messages
+    """
+    request_id = datetime.now().strftime("%Y%m%d%H%M%S%f")
+    logger.info(f"Received webhook request - ID: {request_id}")
+
+    try:
+        # Check if this is a message we want to process
+        if (
+            data.get("event") == "onmessage"
+            and data.get("isNewMsg") == True
+            and data.get("type")
+            in ["chat", "list_response", "ptt"]  # Added 'ptt' for voice messages
+        ):
+            try:
+                message_text = data.get("body", "")
+
+                # Handle audio messages
+                if data.get("type") == "ptt":
+                    logger.info(f"Request {request_id} - Processing audio message")
+                    try:
+                        # Transcribe base64 audio data
+                        message_text = await transcribe_base64_audio(message_text)
+                        logger.info(
+                            f"Request {request_id} - Audio transcribed: {message_text}"
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"Request {request_id} - Error processing audio: {str(e)}"
+                        )
+                        raise HTTPException(
+                            status_code=422, detail=f"Error processing audio: {str(e)}"
+                        )
+
+                # Parse the message
+                message = WebhookMessage(
+                    event=data["event"],
+                    session=data["session"],
+                    body=message_text,  # Use transcribed text for audio messages
+                    type=data["type"],
+                    isNewMsg=data["isNewMsg"],
+                    sender=Sender(
+                        id=data["sender"]["id"], isUser=data["sender"]["isUser"]
+                    ),
+                    isGroupMsg=data["isGroupMsg"],
+                )
+
+                sender_id = message.sender.id
+
+                # Add message to buffer
+                message_buffers[sender_id].append(message.body)
+
+                # If this is the first message from this sender, create a new processing task
+                if sender_id not in processing_tasks:
+                    task = asyncio.create_task(
+                        process_aggregated_messages(
+                            sender_id,
+                            message.session,
+                            message.sender.isUser,
+                            message.isGroupMsg,
+                        )
+                    )
+                    processing_tasks[sender_id] = task
+
+                    return {
+                        "status": "aggregating",
+                        "message": "Message received and being aggregated",
+                    }
+                else:
+                    # If we already have a task running, just acknowledge the message
+                    return {
+                        "status": "aggregating",
+                        "message": "Message added to existing aggregation window",
+                    }
+
+            except Exception as e:
+                logger.error(f"Request {request_id} - Error parsing message: {str(e)}")
+                raise HTTPException(
+                    status_code=422, detail=f"Error parsing message: {str(e)}"
+                )
+
+        # Log skipped messages
+        logger.info(f"Request {request_id} - Message skipped (does not match criteria)")
+        return {
+            "status": "received",
+            "message": "Message received but not processed (not matching criteria)",
+        }
+
+    except Exception as e:
+        logger.error(f"Request {request_id} - Unexpected error: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Error processing webhook: {str(e)}"
+        )
+
+
+@app.get("/health")
+async def health_check():
+    """Simple health check endpoint"""
+    logger.info("Health check requested")
+    return {"status": "healthy"}
+
+
+================================================
+FILE: requirements.txt
+================================================
+annotated-types==0.7.0
+anyio==4.8.0
+appdirs==1.4.4
+asttokens==3.0.0
+certifi==2025.1.31
+charset-normalizer==3.4.1
+click==8.1.8
+decorator==5.2.0
+distro==1.9.0
+executing==2.2.0
+fastapi==0.115.8
+groq==0.18.0
+gtts==2.5.4
+h11==0.14.0
+httpcore==1.0.7
+httpx==0.28.1
+idna==3.10
+importlib-metadata==8.6.1
+ipython==8.32.0
+jedi==0.19.2
+jsonpatch==1.33
+jsonpointer==3.0.0
+langchain-core==0.3.37
+langchain-groq==0.2.4
+langgraph==0.2.74
+langgraph-checkpoint==2.0.16
+langgraph-checkpoint-postgres==2.0.15
+langgraph-sdk==0.1.53
+langsmith==0.3.10
+markdown-it-py==3.0.0
+matplotlib-inline==0.1.7
+mdurl==0.1.2
+msgpack==1.1.0
+orjson==3.10.15
+packaging==24.2
+parso==0.8.4
+pexpect==4.9.0
+prompt-toolkit==3.0.50
+psycopg==3.2.5
+psycopg-binary==3.2.5
+psycopg-pool==3.2.5
+ptyprocess==0.7.0
+pure-eval==0.2.3
+pydantic==2.10.6
+pydantic-core==2.27.2
+pyee==11.1.1
+pygments==2.19.1
+pyppeteer==2.0.0
+python-dotenv==1.0.1
+pyyaml==6.0.2
+requests==2.32.3
+requests-toolbelt==1.0.0
+rich==13.9.4
+sniffio==1.3.1
+stack-data==0.6.3
+starlette==0.45.3
+tenacity==9.0.0
+tqdm==4.67.1
+traitlets==5.14.3
+typing-extensions==4.12.2
+urllib3==1.26.20
+uvicorn==0.34.0
+wcwidth==0.2.13
+websockets==10.4
+zipp==3.21.0
+zstandard==0.23.0
+
+
+
+================================================
+FILE: system_prompt.py
+================================================
+prompt = """"You are Dr. Sofia, a compassionate and empathetic therapist.
+Its goal is to provide supportive, non-judgmental guidance and help users 
+to explore your emotions and thoughts."""
+
+
+
+================================================
+FILE: app/__init__.py
+================================================
+
+
+
+================================================
+FILE: app/agent.py
+================================================
+import os
+from typing import Annotated
+
+from dotenv import load_dotenv
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import Runnable
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import AnyMessage, add_messages
+from psycopg.rows import dict_row
+from psycopg_pool import AsyncConnectionPool
+from typing_extensions import TypedDict
+
+from app.config.config import setup_model
+from app.config.logging import logger
+from app.src.wppconnect.api import send_message
+from app.utils.graph_utils import generate_thread_id, process_chunks, print_graph
+from system_prompt import prompt
+
+# Initialize dotenv to load environment variables
+load_dotenv()
+
+
+class State(TypedDict):
+    messages: Annotated[list[AnyMessage], add_messages]
+
+
+class Assistant:
+    def __init__(self, runnable: Runnable):
+        self.runnable = runnable
+
+    def __call__(self, state: State):
+        while True:
+            result = self.runnable.invoke(state)
+            if (
+                not result.content
+                or isinstance(result.content, list)
+                and not result.content[0].get("text")
+            ):
+                messages = state["messages"] + [("user", "Respond with a real output.")]
+                state = {**state, "messages": messages}
+            else:
+                break
+        return {"messages": result}
+
+
+primary_assistant_prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", prompt),
+        ("placeholder", "{messages}"),
+    ]
+)
+
+llm_config = {
+    "provider": "groq",
+    "model": "llama-3.3-70b-specdec",
+    "temperature": 0.6,
+}
+
+llm_model = setup_model(llm_config)
+
+
+assistant_runnable = primary_assistant_prompt | llm_model
+
+
+builder = StateGraph(State)
+
+
+# Define nodes: these do the work
+builder.add_node("assistant", Assistant(assistant_runnable))
+
+# Define edges: these determine how the control flow moves
+builder.add_edge(START, "assistant")
+builder.add_edge("assistant", END)
+
+
+## TO PRINT THE GRAPH
+# from langgraph.checkpoint.memory import MemorySaver
+
+# checkpoint = MemorySaver()
+# graph = builder.compile(checkpointer=checkpoint)
+
+# print_graph(graph)
+
+
+async def main(phone_number, message):
+    try:
+        async with AsyncConnectionPool(
+            conninfo=os.getenv("PSQL_CONNECTION_STRING"),
+            max_size=20,
+            kwargs={
+                "autocommit": True,
+                "prepare_threshold": 0,
+                "row_factory": dict_row,
+            },
+        ) as pool, pool.connection() as conn:
+            checkpointer = AsyncPostgresSaver(conn)
+
+            # await checkpointer.setup() # FIRST EXECUTION ONLY
+
+            graph = builder.compile(checkpointer=checkpointer)
+
+
+            thread_id = generate_thread_id(phone_number)
+
+            config = {
+                "configurable": {},
+            }
+
+            config["configurable"]["thread_id"] = thread_id
+            config["configurable"]["phone_number"] = phone_number
+
+            logger.info(f"Thread ID: {thread_id}")
+
+            input_data = {"messages": [{"role": "user", "content": message}]}
+
+            async for chunk in graph.astream(
+                input=input_data, config=config, stream_mode="updates"
+            ):
+                process_chunks(chunk, phone_number)
+    except:
+        custom_message = """Unfortunately, an internal error has occurred in our system. 😕 Please try again later."""
+        send_message(custom_message, phone_number)
+
+
+================================================
+FILE: app/config/__init__.py
+================================================
+
+
+
+================================================
+FILE: app/config/config.py
+================================================
+import os
+
+import groq
+from dotenv import load_dotenv
+from langchain_groq import ChatGroq
+
+
+def load_environment():
+    """Load and validate environment variables."""
+    load_dotenv()
+
+    # Required environment variables
+    required_vars = {
+        "GROQ_API_KEY": os.getenv("GROQ_API_KEY"),
+    }
+
+    # Check for missing variables
+    missing = [k for k, v in required_vars.items() if not v]
+    if missing:
+        raise ValueError(f"Missing environment variables: {', '.join(missing)}")
+
+    return required_vars
+
+
+def setup_model(llm_config):
+    """Initialize all required services."""
+    # Load environment variables
+    _ = load_environment()
+
+    if llm_config["provider"] == "groq":
+        return ChatGroq(
+            model=llm_config["model"], temperature=llm_config["temperature"]
+        )
+
+
+def setup_groq_client():
+    env = load_environment()
+    return groq.Groq(api_key=env["GROQ_API_KEY"])
+
+
+
+================================================
+FILE: app/config/logging.py
+================================================
+import logging
+import os
+from logging.handlers import RotatingFileHandler
+
+# Create logs directory if it doesn't exist
+logs_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
+os.makedirs(logs_dir, exist_ok=True)
+
+
+# Configure logging
+def setup_logger(name="app"):
+    """Configure and return a logger instance with both file and console handlers."""
+    logger = logging.getLogger(name)
+    logger.setLevel(logging.INFO)
+
+    # Prevent adding handlers multiple times
+    if not logger.handlers:
+        # Create formatters
+        file_formatter = logging.Formatter(
+            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        )
+        console_formatter = logging.Formatter("%(levelname)s - %(message)s")
+
+        # File handler (with rotation)
+        file_handler = RotatingFileHandler(
+            os.path.join(logs_dir, f"{name}.log"),
+            maxBytes=10 * 1024 * 1024,  # 10MB
+            backupCount=5,
+        )
+        file_handler.setLevel(logging.INFO)
+        file_handler.setFormatter(file_formatter)
+
+        # Console handler
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.INFO)
+        console_handler.setFormatter(console_formatter)
+
+        # Add handlers to logger
+        logger.addHandler(file_handler)
+        logger.addHandler(console_handler)
+
+    return logger
+
+
+# Create default logger instance
+logger = setup_logger()
+
+
+
+================================================
+FILE: app/src/wppconnect/__init__.py
+================================================
+
+
+
+================================================
+FILE: app/src/wppconnect/api.py
+================================================
+import base64
+import logging
+import os
+from typing import Dict
+
+import requests
+
+logger = logging.getLogger(__name__)
+
+
+class WhatsAppConnection:
+    def __init__(self):
+        self.base_url = os.getenv("WPPCONNECT_BASE_URL", "").rstrip("/")
+        self.session = os.getenv("WPPCONNECT_SESSION_NAME")
+        self.secret_key = os.getenv("WPPCONNECT_SECRET_KEY")
+        self.token = os.getenv("WPPCONNECT_TOKEN")
+        self.full_token = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
+
+    def _generate_token(self):
+        url = f"{self.base_url}/api/{self.session}/{self.secret_key}/generate-token"
+        try:
+            response = requests.post(url)
+            response.raise_for_status()
+            data = response.json()
+            self.full_token = data.get("full")
+            self.token = data.get("token")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error generating token: {e}")
+            raise
+
+
+def send_message(message: str, phone_number: str) -> Dict:
+    """Send a WhatsApp message to a specified phone number."""
+
+    if not phone_number:
+        raise ValueError("Missing phone_number")
+
+    with WhatsAppConnection() as conn:
+        url = f"{conn.base_url}/api/{conn.session}/send-message"
+
+        headers = {
+            "Content-Type": "application/json; charset=utf-8",
+            "Accept": "application/json",
+            "Authorization": f"Bearer {conn.token}",
+        }
+
+        data = {"phone": phone_number, "message": message}
+
+        try:
+            response = requests.post(url, json=data, headers=headers)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error sending message: {e}")
+            raise
+
+
+def send_voice(audio_path: str, phone_number: str) -> Dict:
+    """Send a WhatsApp voice message to a specified phone number."""
+
+    if not phone_number:
+        raise ValueError("Missing phone_number")
+
+    if not audio_path:
+        raise ValueError("Missing audio file path")
+
+    # Convert audio file to base64
+    try:
+        with open(audio_path, "rb") as audio_file:
+            base64_audio = base64.b64encode(audio_file.read()).decode("utf-8")
+    except Exception as e:
+        raise ValueError(f"Error reading audio file: {e}")
+
+    with WhatsAppConnection() as conn:
+        url = f"{conn.base_url}/api/{conn.session}/send-voice-base64"
+
+        headers = {
+            "Content-Type": "application/json; charset=utf-8",
+            "Accept": "application/json",
+            "Authorization": f"Bearer {conn.token}",
+        }
+
+        data = {
+            "phone": phone_number,
+            "isGroup": False,
+            "base64Ptt": f"data:audio/mpeg;base64,{base64_audio}",
+        }
+
+        try:
+            response = requests.post(url, json=data, headers=headers)
+            response.raise_for_status()
+            return response.json()
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Error sending voice message: {e}")
+            raise
+
+
+
+================================================
+FILE: app/utils/__init__.py
+================================================
+
+
+
+================================================
+FILE: app/utils/graph_utils.py
+================================================
+import os
+import tempfile
+import uuid
+
+from dotenv import load_dotenv
+from gtts import gTTS
+from IPython.display import Image
+from langchain_core.messages import AIMessage
+from langchain_core.runnables.graph import CurveStyle, MermaidDrawMethod, NodeStyles
+from langgraph.graph import StateGraph
+from rich.console import Console
+
+from app.src.wppconnect.api import send_voice
+
+rich = Console()
+
+load_dotenv()
+
+GTTS_LANG = os.getenv("LANGUAGE", "en")
+
+def print_graph(graph: StateGraph, image_name: str = "graph.png") -> None:
+    """
+    Create a mermaid graph
+
+    args:
+        graph (StateGraph): the graph
+        image_name (str): file name
+    """
+    Image(
+        graph.get_graph().draw_mermaid_png(
+            curve_style=CurveStyle.LINEAR,
+            node_colors=NodeStyles(first="#ffdfba", last="#baffc9", default="#fad7de"),
+            wrap_label_n_words=9,
+            output_file_path=image_name,
+            draw_method=MermaidDrawMethod.PYPPETEER,
+            background_color="white",
+            padding=10,
+        )
+    )
+
+
+def generate_thread_id(user_id: str) -> str:
+    """Generates a deterministic thread ID based on the user ID."""
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"thread-{user_id}"))
+
+
+def process_chunks(chunk, phone_number):
+    """
+    Processes a chunk from the agent and displays information about agent's answer.
+
+    Parameters:
+        chunk (dict): A dictionary containing information about the agent's messages.
+
+    Returns:
+        None
+
+    This function processes a chunk of data to check for agent messages.
+    It extracts and prints the agent's answer using the Rich library.
+    """
+    if isinstance(chunk, dict):
+        if "messages" in chunk[list(chunk.keys())[0]]:
+            message = chunk[list(chunk.keys())[0]]["messages"]
+
+            if isinstance(message, AIMessage):
+                agent_answer = message.content
+                if isinstance(agent_answer, list):
+                    for answer in agent_answer:
+                        rich.print(f"\nAgent:\n{answer}", style="black on white")
+
+                if isinstance(agent_answer, str):
+                    agent_answer = message.content
+                    rich.print(
+                        f"\nAgent:\n{agent_answer}",
+                        style="black on white",
+                    )
+
+                    tts = gTTS(text=agent_answer, lang=GTTS_LANG)
+
+                    with tempfile.NamedTemporaryFile(
+                        delete=False, suffix=".mp3"
+                    ) as temp_audio:
+                        audio_path = temp_audio.name
+                        tts.save(audio_path)
+
+                    send_voice(audio_path, phone_number)
+
+
+

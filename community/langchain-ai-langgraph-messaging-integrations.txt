@@ -1,0 +1,701 @@
+Directory structure:
+└── langchain-ai-langgraph-messaging-integrations/
+    ├── README.md
+    ├── LICENSE
+    ├── .env.example
+    └── src/
+        ├── graphs/
+        │   └── agent.py
+        └── langgraph_slack/
+            ├── __init__.py
+            ├── __main__.py
+            ├── config.py
+            └── server.py
+
+================================================
+FILE: README.md
+================================================
+# LangGraph Application Integration with Slack
+
+Modern AI applications like chatbots and agents communicate through natural language, making messaging platforms like Slack an ideal interface for interacting with them. As these AI assistants take on more complex tasks, users need to engage with them in their native work environments rather than separate web interfaces.
+
+This repository demonstrates how to connect any LangGraph-powered application (chatbot, agent, or other AI system) to Slack, allowing teams to interact with their AI assistants directly in their everyday communication channels. Currently focused on Slack integration, with a straightforward approach that can be adapted for other messaging platforms.
+
+## Quickstart
+
+### Prerequisites
+
+- [LangGraph platform](https://langchain-ai.github.io/langgraph/concepts/langgraph_platform/) deployment with a `messages` state key (e.g., a chatbot).
+
+### Flow
+
+The overall concept is simple: Slack routes are added directly to the API server deployed on the LangGraph platform using the custom routes support. The server has two main functions: first, it receives Slack events, packages them into a format that our LangGraph app can understand (chat `messages`), and passes them to our LangGraph app. Second, it receives the LangGraph app's responses, extracts the most recent `message` from the `messages` list, and sends it back to Slack.
+
+<!-- this is outdated; Modal no longer used. Should replace. -->
+<!-- ![slack_integration](https://github.com/user-attachments/assets/e73f5121-fed1-4cde-9297-3250ea273e1e) -->
+
+### Quickstart setup
+
+1. Install `uv` (optional) and dependencies.
+```shell
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv sync --dev
+```
+
+2. Create a Slack app https://api.slack.com/apps/ and select `From A Manifest`.
+
+3. Copy the below manifest and paste it into the `Manifest` field.
+
+* Replace `your-app-name` with your app's name and `your-app-description` with your app's description.
+* Replace `your-langgraph-platform-url` with your LangGraph platform URL (if you're testing locally, you can use something like ngrok for tunneling)
+* The scopes gives the app the necessary permissions to read and write messages.
+* The events are what we want to receive from Slack.
+
+```JSON
+{
+    "display_information": {
+        "name": "your-app-name"
+    },
+    "features": {
+        "bot_user": {
+            "display_name": "your-app-name",
+            "always_online": false
+        },
+        "assistant_view": {
+            "assistant_description": "your-app-description"
+        }
+    },
+    "oauth_config": {
+        "scopes": {
+            "bot": [
+                "app_mentions:read",
+                "assistant:write",
+                "channels:history",
+                "channels:join",
+                "channels:read",
+                "chat:write",
+                "groups:history",
+                "groups:read",
+                "im:history",
+                "im:write",
+                "mpim:history",
+                "im:read",
+                "chat:write.public"
+            ]
+        }
+    },
+    "settings": {
+        "event_subscriptions": {
+            "request_url": "your-langgraph-platform-url/events/slack",
+            "bot_events": [
+                "app_mention",
+                "message.channels",
+                "message.im",
+                "message.mpim",
+                "assistant_thread_started"
+            ]
+        },
+        "org_deploy_enabled": false,
+        "socket_mode_enabled": false,
+        "token_rotation_enabled": false
+    }
+}
+```
+
+4. Got to `OAuth & Permissions` and `Install App to Workspace`.
+
+5. Copy `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET` to the `.env` file: 
+* `OAuth & Permissions` page will expose the app's `SLACK_BOT_TOKEN` after installation.
+* Go to "Basic Information" and get `SLACK_SIGNING_SECRET`.
+* `SLACK_BOT_TOKEN` is used to authenticate API calls FROM your bot TO Slack.
+* `SLACK_SIGNING_SECRET` is used to verify that incoming requests TO your server are actually FROM Slack.
+
+6. Copy your LangGraph deployment's URL and assistant ID (or graph name) to the `.env` file.
+* The `.env.example` file shows the required environment variables.
+* Example environment variables:
+```shell
+# Slack credentials
+SLACK_SIGNING_SECRET=
+SLACK_BOT_TOKEN=xoxb-...
+# SLACK_BOT_USER_ID= (optional)
+
+# LangGraph platform instance you're connecting to
+LANGGRAPH_ASSISTANT_ID=
+CONFIG= # Optional
+```
+
+7. Deploy your application to the LangGraph platform with custom routes.
+
+The Slack routes are added directly to the API server deployed on the LangGraph platform, using the custom routes support as documented at https://langchain-ai.github.io/langgraph/how-tos/http/custom_routes/.
+
+The integration uses the langgraph_sdk and connects to the current platform routes by setting URL to None, which connects to the loopback server. The Slack Bolt SDK is used to register a slack webhook to handle slack events (new messages, @mentions, etc). When an event is received, it creates a run on the current server and passes in a webhook "/webhooks/<thread_id>" that is triggered when the chatbot completes. Since a relative path is provided, the LangGraph platform knows to call the route on this server itself.
+
+8. Add your LangGraph platform URL to `Event Subscriptions` in Slack with `/events/slack` appended.
+* E.g., `https://your-langgraph-platform-url/events/slack` as the request URL. 
+* This is the URL that Slack will send events to.
+
+## `From Scratch` Slack App Setup
+
+You can use this setup to customize your Slack app permissions and event subscriptions.
+
+1. Create a Slack app https://api.slack.com/apps/ and select `From Scratch`.
+
+2. Go to `OAuth & Permissions` and add your desired `Bot Token Scopes`.
+* This gives the app the necessary permissions to read and write messages.
+* Add scopes for the app's functionality, as an example: 
+
+```
+# Reading Messages
+"app_mentions:read",     # View when the bot is @mentioned
+"channels:read",         # View basic channel info and membership
+"channels:history",      # View messages in public channels
+"groups:read",          # View private channel info and membership
+"groups:history",       # View messages in private channels
+"im:read",             # View direct message info
+"im:history",          # View messages in direct messages
+"mpim:history",        # View messages in group direct messages
+
+# Writing Messages
+"chat:write",          # Send messages in channels the bot is in
+"chat:write.public",   # Send messages in any public channel
+"im:write",           # Send direct messages to users
+
+# Special Permissions
+"assistant:write",     # Use Slack's built-in AI features
+"channels:join",       # Join public channels automatically
+```
+
+3. Then, go to `OAuth & Permissions` and `Install App to Workspace`. This will expose the app's `SLACK_BOT_TOKEN`. 
+
+4. Go to "Basic Information" and get `SLACK_SIGNING_SECRET`.
+
+5. Copy both `SLACK_BOT_TOKEN` and `SLACK_SIGNING_SECRET` to the `.env` file.
+* `SLACK_BOT_TOKEN` is used to authenticate API calls FROM your bot TO Slack.
+* `SLACK_SIGNING_SECRET` is used to verify that incoming requests TO your server are actually FROM Slack.
+
+```shell
+# .env
+SLACK_SIGNING_SECRET=
+SLACK_BOT_TOKEN=xoxb-...
+```
+
+6. Set up your LangGraph deployment with custom routes support.
+
+```shell
+# .env
+LANGGRAPH_ASSISTANT_ID=your_assistant_id
+CONFIG={"your_config": "here"}
+```
+
+7. Deploy your application to the LangGraph platform with custom routes.
+
+The application uses the LangGraph platform's custom routes feature to add Slack integration directly to your deployed application. When deployed, the Slack routes will be available at your LangGraph platform URL.
+
+After deployment, update your Slack app's Event Subscriptions URL to point to your LangGraph platform URL with `/events/slack` appended.
+
+8. In `Event Subscriptions`, add events that you want to receive. As an example: 
+
+```
+"app_mention",        # Notify when bot is @mentioned
+"message.im",         # Notify about direct messages
+"message.mpim"        # Notify about group messages
+"message.channels",   # Get notified of channel messages
+```
+
+9. Chat with the bot in Slack. 
+* The bot responds if you `@mention` it within a channel of which it is a member. 
+* You can also DM the bot. You needn't use `@mention`'s in the bot's DMs. It's clear who you are speaking to.
+
+## Customizing the input and output
+
+By default, the bot assums that the LangGraph deployment uses the `messages` state key.
+
+The request to the LangGraph deployment using the LangGraph SDK is made here in `src/langgraph_slack/server.py`:
+
+```
+result = await LANGGRAPH_CLIENT.runs.create(
+            thread_id=thread_id,
+            assistant_id=config.ASSISTANT_ID,
+            input={
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": _replace_mention(event),
+                    }
+                ]
+            },
+```
+
+And you can see that the output, which we send back to Slack, is extracted from the `messages` list here:
+
+```
+response_message = state_values["messages"][-1]
+```
+
+You can customize either for the specific LangGraph deployment you are using! 
+
+
+
+================================================
+FILE: LICENSE
+================================================
+MIT License
+
+Copyright (c) 2024 LangChain
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+
+================================================
+FILE: .env.example
+================================================
+# These are available in the oauth section of your Slack App
+SLACK_SIGNING_SECRET=
+SLACK_BOT_TOKEN=xoxb-...
+# If you're deploying the chatbot here, set other env vars
+ANTHROPIC_API_KEY=...
+
+# This is either a specific ID of an assistant or the name of a graph
+# (the key of a graph in the key-value pairs in the langgraph.json file)
+LANGGRAPH_ASSISTANT_ID=chat
+# SLACK_BOT_USER_ID= (optional)
+CONFIG=
+
+
+
+================================================
+FILE: src/graphs/agent.py
+================================================
+from langgraph.prebuilt import create_react_agent
+from langmem import create_manage_memory_tool, create_search_memory_tool
+
+
+my_agent = create_react_agent(
+    "anthropic:claude-3-7-sonnet-latest",
+    tools=[
+        create_manage_memory_tool("memories"),
+        create_search_memory_tool("memories"),
+    ],
+)
+
+
+
+================================================
+FILE: src/langgraph_slack/__init__.py
+================================================
+import logging
+import dotenv
+
+dotenv.load_dotenv()
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+
+
+
+================================================
+FILE: src/langgraph_slack/__main__.py
+================================================
+import uvicorn
+
+uvicorn.run("langgraph_slack.server:app", host="0.0.0.0", port=8080)
+
+
+
+================================================
+FILE: src/langgraph_slack/config.py
+================================================
+from os import environ
+import logging
+
+LOGGER = logging.getLogger(__name__)
+
+if DEPLOY_MODAL := environ.get("DEPLOY_MODAL"):
+    DEPLOY_MODAL = DEPLOY_MODAL.lower() == "true"
+BOT_USER_ID = environ.get("SLACK_BOT_USER_ID")
+BOT_TOKEN = environ.get("SLACK_BOT_TOKEN")
+if DEPLOY_MODAL:
+    if not environ.get("SLACK_BOT_TOKEN"):
+        environ["SLACK_BOT_TOKEN"] = "fake-token"
+    BOT_USER_ID = BOT_USER_ID or "fake-user-id"
+else:
+    assert isinstance(BOT_TOKEN, str)
+    # APP_TOKEN = environ["SLACK_APP_TOKEN"]
+
+
+LANGGRAPH_URL = environ.get("LANGGRAPH_URL")
+ASSISTANT_ID = environ.get("LANGGRAPH_ASSISTANT_ID", "chat")
+CONFIG = environ.get("CONFIG") or "{}"
+DEPLOYMENT_URL = environ.get("DEPLOYMENT_URL")
+SLACK_CHANNEL_ID = environ.get("SLACK_CHANNEL_ID")
+
+
+
+================================================
+FILE: src/langgraph_slack/server.py
+================================================
+import asyncio
+import logging
+import re
+import json
+import uuid
+from typing import Awaitable, Callable, TypedDict
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, Request
+from langgraph_sdk import get_client
+from slack_bolt.adapter.fastapi.async_handler import AsyncSlackRequestHandler
+from slack_bolt.async_app import AsyncApp
+
+from langgraph_slack import config
+
+LOGGER = logging.getLogger(__name__)
+# Defaults to "None", meaning the loopback endpoint.
+LANGGRAPH_CLIENT = get_client(url=config.LANGGRAPH_URL)
+GRAPH_CONFIG = (
+    json.loads(config.CONFIG) if isinstance(config.CONFIG, str) else config.CONFIG
+)
+
+USER_NAME_CACHE: dict[str, str] = {}
+TASK_QUEUE: asyncio.Queue = asyncio.Queue()
+
+
+class SlackMessageData(TypedDict):
+    user: str
+    type: str
+    subtype: str | None
+    ts: str
+    thread_ts: str | None
+    client_msg_id: str
+    text: str
+    team: str
+    parent_user_id: str
+    blocks: list[dict]
+    channel: str
+    event_ts: str
+    channel_type: str
+
+
+async def worker():
+    LOGGER.info("Background worker started.")
+    while True:
+        try:
+            task = await TASK_QUEUE.get()
+            if not task:
+                LOGGER.info("Worker received sentinel, exiting.")
+                break
+
+            LOGGER.info(f"Worker got a new task: {task}")
+            await _process_task(task)
+        except Exception as exc:
+            LOGGER.exception(f"Error in worker: {exc}")
+        finally:
+            TASK_QUEUE.task_done()
+
+
+async def _process_task(task: dict):
+    event = task["event"]
+    event_type = task["type"]
+    if event_type == "slack_message":
+        thread_id = _get_thread_id(
+            event.get("thread_ts") or event["ts"], event["channel"]
+        )
+        channel_id = event["channel"]
+        # This will connect to the loopback endpoint if not provided.
+        webhook = f"{config.DEPLOYMENT_URL}/callbacks/{thread_id}"
+
+        if (await _is_mention(event)) or _is_dm(event):
+            text_with_names = await _build_contextual_message(event)
+        else:
+            LOGGER.info("Skipping non-mention message")
+            return
+
+        LOGGER.info(
+            f"[{channel_id}].[{thread_id}] sending message to LangGraph: "
+            f"with webhook {webhook}: {text_with_names}"
+        )
+
+        result = await LANGGRAPH_CLIENT.runs.create(
+            thread_id=thread_id,
+            assistant_id=config.ASSISTANT_ID,
+            input={
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": text_with_names,
+                    }
+                ]
+            },
+            config=GRAPH_CONFIG,
+            metadata={
+                "event": "slack",
+                "slack_event_type": "message",
+                "bot_user_id": config.BOT_USER_ID,
+                "slack_user_id": event["user"],
+                "channel_id": channel_id,
+                "channel": channel_id,
+                "thread_ts": event.get("thread_ts"),
+                "event_ts": event["ts"],
+                "channel_type": event.get("channel_type"),
+            },
+            multitask_strategy="interrupt",
+            if_not_exists="create",
+            webhook=webhook,
+        )
+        LOGGER.info(f"LangGraph run: {result}")
+
+    elif event_type == "callback":
+        LOGGER.info(f"Processing LangGraph callback: {event['thread_id']}")
+        state_values = event["values"]
+        response_message = state_values["messages"][-1]
+        thread_ts = event["metadata"].get("thread_ts") or event["metadata"].get(
+            "event_ts"
+        )
+        channel_id = event["metadata"].get("channel") or config.SLACK_CHANNEL_ID
+        if not channel_id:
+            raise ValueError(
+                "Channel ID not found in event metadata and not set in environment"
+            )
+
+        await APP_HANDLER.app.client.chat_postMessage(
+            channel=channel_id,
+            thread_ts=thread_ts,
+            text=_clean_markdown(_get_text(response_message["content"])),
+            metadata={
+                "event_type": "webhook",
+                "event_payload": {"thread_id": event["thread_id"]},
+            },
+        )
+        LOGGER.info(
+            f"[{channel_id}].[{thread_ts}] sent message to Slack for callback {event['thread_id']}"
+        )
+    else:
+        raise ValueError(f"Unknown event type: {event_type}")
+
+
+async def handle_message(event: SlackMessageData, say: Callable, ack: Callable):
+    LOGGER.info("Enqueuing handle_message task...")
+    nouser = not event.get("user")
+    ismention = await _is_mention(event)
+    userisbot = event.get("bot_id") == config.BOT_USER_ID
+    isdm = _is_dm(event)
+    if nouser or userisbot or not (ismention or isdm):
+        LOGGER.info(f"Ignoring message not directed at the bot: {event}")
+        return
+
+    TASK_QUEUE.put_nowait({"type": "slack_message", "event": event})
+    await ack()
+
+
+async def just_ack(ack: Callable[..., Awaitable], event):
+    LOGGER.info(f"Acknowledging {event.get('type')} event")
+    await ack()
+
+
+APP_HANDLER = AsyncSlackRequestHandler(AsyncApp(logger=LOGGER))
+MENTION_REGEX = re.compile(r"<@([A-Z0-9]+)>")
+USER_ID_PATTERN = re.compile(rf"<@{config.BOT_USER_ID}>")
+APP_HANDLER.app.event("message")(ack=just_ack, lazy=[handle_message])
+APP_HANDLER.app.event("app_mention")(
+    ack=just_ack,
+    lazy=[],
+)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    LOGGER.info("App is starting up. Creating background worker...")
+    loop = asyncio.get_running_loop()
+    loop.create_task(worker())
+    yield
+    LOGGER.info("App is shutting down. Stopping background worker...")
+    TASK_QUEUE.put_nowait(None)
+
+
+APP = FastAPI(lifespan=lifespan)
+
+
+@APP.post("/events/slack")
+async def slack_endpoint(req: Request):
+    return await APP_HANDLER.handle(req)
+
+
+def _get_text(content: str | list[dict]):
+    if isinstance(content, str):
+        return content
+    else:
+        return "".join([block["text"] for block in content if block["type"] == "text"])
+
+
+def _clean_markdown(text: str) -> str:
+    text = re.sub(r"^```[^\n]*\n", "```\n", text, flags=re.MULTILINE)
+    text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"<\2|\1>", text)
+    text = re.sub(r"\*\*([^*]+)\*\*", r"*\1*", text)
+    text = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"_\1_", text)
+    text = re.sub(r"_([^_]+)_", r"_\1_", text)
+    text = re.sub(r"^\s*[-*]\s", "• ", text, flags=re.MULTILINE)
+    return text
+
+
+@APP.post("/callbacks/{thread_id}")
+async def webhook_callback(req: Request):
+    body = await req.json()
+    LOGGER.info(
+        f"Received webhook callback for {req.path_params['thread_id']}/{body['thread_id']}"
+    )
+    TASK_QUEUE.put_nowait({"type": "callback", "event": body})
+    return {"status": "success"}
+
+
+async def _is_mention(event: SlackMessageData):
+    global USER_ID_PATTERN
+    if not config.BOT_USER_ID or config.BOT_USER_ID == "fake-user-id":
+        config.BOT_USER_ID = (await APP_HANDLER.app.client.auth_test())["user_id"]
+        USER_ID_PATTERN = re.compile(rf"<@{config.BOT_USER_ID}>")
+    matches = re.search(USER_ID_PATTERN, event["text"])
+    return bool(matches)
+
+
+def _get_thread_id(thread_ts: str, channel: str) -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_DNS, f"SLACK:{thread_ts}-{channel}"))
+
+
+def _is_dm(event: SlackMessageData):
+    if channel_type := event.get("channel_type"):
+        return channel_type == "im"
+    return False
+
+
+async def _fetch_thread_history(
+    channel_id: str, thread_ts: str
+) -> list[SlackMessageData]:
+    """
+    Fetch all messages in a Slack thread, following pagination if needed.
+    """
+    LOGGER.info(
+        f"Fetching thread history for channel={channel_id}, thread_ts={thread_ts}"
+    )
+    all_messages = []
+    cursor = None
+
+    while True:
+        try:
+            if cursor:
+                response = await APP_HANDLER.app.client.conversations_replies(
+                    channel=channel_id,
+                    ts=thread_ts,
+                    inclusive=True,
+                    limit=150,
+                    cursor=cursor,
+                )
+            else:
+                response = await APP_HANDLER.app.client.conversations_replies(
+                    channel=channel_id,
+                    ts=thread_ts,
+                    inclusive=True,
+                    limit=150,
+                )
+            all_messages.extend(response["messages"])
+            if not response.get("has_more"):
+                break
+            cursor = response["response_metadata"]["next_cursor"]
+        except Exception as exc:
+            LOGGER.exception(f"Error fetching thread messages: {exc}")
+            break
+
+    return all_messages
+
+
+async def _fetch_user_names(user_ids: set[str]) -> dict[str, str]:
+    """Fetch and cache Slack display names for user IDs."""
+    uncached_ids = [uid for uid in user_ids if uid not in USER_NAME_CACHE]
+    if uncached_ids:
+        tasks = [APP_HANDLER.app.client.users_info(user=uid) for uid in uncached_ids]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for uid, result in zip(uncached_ids, results):
+            if isinstance(result, Exception):
+                LOGGER.warning(f"Failed to fetch user info for {uid}: {result}")
+                continue
+            user_obj = result.get("user", {})
+            profile = user_obj.get("profile", {})
+            display_name = (
+                profile.get("display_name") or profile.get("real_name") or uid
+            )
+            USER_NAME_CACHE[uid] = display_name
+    return {uid: USER_NAME_CACHE[uid] for uid in user_ids if uid in USER_NAME_CACHE}
+
+
+async def _build_contextual_message(event: SlackMessageData) -> str:
+    """Build a message with thread context, using display names for all users."""
+    thread_ts = event.get("thread_ts") or event["ts"]
+    channel_id = event["channel"]
+
+    history = await _fetch_thread_history(channel_id, thread_ts)
+    included = []
+    for msg in reversed(history):
+        if msg.get("bot_id") == config.BOT_USER_ID:
+            break
+        included.append(msg)
+
+    all_user_ids = set()
+    for msg in included:
+        all_user_ids.add(msg.get("user", "unknown"))
+        all_user_ids.update(MENTION_REGEX.findall(msg["text"]))
+
+    all_user_ids.add(event["user"])
+    all_user_ids.update(MENTION_REGEX.findall(event["text"]))
+
+    user_names = await _fetch_user_names(all_user_ids)
+
+    def format_message(msg: SlackMessageData) -> str:
+        text = msg["text"]
+        user_id = msg.get("user", "unknown")
+
+        def repl(match: re.Match) -> str:
+            uid = match.group(1)
+            return user_names.get(uid, uid)
+
+        replaced_text = MENTION_REGEX.sub(repl, text)
+        speaker_name = user_names.get(user_id, user_id)
+
+        return (
+            f'<slackMessage user="{speaker_name}">' f"{replaced_text}" "</slackMessage>"
+        )
+
+    context_parts = [format_message(msg) for msg in reversed(included)]
+    new_message = context_parts[-1]
+    preceding_context = "\n".join(context_parts[:-1])
+
+    contextual_message = (
+        (("Preceding context:\n" + preceding_context) if preceding_context else "")
+        + "\n\nNew message:\n"
+        + new_message
+    )
+    return contextual_message
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("langgraph_slack.server:APP", host="0.0.0.0", port=8080)
+
+

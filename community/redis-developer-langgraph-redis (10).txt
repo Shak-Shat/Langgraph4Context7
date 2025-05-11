@@ -1,0 +1,742 @@
+Directory structure:
+└── subgraphs-manage-state.ipynb
+
+================================================
+FILE: examples/subgraphs-manage-state.ipynb
+================================================
+# Jupyter notebook converted to Python script.
+
+"""
+# How to view and update state in subgraphs
+
+<div class="admonition tip">
+    <p class="admonition-title">Prerequisites</p>
+    <p>
+        This guide assumes familiarity with the following:
+        <ul>
+            <li>            
+                <a href="https://langchain-ai.github.io/langgraph/concepts/low_level/#subgraphs">
+                    Subgraphs
+                </a>
+            </li>
+            <li>            
+                <a href="https://langchain-ai.github.io/langgraph/concepts/human_in_the_loop/">
+                    Human-in-the-loop
+                </a>
+            </li>
+            <li>            
+                <a href="https://langchain-ai.github.io/langgraph/concepts/low_level/#state">
+                    State
+                </a>
+            </li>
+        </ul>
+    </p>
+</div> 
+
+Once you add [persistence](../subgraph-persistence), you can easily view and update the state of the subgraph at any point in time. This enables a lot of the human-in-the-loop interaction patterns:
+
+* You can surface a state during an interrupt to a user to let them accept an action.
+* You can rewind the subgraph to reproduce or avoid issues.
+* You can modify the state to let the user better control its actions.
+
+This guide shows how you can do this.
+"""
+
+"""
+## Setup
+
+First, let's install the required packages
+"""
+
+%%capture --no-stderr
+%pip install -U langgraph
+
+"""
+Next, we need to set API keys for OpenAI (the LLM we will use):
+"""
+
+import getpass
+import os
+
+
+def _set_env(var: str):
+    if not os.environ.get(var):
+        os.environ[var] = getpass.getpass(f"{var}: ")
+
+
+_set_env("OPENAI_API_KEY")
+# Output:
+#   OPENAI_API_KEY:  ········
+
+
+"""
+<div class="admonition tip">
+    <p class="admonition-title">Set up <a href="https://smith.langchain.com">LangSmith</a> for LangGraph development</p>
+    <p style="padding-top: 5px;">
+        Sign up for LangSmith to quickly spot issues and improve the performance of your LangGraph projects. LangSmith lets you use trace data to debug, test, and monitor your LLM apps built with LangGraph — read more about how to get started <a href="https://docs.smith.langchain.com">here</a>. 
+    </p>
+</div>
+"""
+
+"""
+## Define subgraph
+
+First, let's set up our subgraph. For this, we will create a simple graph that can get the weather for a specific city. We will compile this graph with a [breakpoint](https://langchain-ai.github.io/langgraph/how-tos/human_in_the_loop/breakpoints/) before the `weather_node`:
+"""
+
+from langgraph.graph import StateGraph, END, START, MessagesState
+from langchain_core.tools import tool
+from langchain_openai import ChatOpenAI
+
+
+@tool
+def get_weather(city: str):
+    """Get the weather for a specific city"""
+    return f"It's sunny in {city}!"
+
+
+raw_model = ChatOpenAI(model="gpt-4o")
+model = raw_model.with_structured_output(get_weather)
+
+
+class SubGraphState(MessagesState):
+    city: str
+
+
+def model_node(state: SubGraphState):
+    result = model.invoke(state["messages"])
+    return {"city": result["city"]}
+
+
+def weather_node(state: SubGraphState):
+    result = get_weather.invoke({"city": state["city"]})
+    return {"messages": [{"role": "assistant", "content": result}]}
+
+
+subgraph = StateGraph(SubGraphState)
+subgraph.add_node(model_node)
+subgraph.add_node(weather_node)
+subgraph.add_edge(START, "model_node")
+subgraph.add_edge("model_node", "weather_node")
+subgraph.add_edge("weather_node", END)
+subgraph = subgraph.compile(interrupt_before=["weather_node"])
+
+"""
+## Define parent graph
+
+We can now setup the overall graph. This graph will first route to the subgraph if it needs to get the weather, otherwise it will route to a normal LLM.
+"""
+
+from typing import Literal
+from typing_extensions import TypedDict
+from langgraph.checkpoint.redis import RedisSaver
+
+
+# Set up Redis connection for checkpointer
+REDIS_URI = "redis://redis:6379"
+memory = None
+with RedisSaver.from_conn_string(REDIS_URI) as cp:
+    cp.setup()
+    memory = cp
+
+
+class RouterState(MessagesState):
+    route: Literal["weather", "other"]
+
+
+class Router(TypedDict):
+    route: Literal["weather", "other"]
+
+
+router_model = raw_model.with_structured_output(Router)
+
+
+def router_node(state: RouterState):
+    system_message = "Classify the incoming query as either about weather or not."
+    messages = [{"role": "system", "content": system_message}] + state["messages"]
+    route = router_model.invoke(messages)
+    return {"route": route["route"]}
+
+
+def normal_llm_node(state: RouterState):
+    response = raw_model.invoke(state["messages"])
+    return {"messages": [response]}
+
+
+def route_after_prediction(
+    state: RouterState,
+) -> Literal["weather_graph", "normal_llm_node"]:
+    if state["route"] == "weather":
+        return "weather_graph"
+    else:
+        return "normal_llm_node"
+
+
+graph = StateGraph(RouterState)
+graph.add_node(router_node)
+graph.add_node(normal_llm_node)
+graph.add_node("weather_graph", subgraph)
+graph.add_edge(START, "router_node")
+graph.add_conditional_edges("router_node", route_after_prediction)
+graph.add_edge("normal_llm_node", END)
+graph.add_edge("weather_graph", END)
+graph = graph.compile(checkpointer=memory)
+
+from IPython.display import Image, display
+
+# Setting xray to 1 will show the internal structure of the nested graph
+display(Image(graph.get_graph(xray=1).draw_mermaid_png()))
+# Output:
+#   <IPython.core.display.Image object>
+
+"""
+Let's test this out with a normal query to make sure it works as intended!
+"""
+
+config = {"configurable": {"thread_id": "1"}}
+inputs = {"messages": [{"role": "user", "content": "hi!"}]}
+for update in graph.stream(inputs, config=config, stream_mode="updates"):
+    print(update)
+# Output:
+#   {'router_node': {'route': 'other'}}
+
+#   {'normal_llm_node': {'messages': [AIMessage(content='Hello! How can I assist you today?', additional_kwargs={'refusal': None}, response_metadata={'token_usage': {'completion_tokens': 10, 'prompt_tokens': 9, 'total_tokens': 19, 'completion_tokens_details': {'accepted_prediction_tokens': 0, 'audio_tokens': 0, 'reasoning_tokens': 0, 'rejected_prediction_tokens': 0}, 'prompt_tokens_details': {'audio_tokens': 0, 'cached_tokens': 0}}, 'model_name': 'gpt-4o-2024-08-06', 'system_fingerprint': 'fp_f5bdcc3276', 'id': 'chatcmpl-BRlSXXvMNEzsNaXLZjedowbm8hL33', 'finish_reason': 'stop', 'logprobs': None}, id='run-4e5e0dc8-b928-4d9f-9479-8ab8b5cf6160-0', usage_metadata={'input_tokens': 9, 'output_tokens': 10, 'total_tokens': 19, 'input_token_details': {'audio': 0, 'cache_read': 0}, 'output_token_details': {'audio': 0, 'reasoning': 0}})]}}
+
+
+"""
+Great! We didn't ask about the weather, so we got a normal response from the LLM.
+
+## Resuming from breakpoints
+
+Let's now look at what happens with breakpoints. Let's invoke it with a query that should get routed to the weather subgraph where we have the interrupt node.
+"""
+
+config = {"configurable": {"thread_id": "2"}}
+inputs = {"messages": [{"role": "user", "content": "what's the weather in sf"}]}
+for update in graph.stream(inputs, config=config, stream_mode="updates"):
+    print(update)
+# Output:
+#   {'router_node': {'route': 'weather'}}
+
+#   {'__interrupt__': ()}
+
+
+"""
+Note that the graph stream doesn't include subgraph events. If we want to stream subgraph events, we can pass `subgraphs=True` and get back subgraph events like so:
+"""
+
+config = {"configurable": {"thread_id": "3"}}
+inputs = {"messages": [{"role": "user", "content": "what's the weather in sf"}]}
+for update in graph.stream(inputs, config=config, stream_mode="values", subgraphs=True):
+    print(update)
+# Output:
+#   ((), {'messages': [HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='4480c377-9426-4fb7-b869-e2a3552cc3fa')]})
+
+#   ((), {'messages': [HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='4480c377-9426-4fb7-b869-e2a3552cc3fa')], 'route': 'weather'})
+
+#   (('weather_graph:7bd6b183-2a8a-824e-5496-40a40a0966c0',), {'messages': [HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='4480c377-9426-4fb7-b869-e2a3552cc3fa')]})
+
+#   (('weather_graph:7bd6b183-2a8a-824e-5496-40a40a0966c0',), {'messages': [HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='4480c377-9426-4fb7-b869-e2a3552cc3fa')], 'city': 'San Francisco'})
+
+
+"""
+If we get the state now, we can see that it's paused on `weather_graph`
+"""
+
+state = graph.get_state(config)
+state.next
+# Output:
+#   ('weather_graph',)
+
+"""
+If we look at the pending tasks for our current state, we can see that we have one task named `weather_graph`, which corresponds to the subgraph task.
+"""
+
+state.tasks
+# Output:
+#   (PregelTask(id='7bd6b183-2a8a-824e-5496-40a40a0966c0', name='weather_graph', path=('__pregel_pull', 'weather_graph'), error=None, interrupts=(), state={'configurable': {'thread_id': '3', 'checkpoint_ns': 'weather_graph:7bd6b183-2a8a-824e-5496-40a40a0966c0'}}, result=None),)
+
+"""
+However since we got the state using the config of the parent graph, we don't have access to the subgraph state. If you look at the `state` value of the `PregelTask` above you will note that it is simply the configuration of the parent graph. If we want to actually populate the subgraph state, we can pass in `subgraphs=True` to `get_state` like so:
+"""
+
+state = graph.get_state(config, subgraphs=True)
+state.tasks[0]
+# Output:
+#   PregelTask(id='7bd6b183-2a8a-824e-5496-40a40a0966c0', name='weather_graph', path=('__pregel_pull', 'weather_graph'), error=None, interrupts=(), state=StateSnapshot(values={'messages': [HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='4480c377-9426-4fb7-b869-e2a3552cc3fa')], 'city': 'San Francisco'}, next=('weather_node',), config={'configurable': {'thread_id': '3', 'checkpoint_ns': 'weather_graph:7bd6b183-2a8a-824e-5496-40a40a0966c0', 'checkpoint_id': '1f02534f-aa2b-6f07-8000-fbe2669bffca', 'checkpoint_map': {'': '1f02534f-aa20-6448-8001-dacd90901fb8', 'weather_graph:7bd6b183-2a8a-824e-5496-40a40a0966c0': '1f02534f-aa2b-6f07-8000-fbe2669bffca'}}}, metadata={'source': 'loop', 'writes': {'model_node': {'city': 'San Francisco'}}, 'step': 1, 'parents': {'': '1f02534f-aa20-6448-8001-dacd90901fb8'}, 'thread_id': '3', 'langgraph_step': 2, 'langgraph_node': 'weather_graph', 'langgraph_triggers': ['branch:to:weather_graph'], 'langgraph_path': ['__pregel_pull', 'weather_graph'], 'langgraph_checkpoint_ns': 'weather_graph:7bd6b183-2a8a-824e-5496-40a40a0966c0'}, created_at='2025-04-29T20:03:12.808506+00:00', parent_config=None, tasks=(PregelTask(id='1221f28f-d77c-4051-1eb9-52d177bc65b6', name='weather_node', path=('__pregel_pull', 'weather_node'), error=None, interrupts=(), state=None, result=None),), interrupts=()), result=None)
+
+"""
+Now we have access to the subgraph state! If you look at the `state` value of the `PregelTask` you can see that it has all the information we need, like the next node (`weather_node`) and the current state values (e.g. `city`).
+
+To resume execution, we can just invoke the outer graph as normal:
+"""
+
+for update in graph.stream(None, config=config, stream_mode="values", subgraphs=True):
+    print(update)
+# Output:
+#   ((), {'messages': [HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='4480c377-9426-4fb7-b869-e2a3552cc3fa')], 'route': 'weather'})
+
+#   (('weather_graph:7bd6b183-2a8a-824e-5496-40a40a0966c0',), {'messages': [HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='4480c377-9426-4fb7-b869-e2a3552cc3fa')], 'city': 'San Francisco'})
+
+#   (('weather_graph:7bd6b183-2a8a-824e-5496-40a40a0966c0',), {'messages': [HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='4480c377-9426-4fb7-b869-e2a3552cc3fa'), AIMessage(content="It's sunny in San Francisco!", additional_kwargs={}, response_metadata={}, id='fe75cd26-96ec-4660-b16a-3ab87dce7296')], 'city': 'San Francisco'})
+
+#   ((), {'messages': [HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='4480c377-9426-4fb7-b869-e2a3552cc3fa'), AIMessage(content="It's sunny in San Francisco!", additional_kwargs={}, response_metadata={}, id='fe75cd26-96ec-4660-b16a-3ab87dce7296')], 'route': 'weather'})
+
+
+"""
+### Resuming from specific subgraph node
+
+In the example above, we were replaying from the outer graph - which automatically replayed the subgraph from whatever state it was in previously (paused before the `weather_node` in our case), but it is also possible to replay from inside a subgraph. In order to do so, we need to get the configuration from the exact subgraph state that we want to replay from.
+
+We can do this by exploring the state history of the subgraph, and selecting the state before `model_node` - which we can do by filtering on the `.next` parameter.
+
+To get the state history of the subgraph, we need to first pass in  
+"""
+
+parent_graph_state_before_subgraph = next(
+    h for h in graph.get_state_history(config) if h.next == ("weather_graph",)
+)
+
+subgraph_state_before_model_node = next(
+    h
+    for h in graph.get_state_history(parent_graph_state_before_subgraph.tasks[0].state)
+    if h.next == ("model_node",)
+)
+
+# This pattern can be extended no matter how many levels deep
+# subsubgraph_stat_history = next(h for h in graph.get_state_history(subgraph_state_before_model_node.tasks[0].state) if h.next == ('my_subsubgraph_node',))
+
+"""
+We can confirm that we have gotten the correct state by comparing the `.next` parameter of the `subgraph_state_before_model_node`.
+"""
+
+subgraph_state_before_model_node.next
+# Output:
+#   ('model_node',)
+
+"""
+Perfect! We have gotten the correct state snaphshot, and we can now resume from the `model_node` inside of our subgraph:
+"""
+
+for value in graph.stream(
+    None,
+    config=subgraph_state_before_model_node.config,
+    stream_mode="values",
+    subgraphs=True,
+):
+    print(value)
+# Output:
+#   ((), {'messages': [HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='4480c377-9426-4fb7-b869-e2a3552cc3fa'), AIMessage(content="It's sunny in San Francisco!", additional_kwargs={}, response_metadata={}, id='fe75cd26-96ec-4660-b16a-3ab87dce7296')], 'route': 'weather'})
+
+
+"""
+Great, this subsection has shown how you can replay from any node, no matter how deeply nested it is inside your graph - a powerful tool for testing how deterministic your agent is.
+"""
+
+"""
+## Modifying state
+
+### Update the state of a subgraph
+
+What if we want to modify the state of a subgraph? We can do this similarly to how we [update the state of normal graphs](https://langchain-ai.github.io/langgraph/how-tos/human_in_the_loop/time-travel/), just being careful to pass in the config of the subgraph to `update_state`.
+"""
+
+config = {"configurable": {"thread_id": "4"}}
+inputs = {"messages": [{"role": "user", "content": "what's the weather in sf"}]}
+for update in graph.stream(inputs, config=config, stream_mode="updates"):
+    print(update)
+# Output:
+#   {'router_node': {'route': 'weather'}}
+
+#   {'__interrupt__': ()}
+
+
+state = graph.get_state(config, subgraphs=True)
+state.values["messages"]
+# Output:
+#   [HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='bb44b193-07e8-43e8-8d0f-c0ccb1009cc2')]
+
+"""
+In order to update the state of the **inner** graph, we need to pass the config for the **inner** graph, which we can get by accessing calling `state.tasks[0].state.config` - since we interrupted inside the subgraph, the state of the task is just the state of the subgraph.
+"""
+
+graph.update_state(state.tasks[0].state.config, {"city": "la"})
+# Output:
+#   {'configurable': {'thread_id': '4',
+
+#     'checkpoint_ns': 'weather_graph:44a45213-d789-63e2-f893-efb606d654da',
+
+#     'checkpoint_id': '1f02534f-b85b-65a9-8000-3ac82b3323fa',
+
+#     'checkpoint_map': {'': '1f02534f-b84e-614c-8001-62bc48f85f0e',
+
+#      'weather_graph:44a45213-d789-63e2-f893-efb606d654da': '1f02534f-b85b-65a9-8000-3ac82b3323fa'}}}
+
+"""
+We can now resume streaming the outer graph (which will resume the subgraph!) and check that we updated our search to use LA instead of SF.
+"""
+
+for update in graph.stream(None, config=config, stream_mode="updates", subgraphs=True):
+    print(update)
+# Output:
+#   (('weather_graph:44a45213-d789-63e2-f893-efb606d654da',), {'weather_node': {'messages': [{'role': 'assistant', 'content': "It's sunny in la!"}]}})
+
+#   ((), {'weather_graph': {'messages': [HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='bb44b193-07e8-43e8-8d0f-c0ccb1009cc2'), AIMessage(content="It's sunny in la!", additional_kwargs={}, response_metadata={}, id='0d94045b-1b72-4f06-be72-076cbb5e3c93')]}})
+
+
+"""
+Fantastic! The AI responded with "It's sunny in LA!" as we expected.
+
+### Acting as a subgraph node
+
+Another way we could update the state is by acting as the `weather_node` ourselves instead of editing the state before `weather_node` is ran as we did above. We can do this by passing the subgraph config and also the `as_node` argument, which allows us to update the state as if we are the node we specify. Thus by setting an interrupt before the `weather_node` and then using the update state function as the `weather_node`, the graph itself never calls `weather_node` directly but instead we decide what the output of `weather_node` should be.
+"""
+
+config = {"configurable": {"thread_id": "14"}}
+inputs = {"messages": [{"role": "user", "content": "what's the weather in sf"}]}
+for update in graph.stream(
+    inputs, config=config, stream_mode="updates", subgraphs=True
+):
+    print(update)
+# Graph execution should stop before the weather node
+print("interrupted!")
+
+state = graph.get_state(config, subgraphs=True)
+
+# We update the state by passing in the message we want returned from the weather node, and make sure to use as_node
+graph.update_state(
+    state.tasks[0].state.config,
+    {"messages": [{"role": "assistant", "content": "rainy"}]},
+    as_node="weather_node",
+)
+for update in graph.stream(None, config=config, stream_mode="updates", subgraphs=True):
+    print(update)
+
+print(graph.get_state(config).values["messages"])
+# Output:
+#   ((), {'router_node': {'route': 'weather'}})
+
+#   (('weather_graph:01697bb1-b7c9-de92-fe7e-015347bfe710',), {'model_node': {'city': 'San Francisco'}})
+
+#   ((), {'__interrupt__': ()})
+
+#   interrupted!
+
+#   ((), {'weather_graph': {'messages': [HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='96cbe893-f204-4c06-9253-bf0700bfbc34'), AIMessage(content='rainy', additional_kwargs={}, response_metadata={}, id='12b47fde-603c-4d72-8710-993a896cc890')]}})
+
+#   [HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='96cbe893-f204-4c06-9253-bf0700bfbc34'), AIMessage(content='rainy', additional_kwargs={}, response_metadata={}, id='12b47fde-603c-4d72-8710-993a896cc890')]
+
+
+"""
+Perfect! The AI responded with the message we passed in ourselves.
+
+### Acting as the entire subgraph
+
+Lastly, we could also update the graph just acting as the **entire** subgraph. This is similar to the case above but instead of acting as just the `weather_node` we are acting as the entire subgraph. This is done by passing in the normal graph config as well as the `as_node` argument, where we specify the we are acting as the entire subgraph node.
+"""
+
+config = {"configurable": {"thread_id": "8"}}
+inputs = {"messages": [{"role": "user", "content": "what's the weather in sf"}]}
+for update in graph.stream(
+    inputs, config=config, stream_mode="updates", subgraphs=True
+):
+    print(update)
+# Graph execution should stop before the weather node
+print("interrupted!")
+
+# We update the state by passing in the message we want returned from the weather graph, making sure to use as_node
+# Note that we don't need to pass in the subgraph config, since we aren't updating the state inside the subgraph
+graph.update_state(
+    config,
+    {"messages": [{"role": "assistant", "content": "rainy"}]},
+    as_node="weather_graph",
+)
+for update in graph.stream(None, config=config, stream_mode="updates"):
+    print(update)
+
+print(graph.get_state(config).values["messages"])
+# Output:
+#   ((), {'router_node': {'route': 'weather'}})
+
+#   (('weather_graph:45a2c9ac-19b8-f35e-d2bb-80c2c8fe8f86',), {'model_node': {'city': 'San Francisco'}})
+
+#   ((), {'__interrupt__': ()})
+
+#   interrupted!
+
+#   [HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='f6c83085-adbe-4eef-a95d-4208cc4432f9'), AIMessage(content='rainy', additional_kwargs={}, response_metadata={}, id='853fa6f1-11a3-41e7-87f3-38eeaf40c69c')]
+
+
+"""
+Again, the AI responded with "rainy" as we expected.
+
+## Double nested subgraphs
+
+This same functionality continues to work no matter the level of nesting. Here is an example of doing the same things with a double nested subgraph (although any level of nesting will work). We add another router on top of our already defined graphs.
+"""
+
+from typing import Literal
+from typing_extensions import TypedDict
+from langgraph.checkpoint.redis import RedisSaver
+
+
+# Set up Redis connection for checkpointer
+REDIS_URI = "redis://redis:6379"
+memory = None
+with RedisSaver.from_conn_string(REDIS_URI) as cp:
+    cp.setup()
+    memory = cp
+
+
+class RouterState(MessagesState):
+    route: Literal["weather", "other"]
+
+
+class Router(TypedDict):
+    route: Literal["weather", "other"]
+
+
+router_model = raw_model.with_structured_output(Router)
+
+
+def router_node(state: RouterState):
+    system_message = "Classify the incoming query as either about weather or not."
+    messages = [{"role": "system", "content": system_message}] + state["messages"]
+    route = router_model.invoke(messages)
+    return {"route": route["route"]}
+
+
+def normal_llm_node(state: RouterState):
+    response = raw_model.invoke(state["messages"])
+    return {"messages": [response]}
+
+
+def route_after_prediction(
+    state: RouterState,
+) -> Literal["weather_graph", "normal_llm_node"]:
+    if state["route"] == "weather":
+        return "weather_graph"
+    else:
+        return "normal_llm_node"
+
+
+graph = StateGraph(RouterState)
+graph.add_node(router_node)
+graph.add_node(normal_llm_node)
+graph.add_node("weather_graph", subgraph)
+graph.add_edge(START, "router_node")
+graph.add_conditional_edges("router_node", route_after_prediction)
+graph.add_edge("normal_llm_node", END)
+graph.add_edge("weather_graph", END)
+graph = graph.compile(checkpointer=memory)
+# Output:
+#   [32m20:03:18[0m [34mredisvl.index.index[0m [1;30mINFO[0m   Index already exists, not overwriting.
+
+#   [32m20:03:18[0m [34mredisvl.index.index[0m [1;30mINFO[0m   Index already exists, not overwriting.
+
+#   [32m20:03:18[0m [34mredisvl.index.index[0m [1;30mINFO[0m   Index already exists, not overwriting.
+
+
+from langgraph.checkpoint.redis import RedisSaver
+
+# Set up Redis connection for checkpointer
+REDIS_URI = "redis://redis:6379"
+memory = None
+with RedisSaver.from_conn_string(REDIS_URI) as cp:
+    cp.setup()
+    memory = cp
+
+
+class GrandfatherState(MessagesState):
+    to_continue: bool
+
+
+def router_node(state: GrandfatherState):
+    # Dummy logic that will always continue
+    return {"to_continue": True}
+
+
+def route_after_prediction(state: GrandfatherState):
+    if state["to_continue"]:
+        return "graph"
+    else:
+        return END
+
+
+grandparent_graph = StateGraph(GrandfatherState)
+grandparent_graph.add_node(router_node)
+grandparent_graph.add_node("graph", graph)
+grandparent_graph.add_edge(START, "router_node")
+grandparent_graph.add_conditional_edges(
+    "router_node", route_after_prediction, ["graph", END]
+)
+grandparent_graph.add_edge("graph", END)
+grandparent_graph = grandparent_graph.compile(checkpointer=memory)
+# Output:
+#   [32m20:03:18[0m [34mredisvl.index.index[0m [1;30mINFO[0m   Index already exists, not overwriting.
+
+#   [32m20:03:18[0m [34mredisvl.index.index[0m [1;30mINFO[0m   Index already exists, not overwriting.
+
+#   [32m20:03:18[0m [34mredisvl.index.index[0m [1;30mINFO[0m   Index already exists, not overwriting.
+
+
+from IPython.display import Image, display
+
+# Setting xray to 1 will show the internal structure of the nested graph
+display(Image(grandparent_graph.get_graph(xray=2).draw_mermaid_png()))
+# Output:
+#   <IPython.core.display.Image object>
+
+"""
+If we run until the interrupt, we can now see that there are snapshots of the state of all three graphs
+"""
+
+config = {"configurable": {"thread_id": "2"}}
+inputs = {"messages": [{"role": "user", "content": "what's the weather in sf"}]}
+for update in grandparent_graph.stream(
+    inputs, config=config, stream_mode="updates", subgraphs=True
+):
+    print(update)
+# Output:
+#   ((), {'router_node': {'to_continue': True}})
+
+#   (('graph:ecd08a47-d858-7231-c7a0-aa74b7934e49',), {'router_node': {'route': 'weather'}})
+
+#   (('graph:ecd08a47-d858-7231-c7a0-aa74b7934e49', 'weather_graph:64329b7f-d9e7-1f2c-9a6e-7a3d819eaed6'), {'model_node': {'city': 'San Francisco'}})
+
+#   ((), {'__interrupt__': ()})
+
+
+state = grandparent_graph.get_state(config, subgraphs=True)
+print("Grandparent State:")
+print(state.values)
+print("---------------")
+print("Parent Graph State:")
+print(state.tasks[0].state.values)
+print("---------------")
+print("Subgraph State:")
+print(state.tasks[0].state.tasks[0].state.values)
+# Output:
+#   Grandparent State:
+
+#   {'messages': [HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='0a0cde55-27e8-4c98-bf2a-0707a1d887a1'), HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='cc01dc7a-f5bc-4ed3-8ea7-430941d46c7b')], 'to_continue': True}
+
+#   ---------------
+
+#   Parent Graph State:
+
+#   {'messages': [HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='0a0cde55-27e8-4c98-bf2a-0707a1d887a1'), HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='cc01dc7a-f5bc-4ed3-8ea7-430941d46c7b')], 'route': 'weather'}
+
+#   ---------------
+
+#   Subgraph State:
+
+#   {'messages': [HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='0a0cde55-27e8-4c98-bf2a-0707a1d887a1'), HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='cc01dc7a-f5bc-4ed3-8ea7-430941d46c7b')]}
+
+
+"""
+We can now continue, acting as the node three levels down
+"""
+
+grandparent_graph_state = state
+parent_graph_state = grandparent_graph_state.tasks[0].state
+subgraph_state = parent_graph_state.tasks[0].state
+grandparent_graph.update_state(
+    subgraph_state.config,
+    {"messages": [{"role": "assistant", "content": "rainy"}]},
+    as_node="weather_node",
+)
+for update in grandparent_graph.stream(
+    None, config=config, stream_mode="updates", subgraphs=True
+):
+    print(update)
+
+print(grandparent_graph.get_state(config).values["messages"])
+# Output:
+#   (('graph:ecd08a47-d858-7231-c7a0-aa74b7934e49',), {'weather_graph': {'messages': [HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='0a0cde55-27e8-4c98-bf2a-0707a1d887a1'), HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='cc01dc7a-f5bc-4ed3-8ea7-430941d46c7b')]}})
+
+#   ((), {'graph': {'messages': [HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='0a0cde55-27e8-4c98-bf2a-0707a1d887a1'), HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='cc01dc7a-f5bc-4ed3-8ea7-430941d46c7b')]}})
+
+#   [HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='0a0cde55-27e8-4c98-bf2a-0707a1d887a1'), HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='cc01dc7a-f5bc-4ed3-8ea7-430941d46c7b')]
+
+
+"""
+As in the cases above, we can see that the AI responds with "rainy" as we expect.
+
+We can explore the state history to see how the state of the grandparent graph was updated at each step.
+"""
+
+for state in grandparent_graph.get_state_history(config):
+    print(state)
+    print("-----")
+# Output:
+#   StateSnapshot(values={'messages': []}, next=('__start__',), config={'configurable': {'thread_id': '2', 'checkpoint_ns': '', 'checkpoint_id': ''}}, metadata={'source': 'input', 'writes': {'__start__': {'messages': [{'role': 'user', 'content': "what's the weather in sf"}]}}, 'step': -1, 'parents': {}, 'thread_id': '2'}, created_at='2025-04-29T20:03:10.223564+00:00', parent_config=None, tasks=(PregelTask(id='21d8f2f8-46c3-3701-812b-6bcf24bda147', name='__start__', path=('__pregel_pull', '__start__'), error=None, interrupts=(), state=None, result=None),), interrupts=())
+
+#   -----
+
+#   StateSnapshot(values={'messages': [HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='0a0cde55-27e8-4c98-bf2a-0707a1d887a1')]}, next=('router_node',), config={'configurable': {'thread_id': '2', 'checkpoint_ns': '', 'checkpoint_id': '1f02534f-9757-6061-bfff-ad28e8ed1a58'}}, metadata={'source': 'loop', 'writes': None, 'step': 0, 'parents': {}, 'thread_id': '2'}, created_at='2025-04-29T20:03:10.225471+00:00', parent_config=None, tasks=(PregelTask(id='4c5096be-5c6b-8732-8623-0c6106f96dfa', name='router_node', path=('__pregel_pull', 'router_node'), error=None, interrupts=(), state=None, result=None),), interrupts=())
+
+#   -----
+
+#   StateSnapshot(values={'messages': []}, next=('__start__',), config={'configurable': {'thread_id': '2', 'checkpoint_ns': 'weather_graph:ed8b1cf5-2ebb-102e-1d28-4d7bd2d7c597', 'checkpoint_id': '', 'checkpoint_map': {'': '1f02534f-9ceb-61f3-8001-e0d2101e26b7', 'weather_graph:ed8b1cf5-2ebb-102e-1d28-4d7bd2d7c597': ''}}}, metadata={'source': 'input', 'writes': {'__start__': {'messages': [{'lc': 1, 'type': 'constructor', 'id': ['langchain', 'schema', 'messages', 'HumanMessage'], 'kwargs': {'content': "what's the weather in sf", 'type': 'human', 'id': '0a0cde55-27e8-4c98-bf2a-0707a1d887a1'}}], 'route': 'weather'}}, 'step': -1, 'parents': {'': '1f02534f-9ceb-61f3-8001-e0d2101e26b7'}, 'thread_id': '2', 'langgraph_step': 2, 'langgraph_node': 'weather_graph', 'langgraph_triggers': ['branch:to:weather_graph'], 'langgraph_path': ['__pregel_pull', 'weather_graph'], 'langgraph_checkpoint_ns': 'weather_graph:ed8b1cf5-2ebb-102e-1d28-4d7bd2d7c597'}, created_at='2025-04-29T20:03:10.812412+00:00', parent_config=None, tasks=(PregelTask(id='30fd433b-43cf-7dce-f6cf-09c0b098387a', name='__start__', path=('__pregel_pull', '__start__'), error=None, interrupts=(), state=None, result=None),), interrupts=())
+
+#   -----
+
+#   StateSnapshot(values={'messages': [HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='0a0cde55-27e8-4c98-bf2a-0707a1d887a1')]}, next=(), config={'configurable': {'thread_id': '2', 'checkpoint_ns': 'weather_graph:ed8b1cf5-2ebb-102e-1d28-4d7bd2d7c597', 'checkpoint_id': '1f02534f-9cf4-6a2b-bfff-036966fe6cce', 'checkpoint_map': {'': '1f02534f-9ceb-61f3-8001-e0d2101e26b7', 'weather_graph:ed8b1cf5-2ebb-102e-1d28-4d7bd2d7c597': '1f02534f-9cf4-6a2b-bfff-036966fe6cce'}}}, metadata={'source': 'loop', 'writes': None, 'step': 0, 'parents': {'': '1f02534f-9ceb-61f3-8001-e0d2101e26b7'}, 'thread_id': '2', 'langgraph_step': 2, 'langgraph_node': 'weather_graph', 'langgraph_triggers': ['branch:to:weather_graph'], 'langgraph_path': ['__pregel_pull', 'weather_graph'], 'langgraph_checkpoint_ns': 'weather_graph:ed8b1cf5-2ebb-102e-1d28-4d7bd2d7c597'}, created_at='2025-04-29T20:03:10.815786+00:00', parent_config=None, tasks=(), interrupts=())
+
+#   -----
+
+#   StateSnapshot(values={'messages': [HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='0a0cde55-27e8-4c98-bf2a-0707a1d887a1')]}, next=(), config={'configurable': {'thread_id': '2', 'checkpoint_ns': '', 'checkpoint_id': '1f02534f-975b-6af2-8000-d525c5020c98'}}, metadata={'source': 'loop', 'writes': {'router_node': {'route': 'weather'}}, 'step': 1, 'parents': {}, 'thread_id': '2'}, created_at='2025-04-29T20:03:10.808486+00:00', parent_config=None, tasks=(), interrupts=())
+
+#   -----
+
+#   StateSnapshot(values={'messages': [HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='0a0cde55-27e8-4c98-bf2a-0707a1d887a1')]}, next=(), config={'configurable': {'thread_id': '2', 'checkpoint_ns': 'weather_graph:ed8b1cf5-2ebb-102e-1d28-4d7bd2d7c597', 'checkpoint_id': '1f02534f-9cfc-6e34-8000-e4c77de3aaf7', 'checkpoint_map': {'': '1f02534f-9ceb-61f3-8001-e0d2101e26b7', 'weather_graph:ed8b1cf5-2ebb-102e-1d28-4d7bd2d7c597': '1f02534f-9cfc-6e34-8000-e4c77de3aaf7'}}}, metadata={'source': 'loop', 'writes': {'model_node': {'city': 'sf'}}, 'step': 1, 'parents': {'': '1f02534f-9ceb-61f3-8001-e0d2101e26b7'}, 'thread_id': '2', 'langgraph_step': 2, 'langgraph_node': 'weather_graph', 'langgraph_triggers': ['branch:to:weather_graph'], 'langgraph_path': ['__pregel_pull', 'weather_graph'], 'langgraph_checkpoint_ns': 'weather_graph:ed8b1cf5-2ebb-102e-1d28-4d7bd2d7c597'}, created_at='2025-04-29T20:03:11.359276+00:00', parent_config=None, tasks=(), interrupts=())
+
+#   -----
+
+#   StateSnapshot(values={'messages': [HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='0a0cde55-27e8-4c98-bf2a-0707a1d887a1')]}, next=('__start__',), config={'configurable': {'thread_id': '2', 'checkpoint_ns': '', 'checkpoint_id': '1f02534f-9ceb-61f3-8001-e0d2101e26b7'}}, metadata={'source': 'input', 'writes': {'__start__': {'messages': [{'role': 'user', 'content': "what's the weather in sf"}]}}, 'step': 2, 'parents': {}, 'thread_id': '2'}, created_at='2025-04-29T20:03:18.341546+00:00', parent_config=None, tasks=(PregelTask(id='59ceba0c-a86b-9f80-d2d4-bdc1ef42d60f', name='__start__', path=('__pregel_pull', '__start__'), error=None, interrupts=(), state=None, result=None),), interrupts=())
+
+#   -----
+
+#   StateSnapshot(values={'messages': [HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='0a0cde55-27e8-4c98-bf2a-0707a1d887a1'), HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='cc01dc7a-f5bc-4ed3-8ea7-430941d46c7b')]}, next=('router_node',), config={'configurable': {'thread_id': '2', 'checkpoint_ns': '', 'checkpoint_id': '1f02534f-e4c2-6500-8002-607354b38b9c'}}, metadata={'source': 'loop', 'writes': None, 'step': 3, 'parents': {}, 'thread_id': '2'}, created_at='2025-04-29T20:03:18.342922+00:00', parent_config=None, tasks=(PregelTask(id='40f6faec-869b-587b-074a-3988857a8011', name='router_node', path=('__pregel_pull', 'router_node'), error=None, interrupts=(), state=None, result=None),), interrupts=())
+
+#   -----
+
+#   StateSnapshot(values={'messages': [HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='0a0cde55-27e8-4c98-bf2a-0707a1d887a1'), HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='cc01dc7a-f5bc-4ed3-8ea7-430941d46c7b')], 'to_continue': True}, next=('graph',), config={'configurable': {'thread_id': '2', 'checkpoint_ns': '', 'checkpoint_id': '1f02534f-e4c5-6aa6-8003-00a8d2565f11'}}, metadata={'source': 'loop', 'writes': {'router_node': {'to_continue': True}}, 'step': 4, 'parents': {}, 'thread_id': '2'}, created_at='2025-04-29T20:03:18.345047+00:00', parent_config=None, tasks=(PregelTask(id='ecd08a47-d858-7231-c7a0-aa74b7934e49', name='graph', path=('__pregel_pull', 'graph'), error=None, interrupts=(), state={'configurable': {'thread_id': '2', 'checkpoint_ns': 'graph:ecd08a47-d858-7231-c7a0-aa74b7934e49'}}, result=None),), interrupts=())
+
+#   -----
+
+#   StateSnapshot(values={'messages': []}, next=('__start__',), config={'configurable': {'thread_id': '2', 'checkpoint_ns': 'graph:ecd08a47-d858-7231-c7a0-aa74b7934e49', 'checkpoint_id': '', 'checkpoint_map': {'': '1f02534f-e4ca-6df0-8004-ff0a69394644', 'graph:ecd08a47-d858-7231-c7a0-aa74b7934e49': ''}}}, metadata={'source': 'input', 'writes': {'__start__': {'messages': [{'lc': 1, 'type': 'constructor', 'id': ['langchain', 'schema', 'messages', 'HumanMessage'], 'kwargs': {'content': "what's the weather in sf", 'type': 'human', 'id': '0a0cde55-27e8-4c98-bf2a-0707a1d887a1'}}, {'lc': 1, 'type': 'constructor', 'id': ['langchain', 'schema', 'messages', 'HumanMessage'], 'kwargs': {'content': "what's the weather in sf", 'type': 'human', 'id': 'cc01dc7a-f5bc-4ed3-8ea7-430941d46c7b'}}], 'to_continue': True}}, 'step': -1, 'parents': {'': '1f02534f-e4ca-6df0-8004-ff0a69394644'}, 'thread_id': '2', 'langgraph_step': 5, 'langgraph_node': 'graph', 'langgraph_triggers': ['branch:to:graph'], 'langgraph_path': ['__pregel_pull', 'graph'], 'langgraph_checkpoint_ns': 'graph:ecd08a47-d858-7231-c7a0-aa74b7934e49'}, created_at='2025-04-29T20:03:18.348322+00:00', parent_config=None, tasks=(PregelTask(id='2cd6780d-5584-5481-476f-f46eb3ab707c', name='__start__', path=('__pregel_pull', '__start__'), error=None, interrupts=(), state=None, result=None),), interrupts=())
+
+#   -----
+
+#   StateSnapshot(values={'messages': [HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='0a0cde55-27e8-4c98-bf2a-0707a1d887a1'), HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='cc01dc7a-f5bc-4ed3-8ea7-430941d46c7b')]}, next=('router_node',), config={'configurable': {'thread_id': '2', 'checkpoint_ns': 'graph:ecd08a47-d858-7231-c7a0-aa74b7934e49', 'checkpoint_id': '1f02534f-e4d2-6d80-bfff-0da28d2d90d1', 'checkpoint_map': {'': '1f02534f-e4ca-6df0-8004-ff0a69394644', 'graph:ecd08a47-d858-7231-c7a0-aa74b7934e49': '1f02534f-e4d2-6d80-bfff-0da28d2d90d1'}}}, metadata={'source': 'loop', 'writes': None, 'step': 0, 'parents': {'': '1f02534f-e4ca-6df0-8004-ff0a69394644'}, 'thread_id': '2', 'langgraph_step': 5, 'langgraph_node': 'graph', 'langgraph_triggers': ['branch:to:graph'], 'langgraph_path': ['__pregel_pull', 'graph'], 'langgraph_checkpoint_ns': 'graph:ecd08a47-d858-7231-c7a0-aa74b7934e49'}, created_at='2025-04-29T20:03:18.350141+00:00', parent_config=None, tasks=(PregelTask(id='ffce42bc-3dcb-79d6-9684-007d1556c852', name='router_node', path=('__pregel_pull', 'router_node'), error=None, interrupts=(), state=None, result=None),), interrupts=())
+
+#   -----
+
+#   StateSnapshot(values={'messages': [HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='0a0cde55-27e8-4c98-bf2a-0707a1d887a1'), HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='cc01dc7a-f5bc-4ed3-8ea7-430941d46c7b')]}, next=(), config={'configurable': {'thread_id': '2', 'checkpoint_ns': 'graph:ecd08a47-d858-7231-c7a0-aa74b7934e49', 'checkpoint_id': '1f02534f-e4d7-64b8-8000-42a577aa117a', 'checkpoint_map': {'': '1f02534f-e4ca-6df0-8004-ff0a69394644', 'graph:ecd08a47-d858-7231-c7a0-aa74b7934e49': '1f02534f-e4d7-64b8-8000-42a577aa117a'}}}, metadata={'source': 'loop', 'writes': {'router_node': {'route': 'weather'}}, 'step': 1, 'parents': {'': '1f02534f-e4ca-6df0-8004-ff0a69394644'}, 'thread_id': '2', 'langgraph_step': 5, 'langgraph_node': 'graph', 'langgraph_triggers': ['branch:to:graph'], 'langgraph_path': ['__pregel_pull', 'graph'], 'langgraph_checkpoint_ns': 'graph:ecd08a47-d858-7231-c7a0-aa74b7934e49'}, created_at='2025-04-29T20:03:18.945545+00:00', parent_config=None, tasks=(), interrupts=())
+
+#   -----
+
+#   StateSnapshot(values={'messages': []}, next=(), config={'configurable': {'thread_id': '2', 'checkpoint_ns': 'graph:ecd08a47-d858-7231-c7a0-aa74b7934e49|weather_graph:64329b7f-d9e7-1f2c-9a6e-7a3d819eaed6', 'checkpoint_id': '1f02534f-ea97-6e0c-8001-4cb845379071', 'checkpoint_map': {'': '1f02534f-e4ca-6df0-8004-ff0a69394644', 'graph:ecd08a47-d858-7231-c7a0-aa74b7934e49': '1f02534f-ea85-604e-8001-fd2c19df9a62', 'graph:ecd08a47-d858-7231-c7a0-aa74b7934e49|weather_graph:64329b7f-d9e7-1f2c-9a6e-7a3d819eaed6': '1f02534f-ea97-6e0c-8001-4cb845379071'}}}, metadata={'source': 'loop', 'writes': None, 'step': 2, 'parents': {'': '1f02534f-e4ca-6df0-8004-ff0a69394644', 'graph:ecd08a47-d858-7231-c7a0-aa74b7934e49': '1f02534f-ea85-604e-8001-fd2c19df9a62'}, 'thread_id': '2', 'langgraph_step': 2, 'langgraph_node': 'weather_graph', 'langgraph_triggers': ['branch:to:weather_graph'], 'langgraph_path': ['__pregel_pull', 'weather_graph'], 'langgraph_checkpoint_ns': 'graph:ecd08a47-d858-7231-c7a0-aa74b7934e49|weather_graph:64329b7f-d9e7-1f2c-9a6e-7a3d819eaed6'}, created_at='2025-04-29T20:03:18.955348+00:00', parent_config=None, tasks=(), interrupts=())
+
+#   -----
+
+#   StateSnapshot(values={'messages': []}, next=(), config={'configurable': {'thread_id': '2', 'checkpoint_ns': 'graph:ecd08a47-d858-7231-c7a0-aa74b7934e49|weather_graph:64329b7f-d9e7-1f2c-9a6e-7a3d819eaed6', 'checkpoint_id': '1f02534f-ea9c-6dc8-8002-9eaf091dda7c', 'checkpoint_map': {'': '1f02534f-e4ca-6df0-8004-ff0a69394644', 'graph:ecd08a47-d858-7231-c7a0-aa74b7934e49': '1f02534f-ea85-604e-8001-fd2c19df9a62', 'graph:ecd08a47-d858-7231-c7a0-aa74b7934e49|weather_graph:64329b7f-d9e7-1f2c-9a6e-7a3d819eaed6': '1f02534f-ea9c-6dc8-8002-9eaf091dda7c'}}}, metadata={'source': 'loop', 'writes': {'model_node': {'city': 'San Francisco'}}, 'step': 3, 'parents': {'': '1f02534f-e4ca-6df0-8004-ff0a69394644', 'graph:ecd08a47-d858-7231-c7a0-aa74b7934e49': '1f02534f-ea85-604e-8001-fd2c19df9a62'}, 'thread_id': '2', 'langgraph_step': 2, 'langgraph_node': 'weather_graph', 'langgraph_triggers': ['branch:to:weather_graph'], 'langgraph_path': ['__pregel_pull', 'weather_graph'], 'langgraph_checkpoint_ns': 'graph:ecd08a47-d858-7231-c7a0-aa74b7934e49|weather_graph:64329b7f-d9e7-1f2c-9a6e-7a3d819eaed6'}, created_at='2025-04-29T20:03:20.277729+00:00', parent_config=None, tasks=(), interrupts=())
+
+#   -----
+
+#   StateSnapshot(values={'messages': [HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='0a0cde55-27e8-4c98-bf2a-0707a1d887a1'), HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='cc01dc7a-f5bc-4ed3-8ea7-430941d46c7b')]}, next=(), config={'configurable': {'thread_id': '2', 'checkpoint_ns': 'graph:ecd08a47-d858-7231-c7a0-aa74b7934e49|weather_graph:64329b7f-d9e7-1f2c-9a6e-7a3d819eaed6', 'checkpoint_id': '1f02534f-e4d7-64b8-8000-42a577aa117a', 'checkpoint_map': {'': '1f02534f-e4ca-6df0-8004-ff0a69394644', 'graph:ecd08a47-d858-7231-c7a0-aa74b7934e49|weather_graph:64329b7f-d9e7-1f2c-9a6e-7a3d819eaed6': '1f02534f-e4d7-64b8-8000-42a577aa117a'}}}, metadata={'source': 'update', 'writes': {'weather_node': {'messages': [{'role': 'assistant', 'content': 'rainy'}]}}, 'step': 2, 'parents': {'': '1f02534f-e4ca-6df0-8004-ff0a69394644'}, 'thread_id': '2', 'langgraph_step': 5, 'langgraph_node': 'graph', 'langgraph_triggers': ['branch:to:graph'], 'langgraph_path': ['__pregel_pull', 'graph'], 'langgraph_checkpoint_ns': 'graph:ecd08a47-d858-7231-c7a0-aa74b7934e49', 'checkpoint_ns': 'graph:ecd08a47-d858-7231-c7a0-aa74b7934e49|weather_graph:64329b7f-d9e7-1f2c-9a6e-7a3d819eaed6', 'checkpoint_id': '1f02534f-e4d7-64b8-8000-42a577aa117a'}, created_at='2025-04-29T20:03:20.313043+00:00', parent_config=None, tasks=(), interrupts=())
+
+#   -----
+
+#   StateSnapshot(values={'messages': [HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='0a0cde55-27e8-4c98-bf2a-0707a1d887a1'), HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='cc01dc7a-f5bc-4ed3-8ea7-430941d46c7b')]}, next=(), config={'configurable': {'thread_id': '2', 'checkpoint_ns': 'graph:ecd08a47-d858-7231-c7a0-aa74b7934e49', 'checkpoint_id': '1f02534f-ea85-604e-8001-fd2c19df9a62', 'checkpoint_map': {'': '1f02534f-e4ca-6df0-8004-ff0a69394644', 'graph:ecd08a47-d858-7231-c7a0-aa74b7934e49': '1f02534f-ea85-604e-8001-fd2c19df9a62'}}}, metadata={'source': 'loop', 'writes': {'weather_graph': {'messages': [{'lc': 1, 'type': 'constructor', 'id': ['langchain', 'schema', 'messages', 'HumanMessage'], 'kwargs': {'content': "what's the weather in sf", 'type': 'human', 'id': '0a0cde55-27e8-4c98-bf2a-0707a1d887a1'}}, {'lc': 1, 'type': 'constructor', 'id': ['langchain', 'schema', 'messages', 'HumanMessage'], 'kwargs': {'content': "what's the weather in sf", 'type': 'human', 'id': 'cc01dc7a-f5bc-4ed3-8ea7-430941d46c7b'}}]}}, 'step': 2, 'parents': {'': '1f02534f-e4ca-6df0-8004-ff0a69394644'}, 'thread_id': '2', 'langgraph_step': 5, 'langgraph_node': 'graph', 'langgraph_triggers': ['branch:to:graph'], 'langgraph_path': ['__pregel_pull', 'graph'], 'langgraph_checkpoint_ns': 'graph:ecd08a47-d858-7231-c7a0-aa74b7934e49'}, created_at='2025-04-29T20:03:20.321696+00:00', parent_config=None, tasks=(), interrupts=())
+
+#   -----
+
+#   StateSnapshot(values={'messages': [HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='0a0cde55-27e8-4c98-bf2a-0707a1d887a1'), HumanMessage(content="what's the weather in sf", additional_kwargs={}, response_metadata={}, id='cc01dc7a-f5bc-4ed3-8ea7-430941d46c7b')], 'to_continue': True}, next=(), config={'configurable': {'thread_id': '2', 'checkpoint_ns': '', 'checkpoint_id': '1f02534f-e4ca-6df0-8004-ff0a69394644'}}, metadata={'source': 'loop', 'writes': {'graph': {'messages': [{'lc': 1, 'type': 'constructor', 'id': ['langchain', 'schema', 'messages', 'HumanMessage'], 'kwargs': {'content': "what's the weather in sf", 'type': 'human', 'id': '0a0cde55-27e8-4c98-bf2a-0707a1d887a1'}}, {'lc': 1, 'type': 'constructor', 'id': ['langchain', 'schema', 'messages', 'HumanMessage'], 'kwargs': {'content': "what's the weather in sf", 'type': 'human', 'id': 'cc01dc7a-f5bc-4ed3-8ea7-430941d46c7b'}}]}}, 'step': 5, 'parents': {}, 'thread_id': '2'}, created_at='2025-04-29T20:03:20.324070+00:00', parent_config=None, tasks=(), interrupts=())
+
+#   -----
+
+
+

@@ -1,0 +1,1100 @@
+Directory structure:
+└── langgraph-gui-langgraph-gui-backend/
+    ├── README.md
+    ├── crontab
+    ├── daily.sh
+    ├── LICENSE
+    ├── requirements.txt
+    ├── supervisord.conf
+    └── src/
+        ├── __version__.py
+        ├── FileTransmit.py
+        ├── llm.py
+        ├── main.py
+        ├── NodeData.py
+        ├── process_handler.py
+        ├── run_graph.py
+        ├── ServerTee.py
+        ├── util.py
+        └── WorkFlow.py
+
+================================================
+FILE: README.md
+================================================
+# LangGraph-GUI-backend
+
+fastapi ver LangGraph-GUI backend
+
+The backend supports running LangGraph-GUI workflow json using localLLM such ollama.
+
+For more infomation, please see official site: [LangGraph-GUI.github.io](https://LangGraph-GUI.github.io)
+
+## Environment Setup
+
+To install the required dependencies for LangGraph and server, run:
+
+```bash
+pip install -r requirements.txt
+```
+
+## Running the server
+
+To run a local language model, first start Ollama in a separate terminal:
+
+```bash
+ollama serve
+```
+
+At another thread, up the server
+
+```bash
+mkdir src/workspace
+cd src/workspace
+python ../server.py
+```
+
+## Chnage Log
+
+see: [root repo CHANGELOG](https://github.com/LangGraph-GUI/LangGraph-GUI/blob/main/CHANGELOG.md)
+
+
+
+================================================
+FILE: crontab
+================================================
+0 0 * * * /app/daily.sh >> /app/src/workspace/cron.log 2>&1
+
+# need EOF
+
+
+================================================
+FILE: daily.sh
+================================================
+#!/bin/bash
+date
+supervisorctl restart fastapi
+
+
+================================================
+FILE: LICENSE
+================================================
+MIT License
+
+Copyright (c) 2025 HomunMage
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+
+================================================
+FILE: requirements.txt
+================================================
+langchain
+langchain-community
+langchain-core
+langgraph
+fastapi
+uvicorn
+httpx
+
+openai
+pyyaml
+python-multipart
+
+langchain-ollama
+
+
+================================================
+FILE: supervisord.conf
+================================================
+[supervisord]
+nodaemon=true
+
+[unix_http_server]
+file=/var/run/supervisor.sock
+chmod=0700
+
+[rpcinterface:supervisor]
+supervisor.rpcinterface_factory = supervisor.rpcinterface:make_main_rpcinterface
+
+[program:cron]
+command=/usr/sbin/cron -f
+user=root
+stdout_logfile=/dev/stdout
+stdout_logfile_maxbytes=0
+stderr_logfile=/dev/stderr
+stderr_logfile_maxbytes=0
+
+[program:fastapi]
+directory=/app/src/
+command=/bin/bash -c "uvicorn main:app --host 0.0.0.0 --port ${BACKEND_PORT:-8000}"
+user=root
+stdout_logfile=/dev/stdout
+stdout_logfile_maxbytes=0
+stderr_logfile=/dev/stderr
+stderr_logfile_maxbytes=0
+
+
+================================================
+FILE: src/__version__.py
+================================================
+__version__ = "1.3.0"
+
+
+================================================
+FILE: src/FileTransmit.py
+================================================
+# FileTransmit.py
+
+from typing import List
+import os
+import zipfile
+import io
+from datetime import datetime
+import json
+
+from fastapi import HTTPException, BackgroundTasks
+from fastapi import APIRouter, File, UploadFile, HTTPException
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import StreamingResponse
+from fastapi.responses import Response
+
+
+# Create a router instance
+file_router = APIRouter()
+
+# Utility function to get or create a user's workspace directory
+def get_or_create_workspace(username: str) -> str:
+    """
+    Ensures the workspace directory for a given username exists.
+    Creates the directory if it doesn't exist.
+    """
+    workspace_path = os.path.join('./workspace/', username)
+    if not os.path.exists(workspace_path):
+        os.makedirs(workspace_path)
+        print(f"Created workspace for {username} at {workspace_path}")
+    return workspace_path
+
+
+@file_router.get('/download/{username}')
+async def download_workspace(username: str):
+    try:
+        user_workspace = get_or_create_workspace(username)
+
+        # Create a zip file from the user's workspace directory
+        zip_filename = f'{username}_workspace.zip'
+        zip_buffer = io.BytesIO()  # in-memory buffer to hold the zip file
+
+        # Create a ZipFile object in write mode
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            # Walk through the workspace directory and add files to the zip
+            for root, dirs, files in os.walk(user_workspace):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    arcname = os.path.relpath(file_path, user_workspace)  # Store files relative to the workspace
+                    zip_file.write(file_path, arcname)
+
+        # Seek to the beginning of the buffer before sending it
+        zip_buffer.seek(0)
+
+        # Return the zip file as a Response, without triggering stat checks
+        return Response(
+            zip_buffer.read(),  # Read the content of the BytesIO object
+            media_type="application/zip",  # Set the media type to zip file
+            headers={"Content-Disposition": f"attachment; filename={zip_filename}"}
+        )
+    
+    except Exception as e:
+        print(f"Error creating zip: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to create zip file: {str(e)}")
+
+# Route to handle file uploads with username
+@file_router.post('/upload/{username}')
+async def upload_file(username: str, files: List[UploadFile] = File(...)):
+    user_workspace = get_or_create_workspace(username)
+
+    if not files:
+        raise HTTPException(status_code=400, detail="No files selected for uploading")
+
+    # Save each uploaded file to the user's workspace
+    for file in files:
+        file_path = os.path.join(user_workspace, file.filename)
+        with open(file_path, 'wb') as f:
+            f.write(await file.read())
+        print(f"Uploaded file: {file.filename} to {user_workspace}")
+    
+    return JSONResponse(content={"message": "Files successfully uploaded"}, status_code=200)
+
+# Route to handle cleaning the user's workspace
+@file_router.post('/clean-cache/{username}')
+async def clean_cache(username: str):
+    try:
+        # Get or create the user's workspace
+        user_workspace = get_or_create_workspace(username)
+
+        # Delete all files in the user's workspace
+        for root, dirs, files in os.walk(user_workspace):
+            for file in files:
+                file_path = os.path.join(root, file)
+                os.remove(file_path)
+                print(f"Deleted file: {file_path}")
+
+        return JSONResponse(content={"message": "Workspace successfully cleaned"}, status_code=200)
+
+    except Exception as e:
+        print(f"Error cleaning workspace: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to clean workspace: {str(e)}")
+
+
+
+================================================
+FILE: src/llm.py
+================================================
+# llm.py
+
+import os
+import json
+import requests
+from typing import Optional
+
+from pydantic import BaseModel, Field
+
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+
+from util import logger
+
+
+# Clip the history for limited token
+def clip_history(history: str, max_chars: int = 16000) -> str:
+    if len(history) > max_chars:
+        return history[-max_chars:]
+    return history
+
+def get_llm(llm_model, api_key):
+
+    # openai case
+    if "gpt" in llm_model.lower():  # If the llm contains 'gpt', use ChatOpenAI
+        from langchain_community.chat_models import ChatOpenAI
+        os.environ["OPENAI_API_KEY"] = api_key
+        llm = ChatOpenAI(temperature=0, model="gpt-4o-mini").bind(response_format={"type": "json_object"})
+        logger("Using gpt-4o-mini")
+
+        return llm
+    # cannot work now, need langchain fix error
+    if "google" in llm_model.lower():
+        logger("no suport google LLM")
+        return None        
+
+    # ollama case
+    if llm_model:
+        from langchain_ollama import ChatOllama
+        ollama_base_url = os.environ.get("OLLAMA_BASE_URL", "http://ollama:11434")  # Default value if envvar is not set
+        llm = ChatOllama(
+            model=llm_model,
+            base_url=ollama_base_url,
+            format="json",
+            temperature=0)
+
+        logger(f"Using {llm_model}")
+        return llm
+
+
+
+def ChatBot(llm, question):
+    # Define the prompt template
+    template = """
+        {question}
+        you reply json in {{ reply:"<content>" }}
+    """
+
+    prompt = PromptTemplate.from_template(clip_history(template))
+
+    # Format the prompt with the input variable
+    formatted_prompt = prompt.format(question=question)
+
+    llm_chain = prompt | llm | StrOutputParser()
+    generation = llm_chain.invoke(formatted_prompt)
+    
+    data = json.loads(generation)
+    reply = data.get("reply", "")
+
+    return reply
+
+
+def create_llm_chain(prompt_template: str, llm, history: str) -> str:
+    """
+    Creates and invokes an LLM chain using the prompt template and the history.
+    """
+    prompt = PromptTemplate.from_template(prompt_template)
+    llm_chain = prompt | llm | StrOutputParser()
+    inputs = {"history": history}
+    generation = llm_chain.invoke(inputs)
+
+    return generation
+
+def create_llm_chain_google(prompt_template: str, llm, history: Optional[str] = None) -> str:
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+    
+    headers = {
+        "Content-Type": "application/json"
+    }
+    
+    # If history exists, include it in the prompt
+    full_prompt = f"{history}\n{prompt_template}, you reply in json file" if history else prompt_template
+    
+    data = {
+        "contents": [{
+            "parts": [{"text": full_prompt}]
+        }]
+    }
+    
+    params = {
+        "key": "your google key"
+    }
+    
+    try:
+        response = requests.post(url, headers=headers, json=data, params=params)
+        response.raise_for_status()
+        
+        json_response = response.json()
+        
+        # Extract the text from candidates[0].content.parts[0].text
+        if (json_response.get("candidates") and 
+            len(json_response["candidates"]) > 0 and 
+            json_response["candidates"][0].get("content") and 
+            json_response["candidates"][0]["content"].get("parts") and 
+            len(json_response["candidates"][0]["content"]["parts"]) > 0):
+            
+            output = json_response["candidates"][0]["content"]["parts"][0]["text"]
+        else:
+            raise ValueError("Unexpected response structure from Gemini API")
+            
+        output = str(output)
+        output = output[7:-3]
+        output = json.dumps({"output": output})
+        logger("printing:")        
+        logger(output)
+
+        return output
+
+    except requests.exceptions.RequestException as e:
+        raise Exception(f"API request failed: {str(e)}")
+    except ValueError as e:
+        raise Exception(f"Error processing response: {str(e)}")
+
+
+================================================
+FILE: src/main.py
+================================================
+# server.py
+
+import os
+from datetime import datetime
+import httpx
+from typing import Dict
+import asyncio
+
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
+
+from ServerTee import ServerTee
+from process_handler import ProcessHandler
+from FileTransmit import file_router
+
+# log name as today's date in YYYY-MM-DD format
+today_date = datetime.now().strftime("%Y-%m-%d")
+# Create log file path dynamically based on the date
+log_file_path = f"log/{today_date}.log"
+# Initialize ServerTee with the dynamically generated log file path
+tee = ServerTee(log_file_path)
+# Print the log file path for reference
+print(log_file_path)
+
+# Initialize FastAPI app
+app = FastAPI()
+
+# Add CORS middleware
+origins = [
+    "*"
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,  # List of allowed origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all HTTP methods (GET, POST, PUT, DELETE, etc.)
+    allow_headers=["*"],  # Allows all headers
+)
+
+# Dictionary to store ProcessHandler instances per user
+handlers = {}
+
+
+@app.post('/chatbot/{username}')
+async def process_string(request: Request, username: str):
+    # Get the JSON data from the request
+    data = await request.json()
+    input_string = data.get('input_string', '')
+    llm_model = data.get('llm_model', '')  # Default to 'gemma2' if not provided
+    api_key = data.get('api_key', '')
+
+    # Process the string using the dynamically provided llm_model and api_key
+    result = await ChatBot(get_llm(llm_model, api_key), input_string)
+
+    # Return the result as JSON
+    return JSONResponse(content={'result': result})
+
+
+@app.post('/run/{username}')
+async def run_script(request: Request, username: str):
+    user_workspace = os.path.join("workspace", username)
+
+    data = await request.json()
+    llm_model = data.get('llm_model', '')
+    api_key = data.get('api_key', '')
+
+    command = [
+        "python", "../../run_graph.py",
+        "--llm", llm_model,
+        "--key", api_key
+    ]
+
+    # Get or create a handler for the user
+    if username not in handlers:
+        handlers[username] = ProcessHandler()
+    
+    handler = handlers[username]
+    # start process in background
+    async def stream_response():
+        asyncio.create_task(handler.run(command, user_workspace)) # start the process as a task
+        async for output in handler.get_stream():
+            if isinstance(output, dict):
+                yield f"data: {output}\n\n"  # Send final status
+                break
+            yield f"data: {output}\n\n"
+
+    return StreamingResponse(stream_response(), media_type="text/event-stream")
+
+@app.get('/status/{username}')
+async def check_status(username: str):
+    # Check if the handler exists and retrieve its status
+    if username in handlers:
+        status = await handlers[username].status()  # Note: status() is an async function
+        return {"running": status["is_running"]}  # Make sure to return running status
+    return {"running": False}
+
+
+# Include file router
+app.include_router(file_router)
+
+# Catch-all route for unmatched GET requests
+@app.api_route("/{anypath:path}", methods=["GET"])
+async def catch_all(request: Request, anypath: str):
+    print(f"Unmatched GET request: {anypath}")
+    return JSONResponse(content={"message": f"Route {anypath} not found"}, status_code=404)
+
+
+# Run the app using Uvicorn
+if __name__ == "__main__":
+    import uvicorn
+
+    backend_port = int(os.environ.get("BACKEND_PORT", 8000))  # Default to 8000 if not set
+    uvicorn.run(app, host="0.0.0.0", port=backend_port, reload=True)
+
+
+================================================
+FILE: src/NodeData.py
+================================================
+# NodeData.py
+
+from dataclasses import dataclass, asdict, field
+from typing import List, Optional, Dict
+
+@dataclass
+class Serializable:
+    def to_dict(self):
+        return asdict(self)
+    
+    @classmethod
+    def from_dict(cls, data):
+        return cls(**data)
+
+@dataclass
+class NodeData(Serializable):
+    
+    # Graph Feature
+    uniq_id: str = ""
+    
+    # Store external properties in a dictionary
+    ext: dict = field(default_factory=dict)
+
+
+    nexts: List[int] = field(default_factory=list)
+
+    # LangGraph attribute
+    # "START", "STEP", "TOOL", "CONDITION"
+    type: str = "START"
+
+    # AGENT
+    name: str = ""
+    description: str = ""
+
+    # STEP
+    tool: str = ""
+
+    # CONDITION
+    true_next: Optional[int] = None
+    false_next: Optional[int] = None
+
+
+    def to_dict(self):
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data):
+        return cls(**data)
+
+
+
+================================================
+FILE: src/process_handler.py
+================================================
+# process_handler.py
+
+import asyncio
+from asyncio import Queue as AsyncQueue
+import sys
+
+class ProcessHandler:
+    def __init__(self):
+        self._process = None
+        self._output_queue = AsyncQueue()  # Use asyncio.Queue
+        self._is_running = False
+        self._is_starting = False
+        self._stream_tasks = []  # Store stream tasks
+
+    async def run(self, command: list, cwd: str):
+        if self._is_running or self._is_starting:
+            await self._output_queue.put({"status": "error", "message": "Process already running"})
+            return
+        try:
+            self._is_starting = True
+            # clear the queue before run
+            while not self._output_queue.empty():
+               self._output_queue.get_nowait()
+
+            self._process = await asyncio.create_subprocess_exec(
+                *command,
+                cwd=cwd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            self._is_running = True
+            self._is_starting = False
+
+            async def stream_output(stream, prefix):
+                 while True:
+                     line = await stream.readline()
+                     if line:
+                         message = f"{prefix}{line.decode().strip()}"
+                         print(message,flush=True) #flush output immediately
+                         if prefix == "STDOUT: ": # only add stdout
+                            await self._output_queue.put(message)
+                            
+                     else:
+                         break
+
+            # Create tasks and store them to cancel later
+            stdout_task = asyncio.create_task(stream_output(self._process.stdout, "STDOUT: "))
+            stderr_task = asyncio.create_task(stream_output(self._process.stderr, "STDERR: "))
+            self._stream_tasks = [stdout_task, stderr_task]
+            
+            # Don't wait, let tasks run
+            await self._process.wait()
+
+            if self._process.returncode == 0:
+                 await self._output_queue.put({"status": "success", "message": "Process completed successfully"})
+            else:
+                await self._output_queue.put({"status": "error", "message": f"Process exited with code {self._process.returncode}"})
+        except Exception as e:
+            await self._output_queue.put({"status": "error", "message": str(e)})
+        finally:
+             # Cancel the tasks and wait for cancellation to complete
+             for task in self._stream_tasks:
+                task.cancel()
+             try:
+                 await asyncio.gather(*self._stream_tasks, return_exceptions=True) # allow exception
+             except asyncio.CancelledError:
+                 pass
+
+             self._stream_tasks = []
+             self._is_starting = False
+             self._process = None
+             self._is_running = False
+    async def status(self):
+        return {
+            "is_running": (self._is_running or self._is_starting) and self._process is not None,
+        }
+
+    def subscribe(self):
+        return self._output_queue  # return the queue for external subscription
+
+    async def get_stream(self):
+      while True:
+            try:
+                output = await asyncio.wait_for(self._output_queue.get(),timeout=0.1)
+                yield output
+            except asyncio.TimeoutError:
+               if not self._is_running and self._process is None:
+                    break #close if process is not running
+               continue
+
+
+================================================
+FILE: src/run_graph.py
+================================================
+import argparse
+import sys
+import time
+
+from llm import ChatBot, get_llm
+from WorkFlow import run_workflow_as_server
+
+def main():
+    # Create the argument parser
+    parser = argparse.ArgumentParser(description="Run a graph processing task with LLM configuration.")
+    
+    # Add arguments
+    parser.add_argument(
+        "--llm", 
+        type=str, 
+        required=True, 
+        help="Specify the LLM model to use (e.g., gpt-4)."
+    )
+    parser.add_argument(
+        "--key", 
+        type=str, 
+        required=True, 
+        help="API key for authentication."
+    )
+    
+    # Parse the arguments
+    args = parser.parse_args()
+    
+    # Access the arguments
+    llm_model = args.llm
+    api_key = args.key
+    
+    # Initialize the LLM using the provided model and API key
+    llm_instance = get_llm(llm_model, api_key)
+    run_workflow_as_server(llm_instance)
+
+if __name__ == "__main__":
+    main()
+
+
+
+================================================
+FILE: src/ServerTee.py
+================================================
+# ServerTee.py
+
+import sys
+import datetime
+from threading import Lock
+from queue import Queue, Empty
+
+class ServerTee:
+    def __init__(self, filename, mode='a'):
+        self.file = open(filename, mode)
+        self.stdout = sys.stdout
+        self.lock = Lock()
+        self.subscribers = []
+        sys.stdout = self
+
+    def write(self, message):
+        with self.lock:
+            timestamp = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            message_with_timestamp = f"{timestamp} - {message}"
+            # Ensure the final text ends with '\n'
+            if not message_with_timestamp.endswith('\n'):
+                message_with_timestamp += '\n'
+            self.stdout.write(message_with_timestamp)
+            self.stdout.flush()  # Ensure immediate output to console
+            self.file.write(message_with_timestamp)
+            self.file.flush()  # Ensure immediate write to file
+
+    def flush(self):
+        with self.lock:
+            self.stdout.flush()
+            self.file.flush()
+
+    def close(self):
+        with self.lock:
+            sys.stdout = self.stdout
+            self.file.close()
+
+    def notify_subscribers(self, message):
+        for subscriber in self.subscribers:
+            subscriber.put(message)
+
+    def subscribe(self):
+        q = Queue()
+        self.subscribers.append(q)
+        return q
+
+    def unsubscribe(self, q):
+        self.subscribers.remove(q)
+
+    def stream_to_frontend(self):
+        q = self.subscribe()
+        try:
+            while True:
+                try:
+                    message = q.get(timeout=1)
+                    yield message + "\n"
+                except Empty:
+                    continue
+        finally:
+            self.unsubscribe(q)
+
+
+================================================
+FILE: src/util.py
+================================================
+# util.py
+
+import sys
+import os
+
+def logger(*args, **kwargs):
+    output = ""
+    for arg in args:
+      output += str(arg)
+    
+    output = output.replace("\n", "\\n")
+    print(output, **kwargs)
+    sys.stdout.flush()
+
+
+================================================
+FILE: src/WorkFlow.py
+================================================
+# WorkFlow.py
+
+import os
+import re
+import json
+from typing import Dict, List, TypedDict, Any, Annotated, Callable, Literal, Optional, Union
+import operator
+import inspect
+
+from langgraph.graph import StateGraph, END, START
+
+from NodeData import NodeData
+from llm import get_llm, clip_history, create_llm_chain
+from util import logger
+
+# Tool registry to hold information about tools
+tool_registry: Dict[str, Callable] = {}
+tool_info_registry: Dict[str, str] = {}
+
+# Subgraph registry to hold all the subgraph
+subgraph_registry: Dict[str, Any] = {}
+
+# Decorator to register tools
+def tool(func: Callable) -> Callable:
+    signature = inspect.signature(func)
+    docstring = func.__doc__ or ""
+    tool_info = f"{func.__name__}{signature} - {docstring}"
+    tool_registry[func.__name__] = func
+    tool_info_registry[func.__name__] = tool_info
+    return func
+
+def parse_nodes_from_json(graph_data: Dict[str, Any]) -> Dict[str, NodeData]:
+    """
+    Parses node data from a subgraph's JSON structure.
+
+    Args:
+        graph_data: A dictionary representing a subgraph.
+    Returns:
+        A dictionary of NodeData objects keyed by their unique IDs.
+    """
+    node_map = {}
+    for node_data in graph_data.get("nodes", []):
+        node = NodeData.from_dict(node_data)
+        node_map[node.uniq_id] = node
+    return node_map
+
+def find_nodes_by_type(node_map: Dict[str, NodeData], node_type: str) -> List[NodeData]:
+    return [node for node in node_map.values() if node.type == node_type]
+
+
+class PipelineState(TypedDict):
+    history: Annotated[str, operator.add]
+    task: Annotated[str, operator.add]
+    condition: Annotated[bool, lambda x, y: y]
+
+def execute_step(name:str, state: PipelineState, prompt_template: str, llm) -> PipelineState:
+    logger(f"{name} is working...")
+    state["history"] = clip_history(state["history"])
+
+    generation = create_llm_chain(prompt_template, llm, state["history"])
+    data = json.loads(generation)
+    
+    state["history"] += "\n" + json.dumps(data)
+    state["history"] = clip_history(state["history"])
+
+    logger(state["history"])
+    return state
+
+def execute_tool(name: str, state: PipelineState, prompt_template: str, llm) -> PipelineState:
+
+    logger(f"{name} is working...")
+
+    state["history"] = clip_history(state["history"])
+    
+    generation = create_llm_chain(prompt_template, llm, state["history"])
+
+    # Sanitize the generation output by removing invalid control characters
+    sanitized_generation = re.sub(r'[\x00-\x1F\x7F]', '', generation)
+
+    logger(sanitized_generation)
+
+    data = json.loads(sanitized_generation)
+    
+    choice = data
+    tool_name = choice["function"]
+    args = choice["args"]
+    
+    if tool_name not in tool_registry:
+        raise ValueError(f"Tool {tool_name} not found in registry.")
+    
+    result = tool_registry[tool_name](*args)
+
+    # Flatten args to a string
+    flattened_args = ', '.join(map(str, args))
+
+    logger(f"\nExecuted Tool: {tool_name}({flattened_args})  Result is: {result}")
+
+
+    state["history"] += f"\nExecuted {tool_name}({flattened_args})  Result is: {result}"
+    state["history"] = clip_history(state["history"])
+
+    return state
+
+def condition_switch(name:str, state: PipelineState, prompt_template: str, llm) -> PipelineState:
+    logger(f"{name} is working...")
+
+    state["history"] = clip_history(state["history"])
+
+    generation = create_llm_chain(prompt_template, llm, state["history"])
+    data = json.loads(generation)
+    
+    condition = data["switch"]
+    state["condition"] = condition
+    
+    state["history"] += f"\nCondition is {condition}"
+    state["history"] = clip_history(state["history"])
+
+    return state
+
+def info_add(name: str, state: PipelineState, information: str, llm) -> PipelineState:
+    logger(f"{name} is adding information...")
+
+    # Append the provided information to the history
+    state["history"] += "\n" + information
+    state["history"] = clip_history(state["history"])
+
+    return state
+
+
+def sg_add(name:str, state: PipelineState, sg_name: str) -> PipelineState:
+    logger(f"{name} is working, it is a subgraph node call {sg_name} ...")
+    subgraph = subgraph_registry[sg_name]
+    response = subgraph.invoke(
+        PipelineState(
+            history=state["history"],
+            task=state["task"],
+            condition=state["condition"]
+        )
+    )
+    state["history"] = response["history"]
+    state["task"] = response["task"]
+    state["condition"] = response["condition"]
+    return state
+
+
+def conditional_edge(state: PipelineState) -> Literal["True", "False"]:
+    if state["condition"] in ["True", "true", True]:
+        return "True"
+    else:
+        return "False"
+
+def build_subgraph(node_map: Dict[str, NodeData], llm) -> StateGraph:
+    # Define the state machine
+    subgraph = StateGraph(PipelineState)
+
+    # Start node, only one start point
+    start_node = find_nodes_by_type(node_map, "START")[0]
+    logger(f"Start root ID: {start_node.uniq_id}")
+
+    # Step nodes
+    step_nodes = find_nodes_by_type(node_map, "STEP")
+    for current_node in step_nodes:
+        if current_node.tool:
+            tool_info = tool_info_registry[current_node.tool]
+            prompt_template = f"""
+            history: {{history}}
+            {current_node.description}
+            Available tool: {tool_info}
+            Based on Available tool, arguments in the json format:
+            "function": "<func_name>", "args": [<arg1>, <arg2>, ...]
+
+            next stage directly parse then run <func_name>(<arg1>,<arg2>, ...) make sure syntax is right json and align function siganture
+            """
+            subgraph.add_node(
+                current_node.uniq_id, 
+                lambda state, template=prompt_template, llm=llm, name=current_node.name : execute_tool(name, state, template, llm)
+            )
+        else:
+            prompt_template=f"""
+            history: {{history}}
+            {current_node.description}
+            you reply in the json format
+            """
+            subgraph.add_node(
+                current_node.uniq_id, 
+                lambda state, template=prompt_template, llm=llm, name=current_node.name: execute_step(name, state, template, llm)
+            )
+
+    # Add INFO nodes
+    info_nodes = find_nodes_by_type(node_map, "INFO")
+    for info_node in info_nodes:
+        # INFO nodes just append predefined information to the state history
+        subgraph.add_node(
+            info_node.uniq_id, 
+            lambda state, template=info_node.description, llm=llm, name=info_node.name: info_add(name, state, template, llm)
+        )
+    
+    # Add SUBGRAPH nodes
+    subgraph_nodes = find_nodes_by_type(node_map, "SUBGRAPH")
+    for sg_node in subgraph_nodes:
+        subgraph.add_node(
+            sg_node.uniq_id, 
+            lambda state, llm=llm, name=sg_node.name, sg_name=sg_node.name: sg_add(name, state, sg_name)
+        )
+
+    # Edges
+    # Find all next nodes from start_node
+    next_node_ids = start_node.nexts
+    next_nodes = [node_map[next_id] for next_id in next_node_ids]
+    
+    for next_node in next_nodes:
+        logger(f"Next node ID: {next_node.uniq_id}, Type: {next_node.type}")
+        subgraph.add_edge(START, next_node.uniq_id)   
+
+    # Find all next nodes from step_nodes
+    for node in step_nodes + info_nodes + subgraph_nodes:
+        next_nodes = [node_map[next_id] for next_id in node.nexts]
+        
+        for next_node in next_nodes:
+            logger(f"{node.name} {node.uniq_id}'s next node: {next_node.name} {next_node.uniq_id}, Type: {next_node.type}")
+            subgraph.add_edge(node.uniq_id, next_node.uniq_id)
+
+    # Find all condition nodes
+    condition_nodes = find_nodes_by_type(node_map, "CONDITION")
+    for condition in condition_nodes:
+        condition_template = f"""{condition.description}
+        history: {{history}}, decide the condition result in the json format:
+        "switch": True/False
+        """
+        subgraph.add_node(
+            condition.uniq_id, 
+            lambda state, template=condition_template, llm=llm, name=condition.name: condition_switch(name, state, template, llm)
+        )
+
+        logger(f"{condition.name} {condition.uniq_id}'s condition")
+        logger(f"true will go {condition.true_next}")
+        logger(f"false will go {condition.false_next}")
+        subgraph.add_conditional_edges(
+            condition.uniq_id,
+            conditional_edge,
+            {
+                "True": condition.true_next if condition.true_next else END,
+                "False": condition.false_next if condition.false_next else END
+            }
+        )
+    return subgraph.compile()
+
+
+class MainGraphState(TypedDict):
+    input: Union[str, None]
+
+def invoke_root(state: MainGraphState):
+    subgraph = subgraph_registry["root"]
+    response = subgraph.invoke(
+        PipelineState(
+            history="",
+            task="",
+            condition=False
+        )
+    )
+    return  {"input": None}
+
+
+def run_workflow_as_server(llm):
+    # Load subgraph data
+    with open("graph.json", 'r') as file:
+        graphs = json.load(file)
+    
+    # Process each subgraph
+    for graph in graphs:
+        subgraph_name = graph.get("name")        
+        node_map = parse_nodes_from_json(graph)
+        
+        # Register the tool functions dynamically if has tool node, must before build graph
+        for tool_node in find_nodes_by_type(node_map, "TOOL"):
+            tool_code = f"{tool_node.description}"
+            exec(tool_code, globals())
+
+        
+        subgraph = build_subgraph(node_map, llm)
+        subgraph_registry[subgraph_name] = subgraph
+
+    
+    # Main Graph
+    main_graph = StateGraph(MainGraphState)
+    main_graph.add_node("subgraph", invoke_root)
+    main_graph.set_entry_point("subgraph")
+    main_graph = main_graph.compile()
+
+
+    # ==========================
+    # Run
+    # ==========================
+    for state in main_graph.stream(
+        {
+            "input": None,
+        }
+    ):
+        logger(state)
+

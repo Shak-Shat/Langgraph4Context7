@@ -1,0 +1,500 @@
+Directory structure:
+└── dheerajrhegde-servicedesk_langgraph_tavily/
+    ├── README.md
+    ├── requirements.txt
+    ├── streamlit_app.py
+    └── tools_agents.py
+
+================================================
+FILE: README.md
+================================================
+# Service Desk Automation Application
+
+This application automates technical support interactions through a chat interface. It integrates with various APIs and services to facilitate ticket creation, knowledge article management, and intelligent response generation using natural language processing.
+
+## Overview
+
+The Service Desk Automation Application provides automated support for users' technical issues by leveraging the following functionalities:
+
+- **ServiceNow Integration:** Allows creating incidents and knowledge articles directly in ServiceNow.
+- **Tavily Integration:** Provides real-time web search capabilities to fetch the latest information on technical topics.
+- **OpenAI Integration:** Uses a language model (LLM) from OpenAI for intelligent responses and conversation management.
+- **Streamlit Interface:** Offers an interactive web application interface for users to interact with the service desk.
+
+## Features
+
+- **Ticket Creation:** Users can create incidents in ServiceNow by providing a short description and detailed steps.
+- **Knowledge Article Creation:** Allows users to draft knowledge articles in ServiceNow based on resolved queries.
+- **Real-time Help Search:** Provides detailed instructions and help based on user queries using Tavily.
+- **Interactive Chat Interface:** Offers a user-friendly chat interface to communicate with the service desk.
+
+## Tech Stack
+
+- **Streamlit**: For building the interactive web application.
+- **Langchain**: Extends the capabilities of the language model with tools.
+- **LangGraph**: Manages workflows and integrations.
+- **OpenAI**: Provides natural language processing and responses.
+- **ServiceNow APIs**: Manages ticketing and knowledge management.
+- **Tavily**: Provides real-time web search and information retrieval.
+
+## ServiceNow
+Get your instance at https://developer.servicenow.com/dev.do#!/home. Get user name, apssword and base url.
+
+## Installation
+
+1. Clone the repository:
+
+   ```bash
+   git clone <repository_url>
+   cd service-desk-automation
+
+2. Install dependencies:
+
+    ```bash
+    pip install -r requirements.txt
+
+
+3. Set up environment variables:
+Create a .env file in the root directory. Define the following variables in the .env file:
+
+    ```bash
+    CIGNA_CLIENT_ID=<your_cigna_client_id>
+    CIGNA_CLIENT_SECRET=<your_cigna_client_secret>
+    TAVILY_API_KEY=<your_tavily_api_key>
+    OPENAI_API_KEY=<your_openai_api_key>
+    SERVICENOW_BASE_URL=<your_servicenow_base_url>
+    SERVICENOW_USER=<your_servicenow_user>
+    SERVICENOW_PASSWORD=<your_servicenow_password>
+
+4. Run the application:
+
+    ```bash
+    streamlit run streamlit_app.py
+
+5. Access the application:
+Open a web browser and go to http://localhost:8501 to interact with the Service Desk Automation Application.
+
+## Usage
+- **Login with Cigna**: Users can authenticate using Cigna credentials to access personalized support.
+- **Chat Interface**: Use the chat interface to communicate with the service desk, ask questions, and receive automated responses.
+- **File Upload**: Upload images for assistance; the system will attempt to interpret and provide relevant support.
+- **Interaction Completion**: Upon resolving a user query, the system automatically creates a ServiceNow ticket and knowledge article, providing the user with reference information.
+
+## License
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## Sample
+<img width="1551" alt="image" src="https://github.com/dheerajrhegde/servicedesk_langgraph_tavily/assets/90691324/fbfdf1c6-fe1c-402e-9b34-1ebf0412aaf5">
+
+
+
+
+================================================
+FILE: requirements.txt
+================================================
+langchain
+langgraph
+langchain_openai
+tavily-python
+typing
+langchain-community
+streamlit
+streamlit-oauth
+langgraph-checkpoint-sqlite
+
+
+================================================
+FILE: streamlit_app.py
+================================================
+import tools_agents, datetime, base64
+import streamlit as st
+
+# Set up the page configuration
+st.set_page_config(
+    page_title="Chat App",
+    page_icon="💬",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
+
+markdown="""
+### Overview
+This application is designed to provide automated support for users' technical issues by:
+- Raising ServiceNow tickets.
+- Creating knowledge articles based on resolved queries.
+- Using a Language Model (LLM) for intelligent responses.
+- Fetching the latest information on technical topics.
+
+### Tech Stack
+- **Streamlit**: For building the interactive web application.
+- **Langchain**: To extend the capabilities of the LLM with tools.
+- **LangGraph**: For managing workflows and integrations.
+- **OpenAI**: For natural language processing and responses.
+- **ServiceNow Cloud APIs**: For ticketing and knowledge management.
+- **Tavily**: For real-time web search and information retrieval.
+"""
+
+
+
+
+
+# Initialize session state to store chat messages
+if "user_queries" not in st.session_state:
+    st.session_state["user_queries"] = []
+    st.session_state["abot"] = tools_agents.getAgent()
+    st.session_state["thread"] = {"configurable": {"thread_id": "1"}}
+
+# Function to add a new message to the chat
+def add_message(user, text):
+    st.session_state["user_queries"].append({
+        "user": user,
+        "text": text,
+        "time": datetime.datetime.now().strftime("%H:%M:%S")
+    })
+
+# Function to display chat messages
+def display_messages():
+    for message in st.session_state["user_queries"][::-1]:
+        st.write(f"[{message['time']}] {message['user']}: {message['text']}")
+
+# Title of the app
+st.title("Service Desk Chat Application")
+
+# Creating 3 columns to display the chat interface
+# Column 1 will display the overview of the application
+# Column 2 will display the input form for sending a new message
+# Column 3 will display the chat history
+st.session_state.col1, st.session_state.col2, st.session_state.col3 = st.columns([0.3, 0.2, 0.5])
+
+with st.session_state.col1:
+    st.markdown(markdown)
+
+# Input form for sending a new message
+with st.session_state.col2:
+    with st.form("message_form", clear_on_submit=True):
+
+        user_query = st.text_input("Message", key="user_query", max_chars=500)
+        send_image = st.file_uploader("Choose a file")
+        send_button = st.form_submit_button("Send")
+
+        # If the send button is clicked, add there is a message or image to send
+        if send_button and  ( send_image or user_query):
+            content = []
+            if send_image:
+                file_bytestream = send_image.getvalue()
+                base64_encoded = base64.b64encode(file_bytestream).decode("utf-8")
+
+                base64_string_with_prefix = f"data:image/png;base64, {base64_encoded}"
+                content.append({"type": "text","text": "This is image uploaded by user who needs support. Get information from image and continue with chat"})
+                content.append({
+                            "type": "image_url",
+                            "image_url": {"url": base64_string_with_prefix},
+                        })
+
+            if user_query:
+                content.append({"type": "text",
+                 "text": user_query})
+                #content.append(user_query)
+                add_message("user", user_query)
+
+            messages = [tools_agents.HumanMessage(content=content)]
+            result = st.session_state.abot.graph.invoke({"messages": messages}, st.session_state.thread)
+            add_message("agent", result['messages'][-1].content)
+
+# Display the chat history with latest messages on top
+with st.session_state.col3:
+    # Display the chat messages
+    st.subheader("Chat History")
+    display_messages()
+
+# Streamlit application
+st.write("---")
+st.write("Simple chat application using Streamlit.")
+
+
+================================================
+FILE: tools_agents.py
+================================================
+import requests, os
+from langchain.pydantic_v1 import BaseModel, Field
+from langchain.tools import BaseTool, StructuredTool, tool
+from typing import TypedDict, Annotated
+from langchain_core.messages import AnyMessage, SystemMessage, HumanMessage, ToolMessage
+import operator
+from langgraph.graph import StateGraph, END
+from langchain_openai import ChatOpenAI
+import json
+from langchain.adapters.openai import convert_openai_messages
+from requests.auth import HTTPBasicAuth
+from langgraph.checkpoint.sqlite import SqliteSaver
+from tavily import TavilyClient
+import base64, mimetypes
+
+
+
+class ServiceNowIncident(BaseModel):
+    short_description: str = Field(description="Short description of the incident to create in 8 words or less")
+    description: str = Field(
+        description="A very detailed step by step description of the conversation that needs \
+        ot be converted into an incident and Should be in 500 words or less")
+
+
+@tool(args_schema=ServiceNowIncident)
+def create_servicenow_incident(short_description, description):
+    """
+    Creates an incident in ServiceNow based on the provided description.
+
+    Args:
+        short_description (str): Short description of the incident.
+        description (str): Detailed description of the incident.
+
+    Returns:
+        tuple: A tuple containing two incident numbers if successful, otherwise the error message.
+    """
+    assignment_group = "0996f38ec89112009d04d87a50caf610"
+    contact_type = "Event1"
+    u_contact = "0b2c7cf4837a02107ede20d0deaad38e"  # you / contact person -
+    caller_id = "31826bf03710200044e0bfc8bcbe5d36"  # ID of user
+    u_creator_group = "fe2b38b4837a02107ede20d0deaad342"  # Sys ID of the 'Organziation service Desk' group
+    u_symptom = "b3a47ffcb07932002f10272c5c585dfc"  # Information
+    state = '1'
+    u_infrastructure_ci = '91ceb0f8837a02107ede20d0deaad397'  # for Zscaler
+    work_notes = ''  # Work notes
+    comments = 'comments test'  # Additional comments
+    assignment_group = "fe2b38b4837a02107ede20d0deaad342"
+
+    # Set proper headers
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+    # print(user, password)
+    # Do the HTTP request
+    response = requests.post(os.getenv("servicenow_base_url")+"/api/now/v1/table/incident",
+                             auth=(os.getenv("servicenow_user"), os.getenv("servicenow_password")), headers=headers,
+                             data=str({"short_description": short_description,
+                                       "u_creator_group": u_creator_group,
+                                       "contact_type": contact_type,
+                                       "u_contact": u_contact,
+                                       "description": description,
+                                       "u_infrastructure_ci": u_infrastructure_ci,
+                                       "u_symptom": u_symptom,
+                                       "caller_id": caller_id,
+                                       "work_notes": work_notes,
+                                       "comments": comments,
+                                       "assignment_group": assignment_group,
+                                       "state": state,
+                                       "impact": 1, "urgency": 1,
+                                       "assignment_group": "fe2b38b4837a02107ede20d0deaad342"
+                                       }), verify=False)
+    if response.status_code == 201:
+        return json.loads(response.text)['result']['number'], json.loads(response.text)['result']['number']
+    else:
+        return response.text
+
+
+class ServiceNowKnowledgeArticle(BaseModel):
+    title: str = Field(description="10 word title for the article")
+    text: str = Field(description="A very detailed knowledge article text")
+
+
+@tool(args_schema=ServiceNowKnowledgeArticle)
+def create_servicenow_knowledge_article(title, text):
+    """
+    Creates a knowledge article in ServiceNow based on the provided title and text.
+
+    Args:
+        title (str): Title of the knowledge article.
+        text (str): Detailed text content of the knowledge article.
+
+    Returns:
+        str: Success message if the knowledge article is created successfully,
+             otherwise an error message.
+    """
+    payload = {
+        "short_description": title,
+        "text": text,
+        "kb_knowledge_base": "a7e8a78bff0221009b20ffffffffff17",  # Replace with the actual sys_id
+        "workflow_state": "draft"  # Possible values: "draft", "published", "retired"
+    }
+
+    # Headers for the request
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+    }
+
+    # Make the POST request to create the knowledge article
+    response = requests.post(
+        os.getenv("servicenow_base_url")+"/api/now/table/kb_knowledge",
+        auth=HTTPBasicAuth(
+            os.getenv("servicenow_user"),
+            os.getenv("servicenow_password")
+        ),
+        headers=headers,
+        data=json.dumps(payload)
+    )
+
+    if response.status_code == 201:
+        return "Knowledge article created"
+    else:
+        return "Error creating KA"
+
+
+class SearchInput(BaseModel):
+    query: str = Field(description="should be a search query")
+
+client = TavilyClient(os.getenv("TAVILY_API_KEY"))
+
+@tool(args_schema=SearchInput)
+def get_help(query):
+    """
+    Performs a search to get detailed instructions/help based on the user query.
+
+    Args:
+        query (str): Search query to retrieve instructions/help.
+
+    Returns:
+        str: Detailed instructions/help as a series of steps.
+    """
+    content = client.search(query, search_depth="advanced")["results"]
+
+    # setup prompt
+    prompt = [{
+        "role": "system",
+        "content": f'You are an AI research assistant. ' \
+                   f'Your sole purpose is to provide a steps to setup instructions for user query'
+    }, {
+        "role": "user",
+        "content": f'Information: """{content}"""\n\n' \
+                   f'Using the above information, answer the following' \
+                   f'query: "{query}" as a series if setps to take --' \
+        }]
+
+    # run gpt-4
+    lc_messages = convert_openai_messages(prompt)
+    report = ChatOpenAI(model='gpt-4o', openai_api_key=os.getenv("OPENAI_API_KEY")).invoke(lc_messages).content
+
+    # print report
+    return report
+
+
+class AgentState(TypedDict):
+    messages: Annotated[list[AnyMessage], operator.add]
+
+
+class Agent:
+    """
+    Represents an agent that interacts with a model and tools based on a state machine graph.
+
+    Attributes:
+        system (str): Optional system information.
+        graph (StateGraph): State machine graph representing agent's behavior.
+        tools (dict): Dictionary of tools available to the agent.
+        model (Model): Model used by the agent to process messages.
+    """
+    def __init__(self, model, tools, checkpointer, system=""):
+        """
+        Initializes an Agent instance.
+
+        Args:
+            model (Model): The model used by the agent.
+            tools (list): List of tools available to the agent.
+            checkpointer: Checkpointer object for managing state.
+            system (str, optional): Optional system information.
+        """
+        self.system = system
+        graph = StateGraph(AgentState)
+        graph.add_node("llm", self.call_openai)
+        graph.add_node("action", self.take_action)
+        graph.add_conditional_edges("llm", self.exists_action, {True: "action", False: END})
+        graph.add_edge("action", "llm")
+        graph.set_entry_point("llm")
+        self.graph = graph.compile(checkpointer=checkpointer)
+        self.tools = {t.name: t for t in tools}
+        self.model = model.bind_tools(tools)
+
+    def call_openai(self, state: AgentState):
+        """
+        Calls the OpenAI model to process messages.
+
+        Args:
+            state (AgentState): Current state of the agent.
+
+        Returns:
+            dict: Updated state with processed message.
+        """
+        messages = state['messages']
+        if self.system:
+            messages = [SystemMessage(content=self.system)] + messages
+        message = self.model.invoke(messages)
+        return {'messages': [message]}
+
+    def exists_action(self, state: AgentState):
+        """
+        Checks if an action should be taken based on the last message.
+
+        Args:
+            state (AgentState): Current state of the agent.
+
+        Returns:
+            bool: True if action should be taken, False otherwise.
+        """
+        result = state['messages'][-1]
+        return len(result.tool_calls) > 0
+
+    def take_action(self, state: AgentState):
+        """
+        Executes tool calls based on the last message and returns results.
+
+        Args:
+            state (AgentState): Current state of the agent.
+
+        Returns:
+            dict: Updated state with tool execution results.
+        """
+        tool_calls = state['messages'][-1].tool_calls
+        results = []
+        for t in tool_calls:
+            # print(f"Calling: {t}")
+            result = self.tools[t['name']].invoke(t['args'])
+            results.append(ToolMessage(tool_call_id=t['id'], name=t['name'], content=str(result)))
+        # print("Back to the model!")
+        return {'messages': results}
+
+tool = [get_help, create_servicenow_incident, create_servicenow_knowledge_article]
+
+prompt = """You are a very polite service desk agent. You use the rpovided search engine to look up information. \
+You are allowed to make multiple calls (either together or in sequence). \
+Only look up information when you are sure of what you want. \
+If you need to look up some information before asking a follow up question, you are allowed to do that!
+
+If the user uploads an image, please understand the images and try to continue the conversation. \
+If you are unable to understand the image, ask the user to provide more information. \
+
+At the end of the interaction (when user query is resolved or when you need to have someone look at it offline) \
+you create a Service Now ticket and service now knowledge article. 
+Share the ticket number back to the user for future reference. 
+Thank the user for the opportunity to server and end the call.
+"""
+
+model = ChatOpenAI(model="gpt-4o")
+with SqliteSaver.from_conn_string(":memory:") as memory:
+    abot = Agent(model, tool, system=prompt, checkpointer=memory)
+
+
+def image_to_base64(image_path):
+    # Guess the MIME type of the image
+    mime_type, _ = mimetypes.guess_type(image_path)
+    if not mime_type:
+        raise ValueError("Unsupported image format or unable to determine MIME type")
+
+    # Read the image file in binary mode
+    with open(image_path, "rb") as image_file:
+        # Encode the image to Base64
+        encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
+
+    # Construct the Base64 string with the data URI scheme
+    base64_string_with_prefix = f"data:{mime_type};base64, {encoded_string}"
+    return base64_string_with_prefix
+
+def getAgent():
+    return abot
+

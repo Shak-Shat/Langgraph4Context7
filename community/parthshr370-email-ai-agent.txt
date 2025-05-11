@@ -1,0 +1,1223 @@
+Directory structure:
+└── parthshr370-email-ai-agent/
+    ├── README.md
+    ├── config.py
+    ├── email.sh
+    ├── Flowchart.md
+    ├── LICENSE.txt
+    ├── main.py
+    ├── requirements.txt
+    ├── sample_emails.json
+    ├── test_email.py
+    ├── agents/
+    │   ├── __init__.py
+    │   ├── filtering_agent.py
+    │   ├── human_review_agent.py
+    │   ├── response_agent.py
+    │   └── summarization_agent.py
+    ├── core/
+    │   ├── __init__.py
+    │   ├── email_imap.py
+    │   ├── email_ingestion.py
+    │   ├── email_sender.py
+    │   ├── state.py
+    │   └── supervisor.py
+    └── utils/
+        ├── __init__.py
+        ├── formatter.py
+        └── logger.py
+
+================================================
+FILE: README.md
+================================================
+# AI-Driven Email Assistant
+
+An AI-powered email automation system that fetches, filters, summarizes, and generates responses to emails using advanced language models. It integrates with both IMAP and SMTP servers and utilizes a state-graph workflow to manage email processing.
+
+You can read my blog to get better understanding of the projet - [here](https://medium.com/@parthshr370/building-your-first-agent-with-deepseek-ai-email-agent-e6f17d3c290e)
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Features](#features)
+- [Installation](#installation)
+- [Configuration](#configuration)
+- [Usage](#usage)
+- [Directory Structure](#directory-structure)
+- [Testing](#testing)
+- [Contributing](#contributing)
+- [License](#license)
+- [Acknowledgments](#acknowledgments)
+
+## Overview
+
+This repository implements an email processing pipeline that leverages state-of-the-art language models (via Deepseek API) and a state graph workflow (using LangGraph) to:
+
+- **Ingest Emails:** Fetch emails from an IMAP server or load simulated emails from a JSON file.
+- **Filter Emails:** Classify incoming emails as _spam_, _urgent_, _informational_, or _needs review_.
+- **Summarize Emails:** Generate concise summaries of email content.
+- **Generate Responses:** Automatically draft email replies while allowing human review.
+- **Send Emails:** Dispatch responses via SMTP or send drafts to a Gmail account.
+
+## Features
+
+- **Email Ingestion:** Supports both live email fetching (via IMAP) and simulation (via a local JSON file).
+- **Filtering Agent:** Uses a language model to classify emails into categories.
+- **Summarization Agent:** Generates 2–3 sentence summaries of email bodies.
+- **Response Agent:** Drafts polite and professional responses based on email content and summaries.
+- **Human Review:** Provides an option for manual review and editing of auto-generated responses.
+- **State Graph Workflow:** Orchestrates the email processing steps (filtering, summarization, and response generation) with conditional transitions.
+- **Logging:** Detailed logging for debugging and monitoring application behavior.
+
+## Installation
+
+### Prerequisites
+
+- Python 3.8 or above
+- [pip](https://pip.pypa.io/)
+- (Optional) [virtualenv](https://virtualenv.pypa.io/)
+
+### Setup
+
+1. **Clone the repository:**
+
+   ```bash
+   git clone https://github.com/yourusername/your-repo-name.git
+   cd your-repo-name
+   ```
+
+2. **Create and activate a virtual environment (recommended):**
+
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   ```
+
+3. **Install the dependencies:**
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+## Configuration
+
+The application requires several configuration settings (such as API keys and email server credentials). Create a `.env` file in the project root with the following variables:
+
+```dotenv
+# Deepseek API
+DEEPSEEK_API_KEY=your_deepseek_api_key
+
+# SMTP Settings
+EMAIL_SERVER=smtp.yourserver.com
+EMAIL_USERNAME=your_email@example.com
+EMAIL_PASSWORD=your_email_password
+EMAIL_PORT=587  # Or your SMTP port
+
+# IMAP Settings (defaults to Gmail settings if not provided)
+IMAP_USERNAME=your_imap_username
+IMAP_PASSWORD=your_imap_password
+IMAP_SERVER=imap.gmail.com
+IMAP_PORT=993
+```
+
+Adjust the values as needed for your environment and email provider.
+
+## Usage
+
+To run the main email processing application, simply execute:
+
+```bash
+python main.py
+```
+
+### What to Expect
+
+1. **Fetching Emails:**  
+   The app will retrieve emails from your IMAP server (or simulate using `sample_emails.json` if configured for simulation).
+
+2. **Email Processing:**  
+   Each email is passed through a state graph workflow:
+   - **Filtering:** Classifies the email (e.g., spam, urgent, informational, needs review).
+   - **Summarization:** Generates a short summary of the email content.
+   - **Response Generation:** Drafts a reply. If the response is uncertain or flagged for review, it prompts for human intervention.
+
+3. **Sending/Drafting:**  
+   You’ll be prompted to send the email or save it as a draft (which will be sent via SMTP to your specified Gmail address).
+
+## Directory Structure
+
+```plaintext
+.
+├── agents
+│   ├── filtering_agent.py           # Email classification using LLMs
+│   ├── human_review_agent.py        # Allows manual review of generated responses
+│   ├── response_agent.py            # Generates email replies
+│   ├── summarization_agent.py       # Summarizes email content
+│   └── __init__.py
+├── config.py                        # Loads configuration and environment variables
+├── core
+│   ├── email_imap.py                # IMAP integration for fetching live emails
+│   ├── email_ingestion.py           # Simulated email ingestion (JSON file)
+│   ├── email_sender.py              # SMTP integration for sending emails
+│   ├── state.py                     # Definition of the EmailState dataclass
+│   ├── supervisor.py                # Coordinates the state graph workflow
+│   └── __init__.py
+├── drafts
+│   └── Schedule.txt                 # Example draft email file
+├── email.sh                       # Shell script for email tasks (if needed)
+├── hello.md                       # Additional project notes or demo info
+├── hhhhhh.jpg                     # Project image (e.g., logo)
+├── main.py                        # Main entry point for the application
+├── Python Script COmbined for ipynb.py  # Combined script from a Jupyter Notebook
+├── README.md                      # This documentation file
+├── requirements.txt               # Python dependencies
+├── sample_emails.json             # Simulated email data for testing/demo
+├── sample.ipynb                   # Jupyter Notebook with code examples
+├── test_email.py                  # Unit tests for email processing functionalities
+└── utils
+    ├── formatter.py               # Utility functions for formatting emails
+    ├── logger.py                  # Logger configuration and setup
+    └── __init__.py
+```
+
+## Testing
+
+To run tests (if provided), you can use a testing framework like `pytest`:
+
+```bash
+pytest
+```
+
+Or run:
+
+```bash
+python -m unittest discover
+```
+
+Ensure that any test dependencies are installed and that you have configured your environment variables for testing if needed.
+
+## Contributing
+
+Contributions are welcome! To contribute:
+
+1. Fork the repository.
+2. Create a new branch (`git checkout -b feature/my-feature`).
+3. Commit your changes and push to your branch.
+4. Open a Pull Request with a clear description of your changes.
+
+Please follow our coding conventions and include relevant tests when applicable.
+
+## License
+
+This project is licensed under the MIT License. See the [LICENSE]([LICENSE](https://github.com/parthshr370/Email-AI-Agent/blob/main/LICENSE.txt)) file for details.
+
+## Acknowledgments
+
+- **Deepseek:** For the API and language model backend.
+- **LangChain & LangGraph:** For the frameworks that help in building language model–driven workflows.
+- **Open Source Contributors:** Thank you to everyone who has contributed to the libraries and tools used in this project.
+
+---
+
+This documentation should serve as a comprehensive guide to setting up, using, and contributing to the AI-Driven Email Assistant. Feel free to modify or expand sections as your project evolves.
+
+
+
+================================================
+FILE: config.py
+================================================
+import os
+from dotenv import load_dotenv
+
+
+load_dotenv()
+
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
+EMAIL_SERVER = os.getenv("EMAIL_SERVER")
+EMAIL_USERNAME = os.getenv("EMAIL_USERNAME")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
+EMAIL_PORT = os.getenv("EMAIL_PORT")
+
+
+
+# IMAP configuration
+IMAP_USERNAME = os.getenv("IMAP_USERNAME", EMAIL_USERNAME)  # defaults to EMAIL_USERNAME if not set
+IMAP_PASSWORD = os.getenv("IMAP_PASSWORD", EMAIL_PASSWORD)
+IMAP_SERVER = os.getenv("IMAP_SERVER", "imap.gmail.com")
+IMAP_PORT = os.getenv("IMAP_PORT", 993)
+
+
+================================================
+FILE: email.sh
+================================================
+#!/bin/bash
+
+# Define the base directory
+base_dir="email_assistant"
+
+# Create the base directory
+mkdir -p $base_dir
+
+# Create subdirectories
+mkdir -p $base_dir/agents
+mkdir -p $base_dir/core
+mkdir -p $base_dir/utils
+
+# Create files in the agents directory
+touch $base_dir/agents/__init__.py
+touch $base_dir/agents/filtering_agent.py
+touch $base_dir/agents/summarization_agent.py
+touch $base_dir/agents/response_agent.py
+touch $base_dir/agents/human_review_agent.py
+
+# Create files in the core directory
+touch $base_dir/core/__init__.py
+touch $base_dir/core/email_ingestion.py
+touch $base_dir/core/email_sender.py
+touch $base_dir/core/state.py
+touch $base_dir/core/supervisor.py
+
+# Create files in the utils directory
+touch $base_dir/utils/__init__.py
+touch $base_dir/utils/logger.py
+
+# Create other files in the base directory
+touch $base_dir/sample_emails.json
+touch $base_dir/config.py
+touch $base_dir/main.py
+touch $base_dir/requirements.txt
+touch $base_dir/README.md
+
+echo "File tree created successfully."
+
+
+
+================================================
+FILE: Flowchart.md
+================================================
++---------------------------------------------------+
+|             START: Fetch Email                    |
+|        (via IMAP or load from JSON file)          |
++---------------------------------------------------+
+                     |
+                     v
++---------------------------------------------------+
+|        Create EmailState Object                   |
+|  (set current_email, history, metadata)           |
++---------------------------------------------------+
+                     |
+                     v
++---------------------------------------------------+
+|             SUPERVISOR PIPELINE                   |
++---------------------------------------------------+
+                     |
+                     v
++---------------------------------------------------+
+|            Filtering Node                         |
+| - Analyze email content (subject/body)            |
+| - Classify as: spam, urgent, needs_review,         |
+|   or informational                                |
++---------------------------------------------------+
+                     |
+                     v
+              +--------------+
+              | Is Spam?     |
+              +--------------+
+                     |
+        Yes ------->|  Discard and EXIT Pipeline  |
+                     |
+        No  -------> v
++---------------------------------------------------+
+|           Summarization Node                      |
+| - Generate a concise summary of the email         |
++---------------------------------------------------+
+                     |
+                     v
++---------------------------------------------------+
+|          Response Generation Node                 |
+| - Generate reply using summary & email details     |
++---------------------------------------------------+
+                     |
+                     v
+       +---------------------------------+
+       |  Does response need human review?|
+       +---------------------------------+
+              /                \
+           Yes                  No
+            |                    |
+            v                    v
++--------------------------+  +--------------------------+
+|   Human Review Node      |  | Accept Auto-Generated    |
+| - User modifies response |  |    Response              |
++--------------------------+  +--------------------------+
+            \                /
+             \              /
+              v            v
++---------------------------------------------------+
+|     Update EmailState History with Response       |
++---------------------------------------------------+
+                     |
+                     v
++---------------------------------------------------+
+|     END SUPERVISOR PIPELINE & DISPLAY             |
+|      Generated Response to User                   |
++---------------------------------------------------+
+                     |
+                     v
++---------------------------------------------------+
+|   Ask: "Do you want to make changes?"             |
++---------------------------------------------------+
+                     |
+                     v
++---------------------------------------------------+
+|    (If Yes) User Inputs Modified Response         |
++---------------------------------------------------+
+                     |
+                     v
++---------------------------------------------------+
+|   Prompt: "Do you want to (s)end or (d)raft?"      |
++---------------------------------------------------+
+                     |
+         +-----------+-----------+
+         |                       |
+         v                       v
++--------------------+   +-------------------------------+
+|  If "s":          |   |  If "d":                     |
+|  Call send_email() |   |  Prompt for Gmail address    |
+|  (send via SMTP)   |   |  and call send_draft_to_gmail()|
++--------------------+   +-------------------------------+
+         |                       |
+         +-----------+-----------+
+                     |
+                     v
++---------------------------------------------------+
+|               FINISH: All Emails Processed        |
++---------------------------------------------------+
+
+
+
+================================================
+FILE: LICENSE.txt
+================================================
+MIT License
+
+Copyright (c) 2025 Parth Sharma
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+
+================================================
+FILE: main.py
+================================================
+"""from agents import filtering_agent, summarization_agent, response_agent, human_review_agent
+from langgraph.graph import START , END, StateGraph
+from core.email_imap import fetch_imap_emails
+from core.email_sender import send_email,send_draft_to_gmail
+from utils.logger import get_logger
+from config import IMAP_USERNAME, IMAP_PASSWORD, IMAP_SERVER
+from core.supervisor import supervisor_langgraph 
+from agents.response_agent import extract_name_from_email
+
+
+logger = get_logger(__name__)
+
+# main.py
+from core.email_ingestion import fetch_email
+from core.state import EmailState
+from core.supervisor import supervisor_langgraph
+from core.email_sender import send_email
+
+# this one lets you chose if you want to draft or not 
+
+def process_email_action(email, user_name):
+    action = input("Do you want to (s)end the email or (d)raft it to Gmail? (s/d): ").strip().lower()
+    if action == "s":
+        if send_email(email, user_name):
+            logger.info("Email sent successfully.")
+        else:
+            logger.warning("Failed to send email.")
+    elif action == "d":
+        # Ask for Gmail address only if drafting
+        gmail_address = input("Please enter your Gmail address for drafts: ")
+        if send_draft_to_gmail(email, user_name, gmail_address):
+            logger.info("Draft sent to Gmail successfully.")
+        else:
+            logger.warning("Failed to send draft to Gmail.")
+    else:
+        logger.warning("Invalid option. No action taken.")
+
+
+
+
+def main():
+    logger.info("Starting main function.")
+    
+    user_name = extract_name_from_email(IMAP_USERNAME)
+    
+    # Use IMAP to fetch live emails
+    emails = fetch_imap_emails(IMAP_USERNAME, IMAP_PASSWORD, IMAP_SERVER)
+    logger.debug(f"Fetched {len(emails)} emails from IMAP.")
+    
+    if not emails:
+        logger.info("No emails found.")
+        return
+    
+    latest_emails = emails[-5:]  # get the last 5 emails from the inbox
+    
+
+    print("\nSelect an email to process:")
+    for idx, email in enumerate(latest_emails):
+        print(f"{idx + 1}. {email['subject']}")
+    
+    choice = int(input("Enter the number of the email you want to choose: ")) - 1
+    if choice < 0 or choice >= len(latest_emails):
+        print("Invalid choice. Exiting.")
+        return
+    
+    selected_email = latest_emails[choice]
+    
+    # Create state and process the email through the workflow
+    state = EmailState()
+    state.emails = [selected_email]
+    state.current_email = selected_email
+    state = supervisor_langgraph(selected_email, state, user_name)
+    
+    print("\nGenerated Response:\n")
+    print(selected_email.get("response", "No response generated."))
+    
+    changes = input("Do you want to make changes to the response? (y/n): ").strip().lower()
+    if changes == "y":
+        modified_response = input("Enter the modified response: ")
+        selected_email["response"] = modified_response
+    
+    # Now process the final action (send vs. draft)
+    process_email_action(selected_email, user_name)
+    
+    logger.info("All emails processed.")
+    logger.debug(f"Final State: {state}")
+
+if __name__ == "__main__":
+    main()
+"""
+
+
+from agents import filtering_agent, summarization_agent, response_agent, human_review_agent
+from langgraph.graph import START, END, StateGraph
+from core.email_imap import fetch_imap_emails
+from core.email_sender import send_email, send_draft_to_gmail
+from utils.logger import get_logger
+from config import IMAP_USERNAME, IMAP_PASSWORD, IMAP_SERVER
+from core.supervisor import supervisor_langgraph
+from core.state import EmailState
+
+
+logger = get_logger(__name__)
+
+def process_email_action(email, your_name):
+    action = input("Do you want to (s)end the email or (d)raft it to Gmail? (s/d): ").strip().lower()
+    if action == "s":
+        if send_email(email, your_name):
+            logger.info("Email sent successfully.")
+        else:
+            logger.warning("Failed to send email.")
+    elif action == "d":
+        gmail_address = input("Please enter your Gmail address for drafts: ")
+        if send_draft_to_gmail(email, your_name, gmail_address):
+            logger.info("Draft sent to Gmail successfully.")
+        else:
+            logger.warning("Failed to send draft to Gmail.")
+    else:
+        logger.warning("Invalid option. No action taken.")
+
+def main():
+    logger.info("Starting main function.")
+    
+    # Prompt for your own name (for signature) and for the recipient's name.
+    your_name = input("Please enter your name (for signature): ")
+    recipient_name = input("Please enter the recipient's name: ")
+    
+    # Use IMAP to fetch live emails
+    emails = fetch_imap_emails(IMAP_USERNAME, IMAP_PASSWORD, IMAP_SERVER)
+    logger.debug(f"Fetched {len(emails)} emails from IMAP.")
+    
+    if not emails:
+        logger.info("No emails found.")
+        return
+    
+    latest_emails = emails[-5:]
+    
+    print("\nSelect an email to process:")
+    for idx, email in enumerate(latest_emails):
+        print(f"{idx + 1}. {email['subject']}")
+    
+    choice = int(input("Enter the number of the email you want to choose: ")) - 1
+    if choice < 0 or choice >= len(latest_emails):
+        print("Invalid choice. Exiting.")
+        return
+    
+    selected_email = latest_emails[choice]
+    
+    # Create state and process the email through the workflow
+    state = EmailState()
+    state.emails = [selected_email]
+    state.current_email = selected_email
+    # Pass your signature (your_name) to the supervisor pipeline
+    state = supervisor_langgraph(selected_email, state, your_name,recipient_name)
+    
+    print("\nGenerated Response:\n")
+    print(selected_email.get("response", "No response generated."))
+    
+    changes = input("Do you want to make changes to the response? (y/n): ").strip().lower()
+    if changes == "y":
+        modified_response = input("Enter the modified response: ")
+        selected_email["response"] = modified_response
+    
+    # Now process the final action (send vs. draft)
+    process_email_action(selected_email, your_name)
+    
+    logger.info("All emails processed.")
+    logger.debug(f"Final State: {state}")
+
+if __name__ == "__main__":
+    main()
+
+
+
+================================================
+FILE: requirements.txt
+================================================
+langchain
+langgraph
+langsmith
+python_dotenv
+openai
+jinja2
+
+
+================================================
+FILE: sample_emails.json
+================================================
+[
+    {
+      "id": "1",
+      "from": "samplehello@gmail.com",
+      "subject": "Schedule",
+      "body": "Hi there, Thank you so much for completing the questionnaire about HELLO-AI.Please fill this cal.com link for scheduling a meeting.https://cal.com/HELLO-AI",
+      "timestamp": "2025-02-08T10:00:00"
+    }
+  ]
+
+
+
+================================================
+FILE: test_email.py
+================================================
+from core.email_sender import send_email
+
+test_email = {
+    "from": "recipient@example.com",  # Replace with a valid recipient email
+    "subject": "Test Email",
+    "response": "Hello, this is a test email from the AI Email Assistant!"
+}
+
+if send_email(test_email):
+    print("Test email sent successfully!")
+else:
+    print("Failed to send test email.")
+
+
+
+================================================
+FILE: agents/__init__.py
+================================================
+
+
+
+================================================
+FILE: agents/filtering_agent.py
+================================================
+from langchain.prompts import PromptTemplate
+from config import DEEPSEEK_API_KEY  # Import your API key from config
+from langchain_openai import ChatOpenAI
+from utils.logger import get_logger
+
+from utils.formatter import clean_text, format_email
+
+logger = get_logger(__name__)
+
+
+def filter_email(email: dict) -> str:
+    """
+    Uses an LLM to analyze the email and classify its type.
+    
+    The email is classified as one of:
+      - "spam"
+      - "urgent"
+      - "needs_review"
+      - "informational"
+    
+    Arguments:
+        email (dict): The email to be analyzed. Expected keys: "subject", "body".
+    
+    Returns:
+        str: The classification result.
+    """
+    prompt_template = PromptTemplate(
+        input_variables=["subject", "content"],
+        template=(
+            "Analyze the following email with subject: {subject} and content: {content} "
+            "and classify the email type. "
+            "Classify it as 'spam', 'urgent', 'informational', or 'needs review'."
+        )
+    )
+    
+    prompt = prompt_template.format(
+        subject=email.get("subject", ""),
+        content=email.get("body", "")
+    )
+    
+    # init the model with Deepseek's configurations.
+    model = ChatOpenAI(
+        base_url="https://api.deepseek.com/v1",  # Deepseek's API endpoint
+        model="deepseek-chat",
+        temperature=0.2,
+        openai_api_key=DEEPSEEK_API_KEY         # Your Deepseek API key
+    )
+
+    classification_result = model.invoke(prompt) 
+    
+    classification_text = clean_text(str(classification_result))    
+
+
+        # logss the raw model output for debugging.
+    logger.debug("Raw model output: %s", classification_text)
+    
+    
+    # Check for 'needs review' first
+    if "'needs review'" in classification_text or "needs review" in classification_text:
+        return "needs_review"
+    elif "urgent" in classification_text:
+        return "urgent"
+    elif "spam" in classification_text:
+        return "spam"
+    else:
+        return "informational"
+
+
+================================================
+FILE: agents/human_review_agent.py
+================================================
+# agents/human_review_agent.py
+
+def review_email(email: dict, response: str) -> str:
+    """
+    Simulates human review of the generated email response.
+    Prints the response and prompts the user to decide if it should be modified.
+    
+    Argumentss:
+        email (dict): The email being processed (can be used for context).
+        response (str): The auto-generated response.
+    
+    Returns:
+        str: The final response after human review.
+        
+    """
+    print("\nGenerated Response:\n")
+    print(response)
+    
+    user_input = input("\nDo you want to make any changes to the response? (y/n): ")
+    if user_input.lower() == "y":
+        modified_response = input("\nEnter the corrected response: ")
+        return modified_response
+    else:
+        return response
+
+
+
+================================================
+FILE: agents/response_agent.py
+================================================
+from langchain.prompts import PromptTemplate
+from config import DEEPSEEK_API_KEY  # Import the key from your config
+from langchain_openai import ChatOpenAI
+
+from utils.formatter import clean_text, format_email
+
+
+from email.utils import parseaddr
+
+
+def generate_response(email: dict, summary: str, recipient_name: str, your_name: str) -> str:
+    prompt_template = PromptTemplate(
+        input_variables=["sender", "subject", "content", "summary", "user_name","recipient_name"],
+        template=(
+            "You are an email assistant. Do not use placeholders like [User's Name]"
+            "You are an email assistant. Do not include any greeting or signature lines in your response.\n\n"
+            "Email Details:\n"
+            "From: {sender}\n"
+            "Subject: {subject}\n"
+            "Content: {content}\n"
+            "Summary: {summary}\n\n"
+            
+            "Reply in a formal tone."
+        )
+    )
+    
+    prompt = prompt_template.format(
+        sender=recipient_name,  # Use the recipient's name (supplied manually)
+        subject=email.get("subject", ""),
+        content=email.get("body", ""),
+        summary=summary,
+        user_name=your_name
+    )
+    
+    model = ChatOpenAI(
+        base_url="https://api.deepseek.com/v1",
+        model="deepseek-chat",
+        temperature=0.5,
+        openai_api_key=DEEPSEEK_API_KEY
+    )
+    
+    response = model.invoke(prompt)
+    response_text = response.content if hasattr(response, "content") else str(response)
+    
+    # Pass recipient_name (for greeting) and your_name (for signature)
+    formatted_response = format_email(email.get("subject", ""), recipient_name, response_text, your_name)
+    return formatted_response.strip()
+
+
+
+================================================
+FILE: agents/summarization_agent.py
+================================================
+from langchain.prompts import PromptTemplate
+from config import DEEPSEEK_API_KEY  # Import the key from your config
+from langchain_openai import ChatOpenAI
+from utils.formatter import clean_text
+
+
+
+def summarize_email(email: dict) -> str:
+    """
+    Uses an LLM to generate a concise summary of the email content.
+    """
+    prompt_template = PromptTemplate(
+        input_var=["content"],
+        template="Summarize the following email content in 2 to 3 sentences: {content}"
+    )
+    
+    prompt = prompt_template.format(content=email.get("body", ""))
+    
+    # Initialize the model with Deepseek's configurations
+    model = ChatOpenAI(
+        base_url="https://api.deepseek.com/v1",  # Deepseek's API endpoint
+        model="deepseek-chat",
+        temperature=0.3,
+        openai_api_key=DEEPSEEK_API_KEY         # Your Deepseek API key (from .env)
+    )
+    
+    summary = model.invoke(prompt)
+    summary_text = summary.content if hasattr(summary, "content") else str(summary)
+    
+    
+    return clean_text(summary_text)
+
+
+================================================
+FILE: core/__init__.py
+================================================
+
+
+
+================================================
+FILE: core/email_imap.py
+================================================
+# core/email_imap.py
+import imaplib
+import email
+from email.header import decode_header
+
+def fetch_imap_emails(username, password, imap_server="imap.gmail.com"):
+    mail = imaplib.IMAP4_SSL(imap_server)
+    mail.login(username, password)
+    mail.select("inbox")
+    status, messages = mail.search(None, "ALL")
+    email_ids = messages[0].split()
+    emails = []
+    for num in email_ids:
+        status, msg_data = mail.fetch(num, "(RFC822)")
+        raw_email = msg_data[0][1] # The entire email message is a byte string
+        msg = email.message_from_bytes(raw_email)
+        subject, encoding = decode_header(msg.get("Subject"))[0] # Decode the email subject
+        if isinstance(subject, bytes):
+            subject = subject.decode(encoding if encoding else "utf-8")
+        emails.append({ # Extract the email ID, sender, subject, and body
+            "id": num.decode(),
+            "from": msg.get("From"),
+            "subject": subject,
+            "body": extract_email_body(msg)
+        })
+    mail.logout()
+    return emails
+
+def extract_email_body(msg):
+    if msg.is_multipart(): # The email body may be in multiple parts
+        for part in msg.walk():
+            content_type = part.get_content_type()
+            content_disposition = str(part.get("Content-Disposition"))
+            if content_type == "text/plain" and "attachment" not in content_disposition:
+                charset = part.get_content_charset() or "utf-8"
+                return part.get_payload(decode=True).decode(charset, errors="replace")
+    else:
+        charset = msg.get_content_charset() or "utf-8"
+        return msg.get_payload(decode=True).decode(charset, errors="replace")
+
+
+
+================================================
+FILE: core/email_ingestion.py
+================================================
+# core/email_ingestion.py
+import json
+from pathlib import Path
+
+def fetch_email(simulate: bool = True):
+    """
+    Fetches emails. If simulate=True, load emails from a JSON file.
+    """
+    if simulate:
+        # Construct the path to the JSON file dynamically
+        email_file = Path(__file__).parent.parent / "sample_emails.json"
+        
+
+
+        try:
+            with open(email_file, "r") as f:
+                emails = json.load(f)
+            return emails
+        except FileNotFoundError:
+            print(f"Error: {email_file} not found. Ensure the JSON file is correctly placed.")
+            return []
+    else:
+        # Implement IMAP/POP3 integration if needed
+        return []
+
+
+
+# addede implementation that reads the email from a JSON file
+# added als the part wherre it reads the port number to make sure if runing locally
+
+
+================================================
+FILE: core/email_sender.py
+================================================
+import smtplib
+from email.mime.text import MIMEText
+from config import EMAIL_SERVER, EMAIL_PASSWORD, EMAIL_USERNAME, EMAIL_PORT
+from email.message import EmailMessage
+from utils.logger import get_logger
+from utils.formatter import clean_text,format_email
+import os
+
+
+
+
+"""
+Use this function if you want to change to a local  file saving behavio for drafts 
+
+        
+also change the for loop for the main function to -  
+
+        # Check if a response was generated
+        if "response" in email:
+            # Ask the user if they want to send the email or save it as a draft
+            action = input("Do you want to (s)end the email or save it as a (d)raft? (s/d): ").strip().lower()
+            if action == "s":
+                if send_email(email, user_name):
+                    logger.info("Email sent successfully.")
+                else:
+                    logger.warning("Failed to send email.")
+            elif action == "d":
+                if save_draft(email, user_name):
+                    logger.info("Draft saved successfully.")
+                else:
+                    logger.warning("Failed to save draft.")
+            else:
+                logger.warning("Invalid option. No action taken.")
+        
+        
+        
+        """
+
+
+logger = get_logger(__name__)
+
+def extract_name_from_email(email_address: str) -> str:
+    """
+    Extracts the portion before the '@' as a friendly name.
+    """
+    if "@" in email_address:
+        return email_address.split("@")[0]
+    return email_address
+
+
+
+
+def send_draft_to_gmail(email: dict, user_name: str, gmail_address: str) -> bool:
+    try:
+        subject = clean_text(email.get("subject", ""))
+        # Use .strip() to preserve newlines in the response content
+        raw_response_content = email.get("response", "").strip()
+        recipient_email = gmail_address  # Use the provided Gmail address as the recipient
+        sender_name = extract_name_from_email(email.get("from", "Unknown"))
+        
+        # Format the email content
+        response_content = format_email(subject, sender_name, raw_response_content, user_name)
+        
+        msg = EmailMessage()
+        msg["Subject"] = f"Draft: Re: {subject}"
+        msg["From"] = EMAIL_USERNAME
+        msg["To"] = recipient_email
+        msg.set_content(response_content)
+        
+        logger.debug("Connecting to SMTP server %s:%s for sending draft", EMAIL_SERVER, EMAIL_PORT)
+        with smtplib.SMTP(EMAIL_SERVER, int(EMAIL_PORT)) as server:
+            logger.debug("Starting TLS for draft sending...")
+            server.starttls()
+            logger.debug("Logging in as %s", EMAIL_USERNAME)
+            server.login(EMAIL_USERNAME, EMAIL_PASSWORD)
+            logger.debug("Sending draft email to %s", recipient_email)
+            server.send_message(msg)
+            logger.info("Draft sent to Gmail account at %s", recipient_email)
+        
+        return True
+    except Exception as e:
+        logger.error("Failed to send draft to Gmail: %s", e)
+        return False
+
+
+
+
+
+def send_email(email: dict, user_name: str) -> bool:
+    """
+    Sends an email reply via SMTP using the generated response.
+    """
+    try:
+        subject = clean_text(email.get("subject", ""))
+        raw_response_content = email.get("response", "").strip()  # don't collapse newlines
+        recipient_email = email.get("from", "")
+        sender_name = extract_name_from_email(recipient_email)
+        
+        # Use the updated format_email which preserves body line breaks
+        response_content = format_email(subject, sender_name, raw_response_content, user_name)
+        
+        msg = EmailMessage()
+        msg["Subject"] = f"Re: {subject}"
+        msg["From"] = EMAIL_USERNAME
+        msg["To"] = recipient_email
+        msg.set_content(response_content)
+        
+        logger.debug("Connecting to SMTP server %s:%s", EMAIL_SERVER, EMAIL_PORT)
+        with smtplib.SMTP(EMAIL_SERVER, int(EMAIL_PORT)) as server:
+            logger.debug("Starting TLS...")
+            server.starttls()
+            logger.debug("Logging in as %s", EMAIL_USERNAME)
+            server.login(EMAIL_USERNAME, EMAIL_PASSWORD)
+            logger.debug("Sending email to %s", recipient_email)
+            server.send_message(msg)
+            logger.info("Email sent to %s", recipient_email)
+        
+        return True
+    except Exception as e:
+        logger.error("Failed to send email: %s", e)
+        return False
+    
+
+
+
+================================================
+FILE: core/state.py
+================================================
+from typing import List, Dict, Any
+from dataclasses import dataclass, field 
+
+
+@dataclass
+class EmailState:
+    emails: List[Dict[str, Any]] = field(default_factory=list)
+    history: List[Dict[str, Any]] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    current_email: Dict[str, Any] = field(default_factory=dict)
+
+
+
+
+================================================
+FILE: core/supervisor.py
+================================================
+from core.state import EmailState
+from agents import filtering_agent, summarization_agent, response_agent, human_review_agent
+from langgraph.graph import START , END, StateGraph
+
+"""Originally, each node function was written to expect two parameters—an email and a state.
+However, the LangGraph framework is designed to pass only one argument (the state) to each node."""
+
+# Bringing all the states together with a supervisor helps to manage the flow of the email processing.
+def supervisor_langgraph(email: dict, state: EmailState,user_name : str,recipient_name:str) -> EmailState:
+    """
+    Processes an individual email using a LangGraph workflow.
+    Each step (filtering, summarization, response generation) is a node.
+    Conditional edges are used to exit early for spam or to continue processing.
+    """
+    
+    state.current_email = email
+    
+    def filtering_node(state: EmailState) -> EmailState:
+        current_email = state.current_email
+        print('filtering node started for email id : %s' % current_email.get("id", "unknown"))
+        classification = filtering_agent.filter_email(current_email)
+        current_email["classification"] = classification
+        state.metadata[current_email.get("id", "unknown")] = classification
+        return state
+
+    
+    def summarization_node(state: EmailState) -> EmailState:
+        email = state.current_email
+        summary = summarization_agent.summarize_email(email)
+        email["summary"] = summary
+        return state
+    
+    def response_node(state: EmailState) -> EmailState:
+        email = state.current_email
+        response = response_agent.generate_response(email, email.get("summary", ""),recipient_name,user_name) # The response agent uses the summary to generate a response.
+        # If the classification indicates review or the response is uncertain, let a human intervene
+        if email.get("classification") == "needs_review" or "?" in response:
+            response = human_review_agent.review_email(email, response)
+        email["response"] = response
+        state.history.append({
+            "email_id": email.get("id", "unkonwn"),
+            "response": response
+        })
+        return state
+    
+    graph_builder = StateGraph(EmailState)     # now building tther graph from all the states 
+
+    
+    # addimng the nodes in the graph 
+    graph_builder.add_node("filtering", filtering_node)
+    graph_builder.add_node("summarization", summarization_node)
+    graph_builder.add_node("response", response_node)
+    
+    
+    
+    
+    
+    
+    # building conditional wortking with filtering now that it is not spam if spam then dustbin is the way 
+    def post_filtering(state_update: EmailState):
+        email = state.current_email
+        if email.get("classification") == "spam":
+            return END
+        else:
+            return "summarization"
+    
+    graph_builder.add_conditional_edges("filtering", post_filtering, {"summarization": "summarization", END: END})
+    
+    # This creates a direct edge (connection) from the "summarization" node to the "response" node.
+    # if reaches summary node then must move to response node
+    graph_builder.add_edge("summarization", "response")
+    
+    graph_builder.add_edge("response", END) # if respone comes then end to all please
+    
+    # Set the entry point to the filtering node.
+    graph_builder.set_entry_point("filtering")
+    
+    # Compile the graph.
+    graph = graph_builder.compile()
+    
+    # Invoke the graph with the current state.
+    final_state = graph.invoke(state)
+    return final_state
+
+
+
+================================================
+FILE: utils/__init__.py
+================================================
+
+
+
+================================================
+FILE: utils/formatter.py
+================================================
+from jinja2 import Template
+
+def clean_text(text: str)-> str:
+    """Remove extra whitespace and unwanted newlines."""
+    return " ".join(text.split())
+
+
+def format_email(subject: str, sender_name: str, body: str, user_name: str) -> str:
+    cleaned_subject = clean_text(subject)
+    cleaned_sender = clean_text(sender_name)
+    cleaned_user = clean_text(user_name)
+    cleaned_body = body.strip()
+    
+    # Remove a leading "Subject:" header if present
+    if cleaned_body.lower().startswith("subject:"):
+        lines = cleaned_body.splitlines()
+        cleaned_body = "\n".join(lines[1:]).strip()
+    
+    # Remove duplicate signature if it already exists in the body.
+    signature_marker = "Best regards,"
+    if signature_marker in cleaned_body:
+        cleaned_body = cleaned_body.split(signature_marker)[0].strip()
+    
+    formatted_email = (
+        f"Subject: Re: {cleaned_subject}\n\n"
+        f"Hi {cleaned_sender},\n\n"
+        f"{cleaned_body}\n\n"
+        f"Best regards,\n"
+        f"{cleaned_user}"
+    )
+    return formatted_email
+
+
+
+================================================
+FILE: utils/logger.py
+================================================
+# utils/logger.py
+import logging
+
+def get_logger(name: str) -> logging.Logger:
+    logger = logging.getLogger(name)
+    if not logger.handlers:
+        logger.setLevel(logging.DEBUG)
+        handler = logging.StreamHandler()
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        )
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+    return logger
+
+

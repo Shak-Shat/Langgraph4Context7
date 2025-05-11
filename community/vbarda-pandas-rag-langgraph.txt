@@ -1,0 +1,1625 @@
+Directory structure:
+└── vbarda-pandas-rag-langgraph/
+    ├── README.md
+    ├── demo.ipynb
+    ├── langgraph.json
+    ├── pyproject.toml
+    ├── .env.example
+    ├── pandas_rag_langgraph/
+    │   └── agent.py
+    └── static/
+
+================================================
+FILE: README.md
+================================================
+# Pandas RAG with LangGraph
+
+This is a demo app for a RAG system that answers questions about [Pandas](https://pandas.pydata.org/) documentation powered by [LangGraph](https://github.com/langchain-ai/langgraph) and [LangChain](https://github.com/langchain-ai/langchain).
+
+## Data
+
+This demo uses a **very** small subset of [Pandas](https://pandas.pydata.org/) documentation for question answering, namely the following 3 pages from user guides:
+
+* [Indexing](https://pandas.pydata.org/docs/user_guide/indexing.html)
+* [GroupBy](https://pandas.pydata.org/docs/user_guide/groupby.html)
+* [Merging](https://pandas.pydata.org/docs/user_guide/merging.html)
+
+Such a small subset is chosen on purpose to demonstrate how the agent architecture below can flexibly handle model hallucinations. Specifically, there is a lot of knowledge about popular open-source libraries already present in the model weights. Therefore, if the model fails to look up data from vectorstore, it might still attempt to answer the question. In certain cases this behavior might be not desireable, and this demo demonstrates how you can handle those cases.
+
+## Components
+
+The demo uses the following components:
+
+- LLM: Anthropic's Claude 3.5 Sonnet (`claude-3-5-sonnet-20240620`) via LangChain's [`ChatAnthropic`](https://python.langchain.com/v0.2/docs/integrations/chat/anthropic/). Specifically, the LLM is used for three different tasks:
+  - candidate answer generation
+  - grading answer hallucinations
+  - grading answer relevance
+- Embeddings: OpenAI Embeddings (`text-embedding-ada-002`) via LangChain's [`OpenAIEmbeddings`](https://python.langchain.com/v0.2/docs/integrations/text_embedding/openai/)
+- Vectorstore: [Chroma DB](https://www.trychroma.com/) (via LangChain's [`Chroma`](https://python.langchain.com/v0.2/docs/integrations/vectorstores/chroma/)
+  - **NOTE**: for production use cases you would likely need to deploy your own vector database instance or use a hosted solution
+- Web search: [Tavily Search](https://tavily.com/) (via LangChain's [`TavilySearchResults`](https://python.langchain.com/v0.2/docs/integrations/tools/tavily_search/))
+
+## Architecture
+
+This demo implements a custom RAG architecture that combines ideas from [Self-RAG](https://arxiv.org/abs/2310.11511) and [Corrective RAG](https://arxiv.org/abs/2401.15884). For simplicity, it omits the document relevance grading step, but you can find full implementation of those papers in LangGraph [here](https://langchain-ai.github.io/langgraph/tutorials/rag/langgraph_self_rag/) and [here](https://langchain-ai.github.io/langgraph/tutorials/rag/langgraph_crag/).
+
+The flow is as follows:
+
+1. Search vectorstore for documents relevant to the user question
+2. Generate a candidate answer based on those documents
+3. Grade the candidate answer for hallucinations: is it grounded in the documents or did the model hallucinate?
+  - if grounded, proceed to the next step (grading answer relevance)
+  - if hallucination, re-generate the answer (return to step 2). Attempt re-generation at most N times (user-controlled)
+4. Grade the candidate answer for relevance: did it address user's question?
+  - if yes, return the candidate answer to the user
+  - if no, rewrite the query and attempt the search (return to step 1) again. Attempt re-writing at most N times (user-controlled)
+5. (Optional) If the answer is not grounded in the documents and/or not relevant after N tries, pass the user question to web search
+6. (Optional) Generate an answer based on the web search results and return it to the user
+
+See this flow chart for a visual representation.
+
+![rag-agent](/static/pandas-rag-agent.png)
+
+## Interacting with the graph
+
+First, make sure that your environment variables are set in `.env` file. See `.env.example`.
+
+```python
+from dotenv import load_dotenv
+
+load_dotenv()
+
+from pandas_rag_langgraph.agent import graph
+
+inputs = {"messages": [("human", "how do i calculate sum by groups")]}
+for output in graph.stream(inputs):
+    print(output)
+```
+
+## Deploying LangGraph applications
+
+If you'd like to deploy a LangGraph application like the one in this demo, you can use [LangGraph Cloud](https://langchain-ai.github.io/langgraph/cloud/)
+
+## Further work
+
+This demo can be improved in a variety of ways:
+- add chat history to ask follow up questions (see example of that in [Chat LangChain](https://github.com/langchain-ai/chat-langchain))
+- add better document chunking
+- add document relevance grader ([here](https://langchain-ai.github.io/langgraph/tutorials/rag/langgraph_self_rag/) and [here](https://langchain-ai.github.io/langgraph/tutorials/rag/langgraph_crag/))
+- add a mixed keyword search ([BM25](https://en.wikipedia.org/wiki/Okapi_BM25)) & vector search solution for document retrieval
+
+
+================================================
+FILE: demo.ipynb
+================================================
+# Jupyter notebook converted to Python script.
+
+"""
+# Self-Corrective RAG in LangGraph
+"""
+
+"""
+### RAG chain: developer-defined control flow
+"""
+
+"""
+![chain](attachment:735319d7-51de-497a-a6ab-f97d9f223ae5.png)
+"""
+
+"""
+### RAG Agent: LLM-defined control flow
+"""
+
+"""
+![agent](attachment:c7b836f3-6212-4260-8847-3334fbb907e6.png)
+"""
+
+"""
+### Self-Corrective RAG (this notebook)
+"""
+
+"""
+![pandas-agent](attachment:23101e4d-ca4e-4688-ab8b-fd527ccb0706.png)
+"""
+
+"""
+## Set up environment
+"""
+
+%pip install langchain langchain-community langchain-text-splitters langchain-anthropic langchain-openai langgraph langgraph-sdk
+
+import getpass
+import os
+
+
+def _set_env(var: str):
+    if not os.environ.get(var):
+        os.environ[var] = getpass.getpass(f"{var}: ")
+
+
+_set_env("OPENAI_API_KEY")
+_set_env("ANTHROPIC_API_KEY")
+_set_env("TAVILY_API_KEY")
+_set_env("LANGCHAIN_API_KEY")
+# Output:
+#   OPENAI_API_KEY:  ········
+
+#   ANTHROPIC_API_KEY:  ········
+
+#   TAVILY_API_KEY:  ········
+
+#   LANGCHAIN_API_KEY:  ········
+
+
+"""
+## Import dependencies
+"""
+
+import re
+from typing import Annotated, Iterator, Literal, TypedDict
+
+from langchain import hub
+from langchain_community.document_loaders import web_base
+from langchain_community.vectorstores import Chroma
+from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_core.documents import Document
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.messages import BaseMessage, AIMessage, convert_to_messages
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.pydantic_v1 import BaseModel, Field
+from langchain_core.retrievers import BaseRetriever
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_anthropic import ChatAnthropic
+from langchain_openai import OpenAIEmbeddings
+from langgraph.graph import END, StateGraph, add_messages
+from langgraph.checkpoint import MemorySaver
+# Output:
+#   USER_AGENT environment variable not set, consider setting it to identify your requests.
+
+
+"""
+## Set up model, retriever & tools
+"""
+
+SOURCE_URLS = [
+    'https://pandas.pydata.org/docs/user_guide/indexing.html',
+    'https://pandas.pydata.org/docs/user_guide/groupby.html',
+    'https://pandas.pydata.org/docs/user_guide/merging.html'
+]
+
+NEWLINE_RE = re.compile("\n+")
+
+class PandasDocsLoader(web_base.WebBaseLoader):
+    def lazy_load(self) -> Iterator[Document]:
+        """Lazy load text from the url(s) in web_path."""
+        for path in self.web_paths:
+            soup = self._scrape(path, bs_kwargs=self.bs_kwargs)
+            text = soup.get_text(**self.bs_get_text_kwargs)
+            text = NEWLINE_RE.sub("\n", text)     
+            metadata = web_base._build_metadata(soup, path)
+            yield Document(page_content=text, metadata=metadata)
+
+
+def prepare_documents(urls: list[str]) -> list[Document]:
+    text_splitter = RecursiveCharacterTextSplitter(
+        separators=[
+            r"In \[[0-9]+\]",
+            r"\n+",
+            r"\s+"
+        ],
+        is_separator_regex=True,
+        chunk_size=1000
+    )
+    docs = [PandasDocsLoader(url).load() for url in urls]
+    docs_list = [item for sublist in docs for item in sublist]
+    return text_splitter.split_documents(docs_list)
+
+
+def get_retriever() -> BaseRetriever:
+    documents = prepare_documents(SOURCE_URLS)
+    vectorstore = Chroma.from_documents(
+        documents=documents,
+        collection_name="pandas-rag-chroma",
+        embedding=OpenAIEmbeddings(),
+    )
+    retriever = vectorstore.as_retriever()
+    return retriever
+
+llm = ChatAnthropic(model="claude-3-5-sonnet-20240620", temperature=0)
+retriever = get_retriever()
+tavily_search_tool = TavilySearchResults(max_results=3)
+
+"""
+## Set up graph state
+"""
+
+class GraphState(TypedDict):
+    messages: Annotated[list[BaseMessage], add_messages]
+    question: str
+    documents: list[Document]
+    candidate_answer: str
+    retries: int
+    web_fallback: bool
+
+
+class GraphConfig(TypedDict):
+    max_retries: int
+
+"""
+## Set up graph nodes
+"""
+
+"""
+### Document search
+"""
+
+MAX_RETRIES = 3
+VERBOSE = True
+
+def document_search(state: GraphState):
+    """
+    Retrieve documents
+
+    Args:
+        state (dict): The current graph state
+
+    Returns:
+        state (dict): New key added to state, documents, that contains retrieved documents
+    """
+    if VERBOSE:
+        print("---RETRIEVE---")
+
+    question = convert_to_messages(state["messages"])[-1].content
+
+    # Retrieval
+    documents = retriever.invoke(question)
+    return {"documents": documents, "question": question, "web_fallback": True}
+
+"""
+### Generate answer
+"""
+
+RAG_PROMPT: ChatPromptTemplate = hub.pull("rlm/rag-prompt")
+
+
+def generate(state: GraphState):
+    """
+    Generate answer
+
+    Args:
+        state (dict): The current graph state
+
+    Returns:
+        state (dict): New key added to state, generation, that contains LLM generation
+    """
+    if VERBOSE:
+        print("---GENERATE---")
+    question = state["question"]
+    documents = state["documents"]
+    retries = state["retries"] if state.get("retries") is not None else -1
+
+    rag_chain = RAG_PROMPT | llm | StrOutputParser()
+    generation = rag_chain.invoke({"context": documents, "question": question})
+    return {"retries": retries + 1, "candidate_answer": generation}
+
+"""
+### Rewrite question
+"""
+
+QUERY_REWRITER_SYSTEM = (
+"""
+You a question re-writer that converts an input question to a better version that is optimized for vectorstore retrieval.
+Look at the input and try to reason about the underlying semantic intent / meaning.
+"""
+)
+
+QUERY_REWRITER_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        ("system", QUERY_REWRITER_SYSTEM),
+        (
+            "human",
+            "Here is the initial question: \n\n {question} \n Formulate an improved question.",
+        ),
+    ]
+)
+
+def transform_query(state: GraphState):
+    """
+    Transform the query to produce a better question.
+
+    Args:
+        state (dict): The current graph state
+
+    Returns:
+        state (dict): Updates question key with a re-phrased question
+    """
+    if VERBOSE:
+        print("---TRANSFORM QUERY---")
+
+    question = state["question"]
+
+    # Re-write question
+    query_rewriter = QUERY_REWRITER_PROMPT | llm | StrOutputParser()
+    better_question = query_rewriter.invoke({"question": question})
+    return {"question": better_question}
+
+"""
+### Web search
+"""
+
+def web_search(state: GraphState):
+    if VERBOSE:
+        print("---RUNNING WEB SEARCH---")
+
+    question = state["question"]
+    documents = state["documents"]
+    search_results = tavily_search_tool.invoke(question)
+    search_content = "\n".join([d["content"] for d in search_results])
+    documents.append(Document(page_content=search_content, metadata={"source": "websearch"}))
+    return {"documents": documents, "web_fallback": False}
+
+"""
+### Finalize response
+"""
+
+def finalize_response(state: GraphState):
+    if VERBOSE:
+        print("---FINALIZING THE RESPONSE---")
+
+    return {"messages": [AIMessage(content=state["candidate_answer"])]}
+
+"""
+## Set up edges
+"""
+
+"""
+### Grade answer
+
+* Check hallucinations
+* Check answer relevance 
+"""
+
+class GradeHallucinations(BaseModel):
+    """Binary score for hallucination present in generation answer."""
+
+    binary_score: str = Field(
+        description="Answer is grounded in the facts, 'yes' or 'no'"
+    )
+
+
+HALLUCINATION_GRADER_SYSTEM = (
+"""
+You are a grader assessing whether an LLM generation is grounded in / supported by a set of retrieved facts.
+Give a binary score 'yes' or 'no', where 'yes' means that the answer is grounded in / supported by the set of facts.
+
+IF the generation includes code examples, make sure those examples are FULLY present in the set of facts, otherwise always return score 'no'.
+"""
+)
+
+HALLUCINATION_GRADER_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        ("system", HALLUCINATION_GRADER_SYSTEM),
+        ("human", "Set of facts: \n\n {documents} \n\n LLM generation: {generation}"),
+    ]
+)
+
+
+class GradeAnswer(BaseModel):
+    """Binary score to assess answer addresses question."""
+
+    binary_score: str = Field(
+        description="Answer addresses the question, 'yes' or 'no'"
+    )
+
+
+ANSWER_GRADER_SYSTEM = (
+"""
+You are a grader assessing whether an answer addresses / resolves a question.
+Give a binary score 'yes' or 'no', where 'yes' means that the answer resolves the question.
+"""
+)
+
+ANSWER_GRADER_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        ("system", ANSWER_GRADER_SYSTEM),
+        ("human", "User question: \n\n {question} \n\n LLM generation: {generation}"),
+    ]
+)
+
+def grade_generation_v_documents_and_question(state: GraphState, config) -> Literal["generate", "transform_query", "web_search", "finalize_response"]:
+    """
+    Determines whether the generation is grounded in the document and answers question.
+
+    Args:
+        state (dict): The current graph state
+
+    Returns:
+        str: Decision for next node to call
+    """
+    question = state["question"]
+    documents = state["documents"]
+    generation = state["candidate_answer"]
+    web_fallback = state["web_fallback"]
+    retries = state["retries"] if state.get("retries") is not None else -1
+    max_retries = config.get("configurable", {}).get("max_retries", MAX_RETRIES)
+
+    # this means we've already gone through web fallback and can return to the user
+    if not web_fallback:
+        return "finalize_response"
+
+    if VERBOSE:
+        print("---CHECK HALLUCINATIONS---")
+
+    hallucination_grader = HALLUCINATION_GRADER_PROMPT | llm.with_structured_output(GradeHallucinations)
+    hallucination_grade: GradeHallucinations = hallucination_grader.invoke(
+        {"documents": documents, "generation": generation}
+    )
+
+    # Check hallucination
+    if hallucination_grade.binary_score == "no":
+        if VERBOSE: print("---DECISION: GENERATION IS NOT GROUNDED IN DOCUMENTS, RE-TRY---")
+        return "generate" if retries < max_retries else "web_search"
+
+    if VERBOSE:
+        print("---DECISION: GENERATION IS GROUNDED IN DOCUMENTS---")
+        print("---GRADE GENERATION vs QUESTION---")
+
+    # Check question-answering
+    answer_grader = ANSWER_GRADER_PROMPT | llm.with_structured_output(GradeAnswer)
+    answer_grade: GradeAnswer = answer_grader.invoke({"question": question, "generation": generation})
+    if answer_grade.binary_score == "yes":
+        if VERBOSE: print("---DECISION: GENERATION ADDRESSES QUESTION---")
+        return "finalize_response"
+    else:
+        if VERBOSE: print("---DECISION: GENERATION DOES NOT ADDRESS QUESTION---")
+        return "transform_query" if retries < max_retries else "web_search"
+
+"""
+## Assemble graph
+"""
+
+workflow = StateGraph(GraphState, config_schema=GraphConfig)
+
+# Define the nodes
+workflow.add_node("document_search", document_search)
+workflow.add_node("generate", generate)
+workflow.add_node("transform_query", transform_query)
+workflow.add_node("web_search", web_search)
+workflow.add_node("finalize_response", finalize_response)
+
+# Build graph
+workflow.set_entry_point("document_search")
+workflow.add_edge("document_search", "generate")
+workflow.add_edge("transform_query", "document_search")
+workflow.add_edge("web_search", "generate")
+workflow.add_edge("finalize_response", END)
+
+workflow.add_conditional_edges(
+    "generate",
+    grade_generation_v_documents_and_question
+)
+
+# Compile
+graph = workflow.compile()
+
+"""
+### Visualize graph
+"""
+
+from IPython.display import Image, display
+
+display(Image(graph.get_graph().draw_mermaid_png()))
+# Output:
+#   <IPython.core.display.Image object>
+
+"""
+## Run the graph!
+"""
+
+"""
+### Streaming
+"""
+
+VERBOSE = True
+inputs = {"messages": [("human", "how do i calculate sum by groups")]}
+for output in graph.stream(inputs):
+    print("\n---\n")
+# Output:
+#   ---RETRIEVE---
+
+#   
+
+#   ---
+
+#   
+
+#   ---GENERATE---
+
+#   ---CHECK HALLUCINATIONS---
+
+#   ---DECISION: GENERATION IS GROUNDED IN DOCUMENTS---
+
+#   ---GRADE GENERATION vs QUESTION---
+
+#   ---DECISION: GENERATION ADDRESSES QUESTION---
+
+#   
+
+#   ---
+
+#   
+
+#   ---FINALIZING THE RESPONSE---
+
+#   
+
+#   ---
+
+#   
+
+
+VERBOSE = False
+inputs = {"messages": [("human", "how do i calculate sum by groups")]}
+for output in graph.stream(inputs):
+    print(output)
+    print("\n---\n")
+# Output:
+#   {'document_search': {'question': 'how do i calculate sum by groups', 'documents': [Document(metadata={'language': 'en', 'source': 'https://pandas.pydata.org/docs/user_guide/groupby.html', 'title': 'Group by: split-apply-combine — pandas 2.2.2 documentation'}, page_content='Windowing operations\nTime series / date functionality\nTime deltas\nOptions and settings\nEnhancing performance\nScaling to large datasets\nSparse data structures\nFrequently Asked Questions (FAQ)\nCookbook\nUser Guide\nGroup by:...\nGroup by: split-apply-combine#\nBy “group by” we are referring to a process involving one or more of the following\nsteps:\nSplitting the data into groups based on some criteria.\nApplying a function to each group independently.\nCombining the results into a data structure.\nOut of these, the split step is the most straightforward. In the apply step, we\nmight wish to do one of the following:\nAggregation: compute a summary statistic (or statistics) for each\ngroup. Some examples:\nCompute group sums or means.\nCompute group sizes / counts.\nTransformation: perform some group-specific computations and return a\nlike-indexed object. Some examples:\nStandardize data (zscore) within a group.\nFilling NAs within groups with a value derived from each group.'), Document(metadata={'language': 'en', 'source': 'https://pandas.pydata.org/docs/user_guide/groupby.html', 'title': 'Group by: split-apply-combine — pandas 2.2.2 documentation'}, page_content='In [108]: grouped["C"].agg(["sum", "sum"])\nOut[108]: \n          sum       sum\nA                      \nbar  0.392940  0.392940\nfoo -1.796421 -1.796421\npandas also allows you to provide multiple lambdas. In this case, pandas\nwill mangle the name of the (nameless) lambda functions, appending _<i>\nto each subsequent lambda.'), Document(metadata={'language': 'en', 'source': 'https://pandas.pydata.org/docs/user_guide/groupby.html', 'title': 'Group by: split-apply-combine — pandas 2.2.2 documentation'}, page_content='In [116]: grouped.agg({"C": "sum", "D": "std"})\nOut[116]: \n            C         D\nA                      \nbar  0.392940  1.366330\nfoo -1.796421  0.884785\nTransformation#\nA transformation is a GroupBy operation whose result is indexed the same\nas the one being grouped. Common examples include cumsum() and\ndiff().\nIn [117]: speeds\nOut[117]: \n          class           order  max_speed\nfalcon     bird   Falconiformes      389.0\nparrot     bird  Psittaciformes       24.0\nlion     mammal       Carnivora       80.2\nmonkey   mammal        Primates        NaN\nleopard  mammal       Carnivora       58.0\nIn [118]: grouped = speeds.groupby("class")["max_speed"]\nIn [119]: grouped.cumsum()\nOut[119]: \nfalcon     389.0\nparrot     413.0\nlion        80.2\nmonkey       NaN\nleopard    138.2\nName: max_speed, dtype: float64'), Document(metadata={'language': 'en', 'source': 'https://pandas.pydata.org/docs/user_guide/groupby.html', 'title': 'Group by: split-apply-combine — pandas 2.2.2 documentation'}, page_content='In [80]: animals\nOut[80]: \n  kind  height  weight\n0  cat     9.1     7.9\n1  dog     6.0     7.5\n2  cat     9.5     9.9\n3  dog    34.0   198.0\nIn [81]: animals.groupby("kind").sum()\nOut[81]: \n      height  weight\nkind                \ncat     18.6    17.8\ndog     40.0   205.5\nIn the result, the keys of the groups appear in the index by default. They can be\ninstead included in the columns by passing as_index=False.')], 'web_fallback': True}}
+
+#   
+
+#   ---
+
+#   
+
+#   {'generate': {'candidate_answer': "To calculate sum by groups in pandas, you can use the groupby() function followed by sum(). For example, if you have a DataFrame called 'df' with a column 'group' and a column 'value', you can calculate the sum of 'value' for each group like this: df.groupby('group')['value'].sum(). This will return a Series with the group names as the index and the sum of 'value' for each group as the values.", 'retries': 0}}
+
+#   
+
+#   ---
+
+#   
+
+#   {'finalize_response': {'messages': [AIMessage(content="To calculate sum by groups in pandas, you can use the groupby() function followed by sum(). For example, if you have a DataFrame called 'df' with a column 'group' and a column 'value', you can calculate the sum of 'value' for each group like this: df.groupby('group')['value'].sum(). This will return a Series with the group names as the index and the sum of 'value' for each group as the values.")]}}
+
+#   
+
+#   ---
+
+#   
+
+
+VERBOSE = False
+inputs = {"messages": [("human", "how do i calculate sum by groups")]}
+async for event in graph.astream_events(inputs, version="v2"):
+    if event["event"] == "on_chat_model_stream":
+        event["data"]["chunk"].pretty_print()
+# Output:
+#   /Users/vadymbarda/.virtualenvs/pandas-rag-langgraph/lib/python3.12/site-packages/langchain_core/_api/beta_decorator.py:87: LangChainBetaWarning: This API is in beta and may change in the future.
+
+#     warn_beta(
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#   To
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#    calculate
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#    sum
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#    by
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#    groups
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#    in pandas, you
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#    can use the group
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#   by() function
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#    followe
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#   d by sum
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#   (
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#   ). For
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#    example,
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#    if
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#    you have a DataFrame
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#    calle
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#   d
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#   'df' with
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#    a
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#    column 'group
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#   '
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#    and a
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#    column 'value
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#   ', you can calculate
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#    the sum of
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#   'value' for
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#    each group like
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#    this:
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#    df
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#   .
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#   groupby('group
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#   ')['value'].
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#   sum(
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#   ). This
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#    will return a Series
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#    with the group
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#    names as the index
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#    and the sum of
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#    'value'
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#    for each group as
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#    the values.
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#   []
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#   [{'id': 'toolu_01ShzXYXtujWKmoZb5SUZ9JH', 'input': {}, 'name': 'GradeHallucinations', 'type': 'tool_use', 'index': 0}]
+
+#   Invalid Tool Calls:
+
+#     GradeHallucinations (toolu_01ShzXYXtujWKmoZb5SUZ9JH)
+
+#    Call ID: toolu_01ShzXYXtujWKmoZb5SUZ9JH
+
+#     Args:
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#   [{'partial_json': '', 'type': 'tool_use', 'index': 0}]
+
+#   Invalid Tool Calls:
+
+#     None (None)
+
+#    Call ID: None
+
+#     Args:
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#   [{'partial_json': '{"binary_sc', 'type': 'tool_use', 'index': 0}]
+
+#   Tool Calls:
+
+#      (None)
+
+#    Call ID: None
+
+#     Args:
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#   [{'partial_json': 'ore": "', 'type': 'tool_use', 'index': 0}]
+
+#   Invalid Tool Calls:
+
+#     None (None)
+
+#    Call ID: None
+
+#     Args:
+
+#       ore": "
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#   [{'partial_json': 'yes"}', 'type': 'tool_use', 'index': 0}]
+
+#   Invalid Tool Calls:
+
+#     None (None)
+
+#    Call ID: None
+
+#     Args:
+
+#       yes"}
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#   []
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#   [{'id': 'toolu_01R9aieZmRHyTAMQSy29CQoV', 'input': {}, 'name': 'GradeAnswer', 'type': 'tool_use', 'index': 0}]
+
+#   Invalid Tool Calls:
+
+#     GradeAnswer (toolu_01R9aieZmRHyTAMQSy29CQoV)
+
+#    Call ID: toolu_01R9aieZmRHyTAMQSy29CQoV
+
+#     Args:
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#   [{'partial_json': '', 'type': 'tool_use', 'index': 0}]
+
+#   Invalid Tool Calls:
+
+#     None (None)
+
+#    Call ID: None
+
+#     Args:
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#   [{'partial_json': '{"binary_', 'type': 'tool_use', 'index': 0}]
+
+#   Tool Calls:
+
+#      (None)
+
+#    Call ID: None
+
+#     Args:
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#   [{'partial_json': 'sc', 'type': 'tool_use', 'index': 0}]
+
+#   Invalid Tool Calls:
+
+#     None (None)
+
+#    Call ID: None
+
+#     Args:
+
+#       sc
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#   [{'partial_json': 'ore": ', 'type': 'tool_use', 'index': 0}]
+
+#   Invalid Tool Calls:
+
+#     None (None)
+
+#    Call ID: None
+
+#     Args:
+
+#       ore":
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+#   
+
+#   [{'partial_json': '"yes"}', 'type': 'tool_use', 'index': 0}]
+
+#   Invalid Tool Calls:
+
+#     None (None)
+
+#    Call ID: None
+
+#     Args:
+
+#       "yes"}
+
+#   ============================[1m Aimessagechunk Message [0m============================
+
+
+"""
+#### Query with a fallback
+"""
+
+VERBOSE = True
+inputs = {"messages": [("human", "how do i convert a column into dummies")]}
+for output in graph.stream(inputs, {"configurable": {"max_retries": 1}}):
+    print("\n---\n")
+# Output:
+#   ---RETRIEVE---
+
+#   
+
+#   ---
+
+#   
+
+#   ---GENERATE---
+
+#   ---CHECK HALLUCINATIONS---
+
+#   ---DECISION: GENERATION IS NOT GROUNDED IN DOCUMENTS, RE-TRY---
+
+#   
+
+#   ---
+
+#   
+
+#   ---GENERATE---
+
+#   ---CHECK HALLUCINATIONS---
+
+#   ---DECISION: GENERATION IS NOT GROUNDED IN DOCUMENTS, RE-TRY---
+
+#   
+
+#   ---
+
+#   
+
+#   ---RUNNING WEB SEARCH---
+
+#   
+
+#   ---
+
+#   
+
+#   ---GENERATE---
+
+#   
+
+#   ---
+
+#   
+
+#   ---FINALIZING THE RESPONSE---
+
+#   
+
+#   ---
+
+#   
+
+
+"""
+### Interrupts: human-in-the-loop
+"""
+
+checkpointer = MemorySaver()
+
+graph_with_memory = workflow.compile(checkpointer=checkpointer)
+
+thread_config = {"configurable": {"thread_id": 1}}
+
+VERBOSE = False
+inputs = {"messages": [("human", "how do i convert a column into dummies")]}
+for output in graph_with_memory.stream(inputs, thread_config, interrupt_before=["generate"]):
+    print(output)
+    print("\n---\n")
+# Output:
+#   {'document_search': {'question': 'how do i convert a column into dummies', 'documents': [Document(metadata={'language': 'en', 'source': 'https://pandas.pydata.org/docs/user_guide/indexing.html', 'title': 'Indexing and selecting data — pandas 2.2.2 documentation'}, page_content="In [7]: df[['B', 'A']] = df[['A', 'B']]\nIn [8]: df\nOut[8]: \n                   A         B         C         D\n2000-01-01 -0.282863  0.469112 -1.509059 -1.135632\n2000-01-02 -0.173215  1.212112  0.119209 -1.044236\n2000-01-03 -2.104569 -0.861849 -0.494929  1.071804\n2000-01-04 -0.706771  0.721555 -1.039575  0.271860\n2000-01-05  0.567020 -0.424972  0.276232 -1.087401\n2000-01-06  0.113648 -0.673690 -1.478427  0.524988\n2000-01-07  0.577046  0.404705 -1.715002 -1.039268\n2000-01-08 -1.157892 -0.370647 -1.344312  0.844885\nYou may find this useful for applying a transform (in-place) to a subset of the\ncolumns.\nWarning\npandas aligns all AXES when setting Series and DataFrame from .loc.\nThis will not modify df because the column alignment is before value assignment."), Document(metadata={'language': 'en', 'source': 'https://pandas.pydata.org/docs/user_guide/indexing.html', 'title': 'Indexing and selecting data — pandas 2.2.2 documentation'}, page_content="In [21]: sa.a = 5\nIn [22]: sa\nOut[22]: \na    5\nb    2\nc    3\ndtype: int64\nIn [23]: dfa.A = list(range(len(dfa.index)))  # ok if A already exists\nIn [24]: dfa\nOut[24]: \n            A         B         C         D\n2000-01-01  0  0.469112 -1.509059 -1.135632\n2000-01-02  1  1.212112  0.119209 -1.044236\n2000-01-03  2 -0.861849 -0.494929  1.071804\n2000-01-04  3  0.721555 -1.039575  0.271860\n2000-01-05  4 -0.424972  0.276232 -1.087401\n2000-01-06  5 -0.673690 -1.478427  0.524988\n2000-01-07  6  0.404705 -1.715002 -1.039268\n2000-01-08  7 -0.370647 -1.344312  0.844885\nIn [25]: dfa['A'] = list(range(len(dfa.index)))  # use this form to create a new column"), Document(metadata={'language': 'en', 'source': 'https://pandas.pydata.org/docs/user_guide/merging.html', 'title': 'Merge, join, concatenate and compare — pandas 2.2.2 documentation'}, page_content='In [144]: df = pd.DataFrame(\n   .....:     {\n   .....:         "col1": ["a", "a", "b", "b", "a"],\n   .....:         "col2": [1.0, 2.0, 3.0, np.nan, 5.0],\n   .....:         "col3": [1.0, 2.0, 3.0, 4.0, 5.0],\n   .....:     },\n   .....:     columns=["col1", "col2", "col3"],\n   .....: )\n   .....: \nIn [145]: df\nOut[145]: \n  col1  col2  col3\n0    a   1.0   1.0\n1    a   2.0   2.0\n2    b   3.0   3.0\n3    b   NaN   4.0\n4    a   5.0   5.0\nIn [146]: df2 = df.copy()\nIn [147]: df2.loc[0, "col1"] = "c"\nIn [148]: df2.loc[2, "col3"] = 4.0\nIn [149]: df2\nOut[149]: \n  col1  col2  col3\n0    c   1.0   1.0\n1    a   2.0   2.0\n2    b   3.0   4.0\n3    b   NaN   4.0\n4    a   5.0   5.0'), Document(metadata={'language': 'en', 'source': 'https://pandas.pydata.org/docs/user_guide/groupby.html', 'title': 'Group by: split-apply-combine — pandas 2.2.2 documentation'}, page_content='In [225]: df\nOut[225]: \n  Branch Buyer  Quantity                Date\n0      A  Carl         1 2013-01-01 13:00:00\n1      A  Mark         3 2013-01-01 13:05:00\n2      A  Carl         5 2013-10-01 20:00:00\n3      A  Carl         1 2013-10-02 10:00:00\n4      A   Joe         8 2013-10-01 20:00:00\n5      A   Joe         1 2013-10-02 10:00:00\n6      A   Joe         9 2013-12-02 12:00:00\n7      B  Carl         3 2013-12-02 14:00:00\nGroupby a specific column with the desired frequency. This is like resampling.')], 'web_fallback': True}}
+
+#   
+
+#   ---
+
+#   
+
+
+"""
+#### Update the document to contain a correct answer
+"""
+
+documents = output["document_search"]["documents"]
+documents[0].page_content = "to convert a column into dummies use pd.get_dummies"
+
+graph_with_memory.update_state(thread_config, {"documents": documents}, as_node="document_search")
+# Output:
+#   {'configurable': {'thread_id': 1,
+
+#     'thread_ts': '1ef3ec3c-fd36-64c8-8002-6a493571b3f6'}}
+
+"""
+#### Continue streaming from the interrupt
+"""
+
+VERBOSE = False
+for output in graph_with_memory.stream(None, thread_config):
+    print(output)
+    print("\n---\n")
+# Output:
+#   {'generate': {'candidate_answer': 'To convert a column into dummies in pandas, you can use the pd.get_dummies() function. This function will create binary columns for each unique value in the specified column. The resulting dummy variables can be used for further analysis or modeling.', 'retries': 0}}
+
+#   
+
+#   ---
+
+#   
+
+#   {'finalize_response': {'messages': [AIMessage(content='To convert a column into dummies in pandas, you can use the pd.get_dummies() function. This function will create binary columns for each unique value in the specified column. The resulting dummy variables can be used for further analysis or modeling.')]}}
+
+#   
+
+#   ---
+
+#   
+
+
+"""
+## LangGraph Cloud
+"""
+
+from langgraph_sdk import get_client
+
+client = get_client(url="https://pandas-rag-c42e716a7dc35d438612c0a7cac2aa42-ffoprvkqsa-uc.a.run.app/")
+
+"""
+### Streaming
+"""
+
+thread = await client.threads.create()
+
+inputs = {"messages": [("human", "how do i calculate sum by groups")]}
+async for output in client.runs.stream(thread["thread_id"], "agent", input=inputs):
+    print(output)
+    print("\n---\n")
+# Output:
+#   StreamPart(event='metadata', data={'run_id': '1ef3ec3d-2932-64ed-b3b1-a3e2e3ce5fd0'})
+
+#   
+
+#   ---
+
+#   
+
+#   StreamPart(event='values', data={'messages': [{'content': 'how do i calculate sum by groups', 'additional_kwargs': {}, 'response_metadata': {}, 'type': 'human', 'name': None, 'id': 'f45e4a5e-b8ee-434c-ae08-92e61d8cccc3', 'example': False}]})
+
+#   
+
+#   ---
+
+#   
+
+#   StreamPart(event='values', data={'messages': [{'content': 'how do i calculate sum by groups', 'additional_kwargs': {}, 'response_metadata': {}, 'type': 'human', 'name': None, 'id': 'f45e4a5e-b8ee-434c-ae08-92e61d8cccc3', 'example': False}], 'question': 'how do i calculate sum by groups', 'documents': [{'page_content': 'Windowing operations\nTime series / date functionality\nTime deltas\nOptions and settings\nEnhancing performance\nScaling to large datasets\nSparse data structures\nFrequently Asked Questions (FAQ)\nCookbook\nUser Guide\nGroup by:...\nGroup by: split-apply-combine#\nBy “group by” we are referring to a process involving one or more of the following\nsteps:\nSplitting the data into groups based on some criteria.\nApplying a function to each group independently.\nCombining the results into a data structure.\nOut of these, the split step is the most straightforward. In the apply step, we\nmight wish to do one of the following:\nAggregation: compute a summary statistic (or statistics) for each\ngroup. Some examples:\nCompute group sums or means.\nCompute group sizes / counts.\nTransformation: perform some group-specific computations and return a\nlike-indexed object. Some examples:\nStandardize data (zscore) within a group.\nFilling NAs within groups with a value derived from each group.', 'metadata': {'language': 'en', 'source': 'https://pandas.pydata.org/docs/user_guide/groupby.html', 'title': 'Group by: split-apply-combine — pandas 2.2.2 documentation'}, 'type': 'Document'}, {'page_content': 'In [108]: grouped["C"].agg(["sum", "sum"])\nOut[108]: \n          sum       sum\nA                      \nbar  0.392940  0.392940\nfoo -1.796421 -1.796421\npandas also allows you to provide multiple lambdas. In this case, pandas\nwill mangle the name of the (nameless) lambda functions, appending _<i>\nto each subsequent lambda.', 'metadata': {'language': 'en', 'source': 'https://pandas.pydata.org/docs/user_guide/groupby.html', 'title': 'Group by: split-apply-combine — pandas 2.2.2 documentation'}, 'type': 'Document'}, {'page_content': 'In [116]: grouped.agg({"C": "sum", "D": "std"})\nOut[116]: \n            C         D\nA                      \nbar  0.392940  1.366330\nfoo -1.796421  0.884785\nTransformation#\nA transformation is a GroupBy operation whose result is indexed the same\nas the one being grouped. Common examples include cumsum() and\ndiff().\nIn [117]: speeds\nOut[117]: \n          class           order  max_speed\nfalcon     bird   Falconiformes      389.0\nparrot     bird  Psittaciformes       24.0\nlion     mammal       Carnivora       80.2\nmonkey   mammal        Primates        NaN\nleopard  mammal       Carnivora       58.0\nIn [118]: grouped = speeds.groupby("class")["max_speed"]\nIn [119]: grouped.cumsum()\nOut[119]: \nfalcon     389.0\nparrot     413.0\nlion        80.2\nmonkey       NaN\nleopard    138.2\nName: max_speed, dtype: float64', 'metadata': {'language': 'en', 'source': 'https://pandas.pydata.org/docs/user_guide/groupby.html', 'title': 'Group by: split-apply-combine — pandas 2.2.2 documentation'}, 'type': 'Document'}, {'page_content': 'In [73]: grouped[["A", "B"]].sum()\nOut[73]: \n                   A                  B\nA                                      \nbar        barbarbar        onethreetwo\nfoo  foofoofoofoofoo  onetwotwoonethree\nIterating through groups#\nWith the GroupBy object in hand, iterating through the grouped data is very\nnatural and functions similarly to itertools.groupby():\nIn [74]: grouped = df.groupby(\'A\')\nIn [75]: for name, group in grouped:\n   ....:     print(name)\n   ....:     print(group)\n   ....: \nbar\n     A      B         C         D\n1  bar    one  0.254161  1.511763\n3  bar  three  0.215897 -0.990582\n5  bar    two -0.077118  1.211526\nfoo\n     A      B         C         D\n0  foo    one -0.575247  1.346061\n2  foo    two -1.143704  1.627081\n4  foo    two  1.193555 -0.441652\n6  foo    one -0.408530  0.268520\n7  foo  three -0.862495  0.024580\nIn the case of grouping by multiple keys, the group name will be a tuple:', 'metadata': {'language': 'en', 'source': 'https://pandas.pydata.org/docs/user_guide/groupby.html', 'title': 'Group by: split-apply-combine — pandas 2.2.2 documentation'}, 'type': 'Document'}], 'web_fallback': True})
+
+#   
+
+#   ---
+
+#   
+
+#   StreamPart(event='values', data={'messages': [{'content': 'how do i calculate sum by groups', 'additional_kwargs': {}, 'response_metadata': {}, 'type': 'human', 'name': None, 'id': 'f45e4a5e-b8ee-434c-ae08-92e61d8cccc3', 'example': False}], 'question': 'how do i calculate sum by groups', 'documents': [{'page_content': 'Windowing operations\nTime series / date functionality\nTime deltas\nOptions and settings\nEnhancing performance\nScaling to large datasets\nSparse data structures\nFrequently Asked Questions (FAQ)\nCookbook\nUser Guide\nGroup by:...\nGroup by: split-apply-combine#\nBy “group by” we are referring to a process involving one or more of the following\nsteps:\nSplitting the data into groups based on some criteria.\nApplying a function to each group independently.\nCombining the results into a data structure.\nOut of these, the split step is the most straightforward. In the apply step, we\nmight wish to do one of the following:\nAggregation: compute a summary statistic (or statistics) for each\ngroup. Some examples:\nCompute group sums or means.\nCompute group sizes / counts.\nTransformation: perform some group-specific computations and return a\nlike-indexed object. Some examples:\nStandardize data (zscore) within a group.\nFilling NAs within groups with a value derived from each group.', 'metadata': {'language': 'en', 'source': 'https://pandas.pydata.org/docs/user_guide/groupby.html', 'title': 'Group by: split-apply-combine — pandas 2.2.2 documentation'}, 'type': 'Document'}, {'page_content': 'In [108]: grouped["C"].agg(["sum", "sum"])\nOut[108]: \n          sum       sum\nA                      \nbar  0.392940  0.392940\nfoo -1.796421 -1.796421\npandas also allows you to provide multiple lambdas. In this case, pandas\nwill mangle the name of the (nameless) lambda functions, appending _<i>\nto each subsequent lambda.', 'metadata': {'language': 'en', 'source': 'https://pandas.pydata.org/docs/user_guide/groupby.html', 'title': 'Group by: split-apply-combine — pandas 2.2.2 documentation'}, 'type': 'Document'}, {'page_content': 'In [116]: grouped.agg({"C": "sum", "D": "std"})\nOut[116]: \n            C         D\nA                      \nbar  0.392940  1.366330\nfoo -1.796421  0.884785\nTransformation#\nA transformation is a GroupBy operation whose result is indexed the same\nas the one being grouped. Common examples include cumsum() and\ndiff().\nIn [117]: speeds\nOut[117]: \n          class           order  max_speed\nfalcon     bird   Falconiformes      389.0\nparrot     bird  Psittaciformes       24.0\nlion     mammal       Carnivora       80.2\nmonkey   mammal        Primates        NaN\nleopard  mammal       Carnivora       58.0\nIn [118]: grouped = speeds.groupby("class")["max_speed"]\nIn [119]: grouped.cumsum()\nOut[119]: \nfalcon     389.0\nparrot     413.0\nlion        80.2\nmonkey       NaN\nleopard    138.2\nName: max_speed, dtype: float64', 'metadata': {'language': 'en', 'source': 'https://pandas.pydata.org/docs/user_guide/groupby.html', 'title': 'Group by: split-apply-combine — pandas 2.2.2 documentation'}, 'type': 'Document'}, {'page_content': 'In [73]: grouped[["A", "B"]].sum()\nOut[73]: \n                   A                  B\nA                                      \nbar        barbarbar        onethreetwo\nfoo  foofoofoofoofoo  onetwotwoonethree\nIterating through groups#\nWith the GroupBy object in hand, iterating through the grouped data is very\nnatural and functions similarly to itertools.groupby():\nIn [74]: grouped = df.groupby(\'A\')\nIn [75]: for name, group in grouped:\n   ....:     print(name)\n   ....:     print(group)\n   ....: \nbar\n     A      B         C         D\n1  bar    one  0.254161  1.511763\n3  bar  three  0.215897 -0.990582\n5  bar    two -0.077118  1.211526\nfoo\n     A      B         C         D\n0  foo    one -0.575247  1.346061\n2  foo    two -1.143704  1.627081\n4  foo    two  1.193555 -0.441652\n6  foo    one -0.408530  0.268520\n7  foo  three -0.862495  0.024580\nIn the case of grouping by multiple keys, the group name will be a tuple:', 'metadata': {'language': 'en', 'source': 'https://pandas.pydata.org/docs/user_guide/groupby.html', 'title': 'Group by: split-apply-combine — pandas 2.2.2 documentation'}, 'type': 'Document'}], 'candidate_answer': "To calculate sum by groups in pandas, you can use the groupby() function followed by the sum() method. For example, if you have a DataFrame df and want to sum values in column 'C' grouped by column 'A', you would use: df.groupby('A')['C'].sum(). This will split the data into groups based on column 'A', apply the sum function to column 'C' for each group, and combine the results into a new data structure.", 'retries': 0, 'web_fallback': True})
+
+#   
+
+#   ---
+
+#   
+
+#   StreamPart(event='values', data={'messages': [{'content': 'how do i calculate sum by groups', 'additional_kwargs': {}, 'response_metadata': {}, 'type': 'human', 'name': None, 'id': 'f45e4a5e-b8ee-434c-ae08-92e61d8cccc3', 'example': False}, {'content': "To calculate sum by groups in pandas, you can use the groupby() function followed by the sum() method. For example, if you have a DataFrame df and want to sum values in column 'C' grouped by column 'A', you would use: df.groupby('A')['C'].sum(). This will split the data into groups based on column 'A', apply the sum function to column 'C' for each group, and combine the results into a new data structure.", 'additional_kwargs': {}, 'response_metadata': {}, 'type': 'ai', 'name': None, 'id': '5f6a35e3-7a20-41f7-a087-0e2499a361e9', 'example': False, 'tool_calls': [], 'invalid_tool_calls': [], 'usage_metadata': None}], 'question': 'how do i calculate sum by groups', 'documents': [{'page_content': 'Windowing operations\nTime series / date functionality\nTime deltas\nOptions and settings\nEnhancing performance\nScaling to large datasets\nSparse data structures\nFrequently Asked Questions (FAQ)\nCookbook\nUser Guide\nGroup by:...\nGroup by: split-apply-combine#\nBy “group by” we are referring to a process involving one or more of the following\nsteps:\nSplitting the data into groups based on some criteria.\nApplying a function to each group independently.\nCombining the results into a data structure.\nOut of these, the split step is the most straightforward. In the apply step, we\nmight wish to do one of the following:\nAggregation: compute a summary statistic (or statistics) for each\ngroup. Some examples:\nCompute group sums or means.\nCompute group sizes / counts.\nTransformation: perform some group-specific computations and return a\nlike-indexed object. Some examples:\nStandardize data (zscore) within a group.\nFilling NAs within groups with a value derived from each group.', 'metadata': {'language': 'en', 'source': 'https://pandas.pydata.org/docs/user_guide/groupby.html', 'title': 'Group by: split-apply-combine — pandas 2.2.2 documentation'}, 'type': 'Document'}, {'page_content': 'In [108]: grouped["C"].agg(["sum", "sum"])\nOut[108]: \n          sum       sum\nA                      \nbar  0.392940  0.392940\nfoo -1.796421 -1.796421\npandas also allows you to provide multiple lambdas. In this case, pandas\nwill mangle the name of the (nameless) lambda functions, appending _<i>\nto each subsequent lambda.', 'metadata': {'language': 'en', 'source': 'https://pandas.pydata.org/docs/user_guide/groupby.html', 'title': 'Group by: split-apply-combine — pandas 2.2.2 documentation'}, 'type': 'Document'}, {'page_content': 'In [116]: grouped.agg({"C": "sum", "D": "std"})\nOut[116]: \n            C         D\nA                      \nbar  0.392940  1.366330\nfoo -1.796421  0.884785\nTransformation#\nA transformation is a GroupBy operation whose result is indexed the same\nas the one being grouped. Common examples include cumsum() and\ndiff().\nIn [117]: speeds\nOut[117]: \n          class           order  max_speed\nfalcon     bird   Falconiformes      389.0\nparrot     bird  Psittaciformes       24.0\nlion     mammal       Carnivora       80.2\nmonkey   mammal        Primates        NaN\nleopard  mammal       Carnivora       58.0\nIn [118]: grouped = speeds.groupby("class")["max_speed"]\nIn [119]: grouped.cumsum()\nOut[119]: \nfalcon     389.0\nparrot     413.0\nlion        80.2\nmonkey       NaN\nleopard    138.2\nName: max_speed, dtype: float64', 'metadata': {'language': 'en', 'source': 'https://pandas.pydata.org/docs/user_guide/groupby.html', 'title': 'Group by: split-apply-combine — pandas 2.2.2 documentation'}, 'type': 'Document'}, {'page_content': 'In [73]: grouped[["A", "B"]].sum()\nOut[73]: \n                   A                  B\nA                                      \nbar        barbarbar        onethreetwo\nfoo  foofoofoofoofoo  onetwotwoonethree\nIterating through groups#\nWith the GroupBy object in hand, iterating through the grouped data is very\nnatural and functions similarly to itertools.groupby():\nIn [74]: grouped = df.groupby(\'A\')\nIn [75]: for name, group in grouped:\n   ....:     print(name)\n   ....:     print(group)\n   ....: \nbar\n     A      B         C         D\n1  bar    one  0.254161  1.511763\n3  bar  three  0.215897 -0.990582\n5  bar    two -0.077118  1.211526\nfoo\n     A      B         C         D\n0  foo    one -0.575247  1.346061\n2  foo    two -1.143704  1.627081\n4  foo    two  1.193555 -0.441652\n6  foo    one -0.408530  0.268520\n7  foo  three -0.862495  0.024580\nIn the case of grouping by multiple keys, the group name will be a tuple:', 'metadata': {'language': 'en', 'source': 'https://pandas.pydata.org/docs/user_guide/groupby.html', 'title': 'Group by: split-apply-combine — pandas 2.2.2 documentation'}, 'type': 'Document'}], 'candidate_answer': "To calculate sum by groups in pandas, you can use the groupby() function followed by the sum() method. For example, if you have a DataFrame df and want to sum values in column 'C' grouped by column 'A', you would use: df.groupby('A')['C'].sum(). This will split the data into groups based on column 'A', apply the sum function to column 'C' for each group, and combine the results into a new data structure.", 'retries': 0, 'web_fallback': True})
+
+#   
+
+#   ---
+
+#   
+
+#   StreamPart(event='end', data=None)
+
+#   
+
+#   ---
+
+#   
+
+
+"""
+### Thread state
+"""
+
+state = await client.threads.get_state(thread["thread_id"])
+
+for message in convert_to_messages(state["values"]["messages"]):
+    message.pretty_print()
+# Output:
+#   ================================[1m Human Message [0m=================================
+
+#   
+
+#   how do i calculate sum by groups
+
+#   ==================================[1m Ai Message [0m==================================
+
+#   
+
+#   To calculate sum by groups in pandas, you can use the groupby() function followed by the sum() method. For example, if you have a DataFrame df and want to sum values in column 'C' grouped by column 'A', you would use: df.groupby('A')['C'].sum(). This will split the data into groups based on column 'A', apply the sum function to column 'C' for each group, and combine the results into a new data structure.
+
+
+"""
+## Sign up for LangGraph Cloud
+"""
+
+"""
+http://bit.ly/lgraph-cloud-beta
+"""
+
+"""
+![image.png](attachment:cff9d7c2-614e-423d-ae6d-a319453b35c6.png)
+"""
+
+
+
+================================================
+FILE: langgraph.json
+================================================
+{
+  "dependencies": ["."],
+  "graphs": {
+    "agent": "./pandas_rag_langgraph/agent.py:graph"
+  },
+  "env": ".env"
+}
+
+
+
+================================================
+FILE: pyproject.toml
+================================================
+[tool.poetry]
+name = "pandas-rag-langgraph"
+version = "0.1.0"
+description = ""
+authors = ["vbarda <vadym@langchain.dev>"]
+readme = "README.md"
+
+
+[tool.poetry.dependencies]
+python = "^3.11"
+beautifulsoup4 = "^4.12.3"
+chromadb = "^0.5.0"
+tiktoken = "^0.7.0"
+langchain-core = "^0.2.5"
+langchain-community = "^0.2.4"
+langchain-text-splitters = "^0.2.1"
+langgraph = "^0.1.0"
+langchain-anthropic = "^0.1.15"
+langchain-openai = "^0.1.9"
+langchainhub = "^0.1.20"
+
+
+[tool.poetry.group.dev.dependencies]
+langgraph-cli = "^0.1.35"
+langgraph-sdk = "^0.1.18"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+
+
+================================================
+FILE: .env.example
+================================================
+OPENAI_API_KEY=placeholder
+TAVILY_API_KEY=placeholder
+
+
+
+================================================
+FILE: pandas_rag_langgraph/agent.py
+================================================
+import re
+from typing import Annotated, Iterator, Literal, TypedDict
+
+from langchain import hub
+from langchain_community.document_loaders import web_base
+from langchain_community.vectorstores import Chroma
+from langchain_community.tools.tavily_search import TavilySearchResults
+from langchain_core.documents import Document
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.messages import BaseMessage, AIMessage, convert_to_messages
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.pydantic_v1 import BaseModel, Field
+from langchain_core.retrievers import BaseRetriever
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_anthropic import ChatAnthropic
+from langchain_openai import OpenAIEmbeddings
+from langgraph.graph import END, StateGraph, add_messages
+
+MAX_RETRIES = 3
+
+# Index 3 pages from Pandas user guides
+SOURCE_URLS = [
+    'https://pandas.pydata.org/docs/user_guide/indexing.html',
+    'https://pandas.pydata.org/docs/user_guide/groupby.html',
+    'https://pandas.pydata.org/docs/user_guide/merging.html'
+]
+
+NEWLINE_RE = re.compile("\n+")
+
+class PandasDocsLoader(web_base.WebBaseLoader):
+    def lazy_load(self) -> Iterator[Document]:
+        """Lazy load text from the url(s) in web_path."""
+        for path in self.web_paths:
+            soup = self._scrape(path, bs_kwargs=self.bs_kwargs)
+            text = soup.get_text(**self.bs_get_text_kwargs)
+            text = NEWLINE_RE.sub("\n", text)     
+            metadata = web_base._build_metadata(soup, path)
+            yield Document(page_content=text, metadata=metadata)
+
+
+def prepare_documents(urls: list[str]) -> list[Document]:
+    text_splitter = RecursiveCharacterTextSplitter(
+        separators=[
+            r"In \[[0-9]+\]",
+            r"\n+",
+            r"\s+"
+        ],
+        is_separator_regex=True,
+        chunk_size=1000
+    )
+    docs = [PandasDocsLoader(url).load() for url in urls]
+    docs_list = [item for sublist in docs for item in sublist]
+    return text_splitter.split_documents(docs_list)
+
+
+def get_retriever() -> BaseRetriever:
+    documents = prepare_documents(SOURCE_URLS)
+    vectorstore = Chroma.from_documents(
+        documents=documents,
+        collection_name="pandas-rag-chroma",
+        embedding=OpenAIEmbeddings(),
+    )
+    retriever = vectorstore.as_retriever()
+    return retriever
+
+
+# LLM / Retriever / Tools
+llm = ChatAnthropic(model="claude-3-5-sonnet-20240620", temperature=0)
+retriever = get_retriever()
+tavily_search_tool = TavilySearchResults(max_results=3)
+
+# Prompts / data models
+
+RAG_PROMPT: ChatPromptTemplate = hub.pull("rlm/rag-prompt")
+
+
+class GradeHallucinations(BaseModel):
+    """Binary score for hallucination present in generation answer."""
+
+    binary_score: str = Field(
+        description="Answer is grounded in the facts, 'yes' or 'no'"
+    )
+
+
+HALLUCINATION_GRADER_SYSTEM = (
+"""
+You are a grader assessing whether an LLM generation is grounded in / supported by a set of retrieved facts.
+Give a binary score 'yes' or 'no', where 'yes' means that the answer is grounded in / supported by the set of facts.
+
+IF the generation includes code examples, make sure those examples are FULLY present in the set of facts, otherwise always return score 'no'.
+"""
+)
+HALLUCINATION_GRADER_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        ("system", HALLUCINATION_GRADER_SYSTEM),
+        ("human", "Set of facts: \n\n {documents} \n\n LLM generation: {generation}"),
+    ]
+)
+
+
+class GradeAnswer(BaseModel):
+    """Binary score to assess answer addresses question."""
+
+    binary_score: str = Field(
+        description="Answer addresses the question, 'yes' or 'no'"
+    )
+
+
+ANSWER_GRADER_SYSTEM = (
+"""
+You are a grader assessing whether an answer addresses / resolves a question.
+Give a binary score 'yes' or 'no', where 'yes' means that the answer resolves the question.
+"""
+)
+ANSWER_GRADER_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        ("system", ANSWER_GRADER_SYSTEM),
+        ("human", "User question: \n\n {question} \n\n LLM generation: {generation}"),
+    ]
+)
+
+
+QUERY_REWRITER_SYSTEM = (
+"""
+You a question re-writer that converts an input question to a better version that is optimized for vectorstore retrieval.
+Look at the input and try to reason about the underlying semantic intent / meaning.
+"""
+)
+QUERY_REWRITER_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        ("system", QUERY_REWRITER_SYSTEM),
+        (
+            "human",
+            "Here is the initial question: \n\n {question} \n Formulate an improved question.",
+        ),
+    ]
+)
+
+
+class GraphState(TypedDict):
+    messages: Annotated[list[BaseMessage], add_messages]
+    question: str
+    documents: list[Document]
+    candidate_answer: str
+    retries: int
+    web_fallback: bool
+
+
+class GraphConfig(TypedDict):
+    max_retries: int
+
+
+def document_search(state: GraphState):
+    """
+    Retrieve documents
+
+    Args:
+        state (dict): The current graph state
+
+    Returns:
+        state (dict): New key added to state, documents, that contains retrieved documents
+    """
+    print("---RETRIEVE---")
+    question = convert_to_messages(state["messages"])[-1].content
+
+    # Retrieval
+    documents = retriever.invoke(question)
+    return {"documents": documents, "question": question, "web_fallback": True}
+
+
+def generate(state: GraphState):
+    """
+    Generate answer
+
+    Args:
+        state (dict): The current graph state
+
+    Returns:
+        state (dict): New key added to state, generation, that contains LLM generation
+    """
+    print("---GENERATE---")
+    question = state["question"]
+    documents = state["documents"]
+    retries = state["retries"] if state.get("retries") is not None else -1
+
+    rag_chain = RAG_PROMPT | llm | StrOutputParser()
+    generation = rag_chain.invoke({"context": documents, "question": question})
+    return {"retries": retries + 1, "candidate_answer": generation}
+
+
+def transform_query(state: GraphState):
+    """
+    Transform the query to produce a better question.
+
+    Args:
+        state (dict): The current graph state
+
+    Returns:
+        state (dict): Updates question key with a re-phrased question
+    """
+    print("---TRANSFORM QUERY---")
+    question = state["question"]
+
+    # Re-write question
+    query_rewriter = QUERY_REWRITER_PROMPT | llm | StrOutputParser()
+    better_question = query_rewriter.invoke({"question": question})
+    return {"question": better_question}
+
+
+def web_search(state: GraphState):
+    print("---RUNNING WEB SEARCH---")
+    question = state["question"]
+    documents = state["documents"]
+    search_results = tavily_search_tool.invoke(question)
+    search_content = "\n".join([d["content"] for d in search_results])
+    documents.append(Document(page_content=search_content, metadata={"source": "websearch"}))
+    return {"documents": documents, "web_fallback": False}
+
+
+### Edges
+
+
+def grade_generation_v_documents_and_question(state: GraphState, config) -> Literal["generate", "transform_query", "web_search", "finalize_response"]:
+    """
+    Determines whether the generation is grounded in the document and answers question.
+
+    Args:
+        state (dict): The current graph state
+
+    Returns:
+        str: Decision for next node to call
+    """
+    question = state["question"]
+    documents = state["documents"]
+    generation = state["candidate_answer"]
+    web_fallback = state["web_fallback"]
+    retries = state["retries"] if state.get("retries") is not None else -1
+    max_retries = config.get("configurable", {}).get("max_retries", MAX_RETRIES)
+
+    # this means we've already gone through web fallback and can return to the user
+    if not web_fallback:
+        return "finalize_response"
+
+    print("---CHECK HALLUCINATIONS---")
+    hallucination_grader = HALLUCINATION_GRADER_PROMPT | llm.with_structured_output(GradeHallucinations)
+    hallucination_grade: GradeHallucinations = hallucination_grader.invoke(
+        {"documents": documents, "generation": generation}
+    )
+
+    # Check hallucination
+    if hallucination_grade.binary_score == "no":
+        return "generate" if retries < max_retries else "web_search"
+
+    print("---DECISION: GENERATION IS GROUNDED IN DOCUMENTS---")
+
+    # Check question-answering
+    print("---GRADE GENERATION vs QUESTION---")
+
+    answer_grader = ANSWER_GRADER_PROMPT | llm.with_structured_output(GradeAnswer)
+    answer_grade: GradeAnswer = answer_grader.invoke({"question": question, "generation": generation})
+    if answer_grade.binary_score == "yes":
+        print("---DECISION: GENERATION ADDRESSES QUESTION---")
+        return "finalize_response"
+    else:
+        print("---DECISION: GENERATION DOES NOT ADDRESS QUESTION---")
+        return "transform_query" if retries < max_retries else "web_search"
+
+
+def finalize_response(state: GraphState):
+    print("---FINALIZING THE RESPONSE---")
+    return {"messages": [AIMessage(content=state["candidate_answer"])]}
+
+
+# Define graph
+
+workflow = StateGraph(GraphState, config_schema=GraphConfig)
+
+# Define the nodes
+workflow.add_node("document_search", document_search)
+workflow.add_node("generate", generate)
+workflow.add_node("transform_query", transform_query)
+workflow.add_node("web_search", web_search)
+workflow.add_node("finalize_response", finalize_response)
+
+# Build graph
+workflow.set_entry_point("document_search")
+workflow.add_edge("document_search", "generate")
+workflow.add_edge("transform_query", "document_search")
+workflow.add_edge("web_search", "generate")
+workflow.add_edge("finalize_response", END)
+
+workflow.add_conditional_edges(
+    "generate",
+    grade_generation_v_documents_and_question
+)
+
+# Compile
+graph = workflow.compile()
+
+

@@ -1,0 +1,342 @@
+Directory structure:
+└── langchain-ai-langgraph-example-monorepo/
+    ├── README.md
+    ├── .env.example
+    ├── all_projects/
+    │   ├── my_project/
+    │   │   └── project_one/
+    │   │       ├── pyproject.toml
+    │   │       └── my_agent/
+    │   │           ├── __init__.py
+    │   │           ├── main.py
+    │   │           └── utils/
+    │   │               ├── __init__.py
+    │   │               └── build_graph.py
+    │   └── project_two/
+    │       ├── requirements.txt
+    │       └── my_other_agent/
+    │           ├── __init__.py
+    │           ├── main.py
+    │           └── utils/
+    │               ├── __init__.py
+    │               └── build_graph.py
+    └── static/
+
+================================================
+FILE: README.md
+================================================
+# LangGraph Cloud Example Monorepo
+
+![](static/agent_ui.png)
+
+This is an example monorepo with multiple agents to deploy with LangGraph Cloud.
+
+[LangGraph](https://github.com/langchain-ai/langgraph) is a library for building stateful, multi-actor applications with LLMs. The main use cases for LangGraph are conversational agents, and long-running, multi-step LLM applications or any LLM application that would benefit from built-in support for persistent checkpoints, cycles and human-in-the-loop interactions (ie. LLM and human collaboration).
+
+LangGraph shortens the time-to-market for developers using LangGraph, with a one-liner command to start a production-ready HTTP microservice for your LangGraph applications, with built-in persistence. This lets you focus on the logic of your LangGraph graph, and leave the scaling and API design to us. The API is inspired by the OpenAI assistants API, and is designed to fit in alongside your existing services.
+
+In order to deploy this agent to LangGraph Cloud you will want to first fork this repo. After that, you can follow the instructions [here](https://langchain-ai.github.io/langgraph/cloud/) to deploy to LangGraph Cloud.
+
+# Explanation
+
+## File Structure
+
+This repository shows a few potential file structures all in one monorepo. To start with, all of the projects we build are inside of the subdirectory `all_projects`. Inside of this subdirectory we have two more subdirectories.
+
+The first is called `my_project`, which could contain multiple projects, but in our case just contains one called `project_one`. Inside of `project_one` we setup a Python package using a `pyproject.toml` file to manage our dependencies. You will also notice that `project_one` doesn't just contain a `main.py` file, but also a `utils` folder that is imported into the `main.py` file. 
+
+The second subdirectory is called `project_two` which is a standalone Python package with the same overall structure as `project_one` but it uses `requirements.txt` instead of `pyproject.toml` to manage dependencies.
+
+## Configuration file
+
+Inside our `langgraph.json` file you will first notice that our dependencies value is a list that includes the directories of both of our dependency files, and we also register both of our graphs, showcasing the ability of Langgraph to host multiple graphs from the same deployment. 
+
+This use case shows how LangGraph can be configured for hosting multiple graphs from within the same repo, even if the projects are nested in different subdirectories and use different dependency systems.
+
+
+================================================
+FILE: .env.example
+================================================
+OPENAI_API_KEY="..."
+LANGCHAIN_API_KEY="..."
+TAVILY_API_KEY="..."
+ANTHROPIC_API_KEY="..."
+
+
+
+================================================
+FILE: all_projects/my_project/project_one/pyproject.toml
+================================================
+[tool.poetry]
+name = "my-agent"
+version = "0.0.1"
+description = "An excellent agent build for LangGraph cloud."
+authors = ["Polly the parrot <1223+polly@users.noreply.github.com>"]
+license = "MIT"
+
+[tool.poetry.dependencies]
+python = ">=3.9.0,<3.13"
+langgraph = "^0.2.0"
+langchain-openai = ">=0.1.17"
+langchain-community = ">=0.2.11"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+
+================================================
+FILE: all_projects/my_project/project_one/my_agent/__init__.py
+================================================
+
+
+
+================================================
+FILE: all_projects/my_project/project_one/my_agent/main.py
+================================================
+from my_agent.utils.build_graph import workflow
+
+graph = workflow.compile()
+
+
+================================================
+FILE: all_projects/my_project/project_one/my_agent/utils/__init__.py
+================================================
+
+
+
+================================================
+FILE: all_projects/my_project/project_one/my_agent/utils/build_graph.py
+================================================
+from typing import TypedDict, Annotated, Sequence, Literal
+
+from functools import lru_cache
+from langchain_core.messages import BaseMessage
+from langchain_openai import ChatOpenAI
+from langchain_community.tools.tavily_search import TavilySearchResults
+from langgraph.prebuilt import ToolNode
+from langgraph.graph import StateGraph, END, add_messages
+
+tools = [TavilySearchResults(max_results=1)]
+
+@lru_cache(maxsize=4)
+def _get_model(model_name: str):
+    if model_name == "gpt-4o":
+        model = ChatOpenAI(temperature=0, model_name="gpt-4o")
+    elif model_name == "gpt-4o-mini":
+        model =  ChatOpenAI(temperature=0, model_name="gpt-4o-mini")
+    elif model_name == "gpt-3.5-turbo":
+        model = ChatOpenAI(temperature=0, model_name="gpt-3.5-turbo-0125")
+    else:
+        raise ValueError(f"Unsupported model type: {model_name}")
+
+    model = model.bind_tools(tools)
+    return model
+
+
+class AgentState(TypedDict):
+    messages: Annotated[Sequence[BaseMessage], add_messages]
+
+
+# Define the function that determines whether to continue or not
+def should_continue(state):
+    messages = state["messages"]
+    last_message = messages[-1]
+    # If there are no tool calls, then we finish
+    if not last_message.tool_calls:
+        return "end"
+    # Otherwise if there is, we continue
+    else:
+        return "continue"
+
+
+system_prompt = """Be a helpful assistant"""
+
+# Define the function that calls the model
+def call_model(state, config):
+    messages = state["messages"]
+    messages = [{"role": "system", "content": system_prompt}] + messages
+    model_name = config.get('configurable', {}).get("model_name", "anthropic")
+    model = _get_model(model_name)
+    response = model.invoke(messages)
+    # We return a list, because this will get added to the existing list
+    return {"messages": [response]}
+
+
+# Define the function to execute tools
+tool_node = ToolNode(tools)
+
+# Define the config
+class GraphConfig(TypedDict):
+    model_name: Literal["gpt-4o", "gpt-4o-mini","gpt-3.5-turbo"]
+
+
+# Define a new graph
+workflow = StateGraph(AgentState, config_schema=GraphConfig)
+
+# Define the two nodes we will cycle between
+workflow.add_node("agent", call_model)
+workflow.add_node("action", tool_node)
+
+# Set the entrypoint as `agent`
+# This means that this node is the first one called
+workflow.set_entry_point("agent")
+
+# We now add a conditional edge
+workflow.add_conditional_edges(
+    # First, we define the start node. We use `agent`.
+    # This means these are the edges taken after the `agent` node is called.
+    "agent",
+    # Next, we pass in the function that will determine which node is called next.
+    should_continue,
+    # Finally we pass in a mapping.
+    # The keys are strings, and the values are other nodes.
+    # END is a special node marking that the graph should finish.
+    # What will happen is we will call `should_continue`, and then the output of that
+    # will be matched against the keys in this mapping.
+    # Based on which one it matches, that node will then be called.
+    {
+        # If `tools`, then we call the tool node.
+        "continue": "action",
+        # Otherwise we finish.
+        "end": END,
+    },
+)
+
+# We now add a normal edge from `tools` to `agent`.
+# This means that after `tools` is called, `agent` node is called next.
+workflow.add_edge("action", "agent")
+
+
+================================================
+FILE: all_projects/project_two/requirements.txt
+================================================
+langgraph>=0.2.0
+langchain-anthropic>=0.1.20
+langchain-community>=0.2.11
+
+
+================================================
+FILE: all_projects/project_two/my_other_agent/__init__.py
+================================================
+
+
+
+================================================
+FILE: all_projects/project_two/my_other_agent/main.py
+================================================
+from my_other_agent.utils.build_graph import workflow
+
+graph = workflow.compile()
+
+
+================================================
+FILE: all_projects/project_two/my_other_agent/utils/__init__.py
+================================================
+
+
+
+================================================
+FILE: all_projects/project_two/my_other_agent/utils/build_graph.py
+================================================
+from typing import TypedDict, Annotated, Sequence, Literal
+
+from functools import lru_cache
+from langchain_core.messages import BaseMessage
+from langchain_anthropic import ChatAnthropic
+from langchain_community.tools.tavily_search import TavilySearchResults
+from langgraph.prebuilt import ToolNode
+from langgraph.graph import StateGraph, END, add_messages
+
+tools = [TavilySearchResults(max_results=1)]
+
+@lru_cache(maxsize=4)
+def _get_model(model_name: str):
+    if model_name == "haiku":
+        model = ChatAnthropic(temperature=0, model_name="claude-3-haiku-20240307")
+    elif model_name == "sonnet":
+        model =  ChatAnthropic(temperature=0, model_name="claude-3-sonnet-20240229")
+    elif model_name == "opus":
+        model = ChatAnthropic(temperature=0, model_name="claude-3-opus-20240229")
+    else:
+        raise ValueError(f"Unsupported model type: {model_name}")
+
+    model = model.bind_tools(tools)
+    return model
+
+
+class AgentState(TypedDict):
+    messages: Annotated[Sequence[BaseMessage], add_messages]
+
+
+# Define the function that determines whether to continue or not
+def should_continue(state):
+    messages = state["messages"]
+    last_message = messages[-1]
+    # If there are no tool calls, then we finish
+    if not last_message.tool_calls:
+        return "end"
+    # Otherwise if there is, we continue
+    else:
+        return "continue"
+
+
+system_prompt = """Be a helpful assistant"""
+
+# Define the function that calls the model
+def call_model(state, config):
+    messages = state["messages"]
+    messages = [{"role": "system", "content": system_prompt}] + messages
+    model_name = config.get('configurable', {}).get("model_name", "anthropic")
+    model = _get_model(model_name)
+    response = model.invoke(messages)
+    # We return a list, because this will get added to the existing list
+    return {"messages": [response]}
+
+
+# Define the function to execute tools
+tool_node = ToolNode(tools)
+
+# Define the config
+class GraphConfig(TypedDict):
+    model_name: Literal["sonnet", "opus","haiku"]
+
+
+# Define a new graph
+workflow = StateGraph(AgentState, config_schema=GraphConfig)
+
+# Define the two nodes we will cycle between
+workflow.add_node("agent", call_model)
+workflow.add_node("action", tool_node)
+
+# Set the entrypoint as `agent`
+# This means that this node is the first one called
+workflow.set_entry_point("agent")
+
+# We now add a conditional edge
+workflow.add_conditional_edges(
+    # First, we define the start node. We use `agent`.
+    # This means these are the edges taken after the `agent` node is called.
+    "agent",
+    # Next, we pass in the function that will determine which node is called next.
+    should_continue,
+    # Finally we pass in a mapping.
+    # The keys are strings, and the values are other nodes.
+    # END is a special node marking that the graph should finish.
+    # What will happen is we will call `should_continue`, and then the output of that
+    # will be matched against the keys in this mapping.
+    # Based on which one it matches, that node will then be called.
+    {
+        # If `tools`, then we call the tool node.
+        "continue": "action",
+        # Otherwise we finish.
+        "end": END,
+    },
+)
+
+# We now add a normal edge from `tools` to `agent`.
+# This means that after `tools` is called, `agent` node is called next.
+workflow.add_edge("action", "agent")
+
+

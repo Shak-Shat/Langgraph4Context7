@@ -1,0 +1,471 @@
+Directory structure:
+└── langchain-ai-langgraph-reflection/
+    ├── README.md
+    ├── pyproject.toml
+    ├── examples/
+    │   ├── coding.py
+    │   └── llm_as_a_judge.py
+    └── src/
+        └── langgraph_reflection/
+            └── __init__.py
+
+================================================
+FILE: README.md
+================================================
+# 🦜🪞LangGraph-Reflection
+
+This prebuilt graph is an agent that uses a reflection-style architecture to check and improve an initial agent's output.
+
+## Installation
+
+```
+pip install langgraph-reflection
+```
+
+## Details
+
+| Description | Architecture |
+|------------|--------------|
+| This reflection agent uses two subagents:<br>- A "main" agent, which is the agent attempting to solve the users task<br>- A "critique" agent, which checks the main agents work and offers any critiques<br><br>The reflection agent has the following architecture:<br><br>1. First, the main agent is called<br>2. Once the main agent is finished, the critique agent is called<br>3. Based on the result of the critique agent:<br>   - If the critique agent finds something to critique, then the main agent is called again<br>   - If there is nothing to critique, then the overall reflection agent finishes<br>4. Repeat until the overall reflection agent finishes | <img src="langgraph-reflection.png" alt="Reflection Agent Architecture" width="100"/> |
+
+We make some assumptions about the graphs:
+- The main agent should take as input a list of messages
+- The reflection agent should return a **user** message if there is any critiques, otherwise it should return **no** messages.
+
+## Examples
+
+Below are a few examples of how to use this reflection agent.
+
+### LLM-as-a-Judge ([examples/llm_as_a_judge.py](examples/llm_as_a_judge.py))
+
+In this example, the reflection agent uses another LLM to judge its output. The judge evaluates responses based on:
+1. Accuracy - Is the information correct and factual?
+2. Completeness - Does it fully address the user's query?
+3. Clarity - Is the explanation clear and well-structured?
+4. Helpfulness - Does it provide actionable and useful information?
+5. Safety - Does it avoid harmful or inappropriate content?
+
+
+Installation:
+
+```
+pip install langgraph-reflection langchain openevals
+```
+
+Example usage:
+```python
+# Define the main assistant graph
+assistant_graph = ...
+
+# Define the judge function that evaluates responses
+def judge_response(state, config):
+    """Evaluate the assistant's response using a separate judge model."""
+    evaluator = create_llm_as_judge(   
+        prompt=critique_prompt,
+        model="openai:o3-mini",
+        feedback_key="pass",
+    )
+    eval_result = evaluator(outputs=state["messages"][-1].content, inputs=None)
+
+    if eval_result["score"]:
+        print("✅ Response approved by judge")
+        return
+    else:
+        # Otherwise, return the judge's critique as a new user message
+        print("⚠️ Judge requested improvements")
+        return {"messages": [{"role": "user", "content": eval_result["comment"]}]}
+
+# Create graphs with reflection
+judge_graph = StateGraph(MessagesState).add_node(judge_response)...
+
+
+# Create reflection graph that combines assistant and judge
+reflection_app = create_reflection_graph(assistant_graph, judge_graph)
+result = reflection_app.invoke({"messages": example_query})
+```
+
+### Code Validation ([examples/coding.py](examples/coding.py))
+
+This example demonstrates how to use the reflection agent to validate and improve Python code. It uses Pyright for static type checking and error detection. The system:
+
+1. Takes a coding task as input
+2. Generates Python code using the main agent
+3. Validates the code using Pyright
+4. If errors are found, sends them back to the main agent for correction
+5. Repeats until the code passes validation
+
+Installation:
+
+```
+pip install langgraph-reflection langchain openevals pyright
+```
+
+Example usage:
+```python
+
+assistant_graph = ...
+
+# Function that validates code using Pyright
+def try_running(state: dict) -> dict | None:
+    """Attempt to run and analyze the extracted Python code."""
+    # Extract code from the conversation
+    code = extract_python_code(state['messages'])
+    
+    # Run Pyright analysis
+    evaluator = create_pyright_evaluator()
+    result = evaluator(outputs=code)
+    
+    if not result['score']:
+        # If errors found, return critique for the main agent
+        return {
+            "messages": [{
+                "role": "user",
+                "content": f"I ran pyright and found this: {result['comment']}\n\n"
+                          "Try to fix it..."
+            }]
+        }
+    # No errors found - return None to indicate success
+    return None
+
+# Create graphs with reflection
+judge_graph = StateGraph(MessagesState).add_node(try_running)...
+
+# Create reflection system that combines code generation and validation
+reflection_app = create_reflection_graph(assistant_graph, judge_graph)
+result = reflection_app.invoke({"messages": example_query})
+```
+
+The code validation example ensures that generated code is not only syntactically correct but also type-safe and follows best practices through static analysis.
+
+
+
+
+================================================
+FILE: pyproject.toml
+================================================
+[project]
+name = "langgraph-reflection"
+version = "0.0.1"
+description = "LangGraph agent that runs a reflection step"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "langgraph",
+    "mypy>=1.8.0",
+    "langchain>=0.1.0"
+]
+authors = [{name = "Harrison Chase"}]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[dependency-groups]
+dev = [
+    "langgraph-reflection",
+]
+
+
+
+================================================
+FILE: examples/coding.py
+================================================
+"""Example of a LangGraph application with code reflection capabilities using Pyright.
+
+Should install:
+
+```
+pip install langgraph-reflection langchain openevals pyright
+```
+"""
+
+from typing import TypedDict
+
+from langchain.chat_models import init_chat_model
+from langgraph.graph import StateGraph, MessagesState, START, END
+from langgraph_reflection import create_reflection_graph
+from openevals.code.pyright import create_pyright_evaluator
+
+
+def call_model(state: dict) -> dict:
+    """Process the user query with a Claude 3 Sonnet model.
+
+    Args:
+        state: The current conversation state
+
+    Returns:
+        dict: Updated state with model response
+    """
+    model = init_chat_model(model="claude-3-7-sonnet-latest")
+    return {"messages": model.invoke(state["messages"])}
+
+
+# Define type classes for code extraction
+class ExtractPythonCode(TypedDict):
+    """Type class for extracting Python code. The python_code field is the code to be extracted."""
+
+    python_code: str
+
+
+class NoCode(TypedDict):
+    """Type class for indicating no code was found."""
+
+    no_code: bool
+
+
+# System prompt for the model
+SYSTEM_PROMPT = """The below conversation is you conversing with a user to write some python code. Your final response is the last message in the list.
+
+Sometimes you will respond with code, othertimes with a question.
+
+If there is code - extract it into a single python script using ExtractPythonCode.
+
+If there is no code to extract - call NoCode."""
+
+
+def try_running(state: dict) -> dict | None:
+    """Attempt to run and analyze the extracted Python code.
+
+    Args:
+        state: The current conversation state
+
+    Returns:
+        dict | None: Updated state with analysis results if code was found
+    """
+    model = init_chat_model(model="o3-mini")
+    extraction = model.bind_tools([ExtractPythonCode, NoCode])
+    er = extraction.invoke(
+        [{"role": "system", "content": SYSTEM_PROMPT}] + state["messages"]
+    )
+    if len(er.tool_calls) == 0:
+        return None
+    tc = er.tool_calls[0]
+    if tc["name"] != "ExtractPythonCode":
+        return None
+
+    evaluator = create_pyright_evaluator()
+    result = evaluator(outputs=tc["args"]["python_code"])
+    print(result)
+
+    if not result["score"]:
+        return {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": f"I ran pyright and found this: {result['comment']}\n\n"
+                    "Try to fix it. Make sure to regenerate the entire code snippet. "
+                    "If you are not sure what is wrong, or think there is a mistake, "
+                    "you can ask me a question rather than generating code",
+                }
+            ]
+        }
+
+
+def create_graphs():
+    """Create and configure the assistant and judge graphs."""
+    # Define the main assistant graph
+    assistant_graph = (
+        StateGraph(MessagesState)
+        .add_node(call_model)
+        .add_edge(START, "call_model")
+        .add_edge("call_model", END)
+        .compile()
+    )
+
+    # Define the judge graph for code analysis
+    judge_graph = (
+        StateGraph(MessagesState)
+        .add_node(try_running)
+        .add_edge(START, "try_running")
+        .add_edge("try_running", END)
+        .compile()
+    )
+
+    # Create the complete reflection graph
+    return create_reflection_graph(assistant_graph, judge_graph).compile()
+
+
+reflection_app = create_graphs()
+
+if __name__ == "__main__":
+    """Run an example query through the reflection system."""
+    example_query = [
+        {
+            "role": "user",
+            "content": "Write a LangGraph RAG app",
+        }
+    ]
+
+    print("Running example with reflection...")
+    result = reflection_app.invoke({"messages": example_query})
+    print("Result:", result)
+
+
+
+================================================
+FILE: examples/llm_as_a_judge.py
+================================================
+"""Example of LLM as a judge reflection system.
+
+Should install:
+
+```
+pip install langgraph-reflection langchain openevals
+```
+"""
+
+from langgraph_reflection import create_reflection_graph
+from langchain.chat_models import init_chat_model
+from langgraph.graph import StateGraph, MessagesState, START, END
+from typing import TypedDict
+from openevals.llm import create_llm_as_judge
+
+
+# Define the main assistant model that will generate responses
+def call_model(state):
+    """Process the user query with a large language model."""
+    model = init_chat_model(model="claude-3-7-sonnet-latest")
+    return {"messages": model.invoke(state["messages"])}
+
+
+# Define a basic graph for the main assistant
+assistant_graph = (
+    StateGraph(MessagesState)
+    .add_node(call_model)
+    .add_edge(START, "call_model")
+    .add_edge("call_model", END)
+    .compile()
+)
+
+
+# Define the tool that the judge can use to indicate the response is acceptable
+class Finish(TypedDict):
+    """Tool for the judge to indicate the response is acceptable."""
+
+    finish: bool
+
+
+# Define a more detailed critique prompt with specific evaluation criteria
+critique_prompt = """You are an expert judge evaluating AI responses. Your task is to critique the AI assistant's latest response in the conversation below.
+
+Evaluate the response based on these criteria:
+1. Accuracy - Is the information correct and factual?
+2. Completeness - Does it fully address the user's query?
+3. Clarity - Is the explanation clear and well-structured?
+4. Helpfulness - Does it provide actionable and useful information?
+5. Safety - Does it avoid harmful or inappropriate content?
+
+If the response meets ALL criteria satisfactorily, set pass to True.
+
+If you find ANY issues with the response, do NOT set pass to True. Instead, provide specific and constructive feedback in the comment key and set pass to False.
+
+Be detailed in your critique so the assistant can understand exactly how to improve.
+
+<response>
+{outputs}
+</response>"""
+
+
+# Define the judge function with a more robust evaluation approach
+def judge_response(state, config):
+    """Evaluate the assistant's response using a separate judge model."""
+    evaluator = create_llm_as_judge(
+        prompt=critique_prompt,
+        model="openai:o3-mini",
+        feedback_key="pass",
+    )
+    eval_result = evaluator(outputs=state["messages"][-1].content, inputs=None)
+
+    if eval_result["score"]:
+        print("✅ Response approved by judge")
+        return
+    else:
+        # Otherwise, return the judge's critique as a new user message
+        print("⚠️ Judge requested improvements")
+        return {"messages": [{"role": "user", "content": eval_result["comment"]}]}
+
+
+# Define the judge graph
+judge_graph = (
+    StateGraph(MessagesState)
+    .add_node(judge_response)
+    .add_edge(START, "judge_response")
+    .add_edge("judge_response", END)
+    .compile()
+)
+
+
+# Create the complete reflection graph
+reflection_app = create_reflection_graph(assistant_graph, judge_graph)
+reflection_app = reflection_app.compile()
+
+
+# Example usage
+if __name__ == "__main__":
+    # Example query that might need improvement
+    example_query = [
+        {
+            "role": "user",
+            "content": "Explain how nuclear fusion works and why it's important for clean energy",
+        }
+    ]
+
+    # Process the query through the reflection system
+    print("Running example with reflection...")
+    result = reflection_app.invoke({"messages": example_query})
+
+
+
+================================================
+FILE: src/langgraph_reflection/__init__.py
+================================================
+from typing import Optional, Type, Any, Literal, get_type_hints
+from langgraph.graph import END, START, StateGraph, MessagesState
+from langgraph.graph.state import CompiledStateGraph
+from langgraph.managed import RemainingSteps
+from langchain_core.messages import HumanMessage
+
+
+class MessagesWithSteps(MessagesState):
+    remaining_steps: RemainingSteps
+
+
+def end_or_reflect(state: MessagesWithSteps) -> Literal[END, "graph"]:
+    if state["remaining_steps"] < 2:
+        return END
+    if len(state["messages"]) == 0:
+        return END
+    last_message = state["messages"][-1]
+    if isinstance(last_message, HumanMessage):
+        return "graph"
+    else:
+        return END
+
+
+def create_reflection_graph(
+    graph: CompiledStateGraph,
+    reflection: CompiledStateGraph,
+    state_schema: Optional[Type[Any]] = None,
+    config_schema: Optional[Type[Any]] = None,
+) -> StateGraph:
+    _state_schema = state_schema or graph.builder.schema
+
+    if "remaining_steps" in _state_schema.__annotations__:
+        raise ValueError(
+            "Has key 'remaining_steps' in state_schema, this shadows a built in key"
+        )
+
+    if "messages" not in _state_schema.__annotations__:
+        raise ValueError("Missing required key 'messages' in state_schema")
+
+    class StateSchema(_state_schema):
+        remaining_steps: RemainingSteps
+
+    rgraph = StateGraph(StateSchema, config_schema=config_schema)
+    rgraph.add_node("graph", graph)
+    rgraph.add_node("reflection", reflection)
+    rgraph.add_edge(START, "graph")
+    rgraph.add_edge("graph", "reflection")
+    rgraph.add_conditional_edges("reflection", end_or_reflect)
+    return rgraph
+
+

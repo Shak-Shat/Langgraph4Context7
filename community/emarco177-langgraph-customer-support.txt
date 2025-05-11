@@ -1,0 +1,797 @@
+Directory structure:
+└── emarco177-langgraph-customer-support/
+    ├── README.md
+    ├── app.py
+    ├── LICENSE
+    ├── pyproject.toml
+    ├── db/
+    │   └── profile.json
+    ├── static/
+    └── support_agent/
+        ├── __init__.py
+        ├── consts.py
+        ├── graph.py
+        ├── state.py
+        ├── nodes/
+        │   ├── __init__.py
+        │   ├── assistant_node.py
+        │   ├── safe_agent.py
+        │   └── verify_information.py
+        └── tools/
+            ├── __init__.py
+            └── safe_tools.py
+
+================================================
+FILE: README.md
+================================================
+
+
+# Advanced Customer Support control flow with LangGraph🦜🕸
+
+Implementation of a customer support agent that collects user information, validates it, and only then assists the user.
+The state is persisted to allow continuation and provide a more advanced user experience.
+
+
+
+![Logo](https://github.com/emarco177/langgraph-customer-support/blob/main/static/logo.png)
+
+
+
+## Features
+
+- **Human In the Loop**: Continuously gather input from the user until the agent has all required information.
+- **Persistent Storage**: Checkpoint LangGraph state after each node execution to an SQLite database.
+## Environment Variables
+
+To run this project, you will need to add the following environment variables to your .env file
+
+`PYTHONPATH=/{YOUR_PATH_TO_PROJECT}/langgraph-customer-support`
+
+`MISTRALAI_API_KEY`
+
+`LANGCHAIN_API_KEY`
+
+`LANGCHAIN_TRACING_V2=true`
+
+`LANGCHAIN_PROJECT`
+
+## Run Locally
+
+Clone the project
+
+```bash
+  git clone https://github.com/emarco177/langgraph-customer-support.git
+```
+
+Go to the project directory
+
+```bash
+  cd langgraph-customer-support
+```
+
+Install dependencies
+
+```bash
+  poetry install
+```
+
+Start the flask server
+
+```bash
+  poetry run app.py
+```
+
+
+## Running Tests
+
+To run tests, run the following command
+
+```bash
+  poetry run pytest . -s -v
+```
+
+## 🔗 Links
+[![portfolio](https://img.shields.io/badge/my_portfolio-000?style=for-the-badge&logo=ko-fi&logoColor=white)](https://www.udemy.com/course/langgraph/?referralCode=FEA50E8CBA24ECD48212)
+[![linkedin](https://img.shields.io/badge/linkedin-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/eden-marco/)
+[![twitter](https://img.shields.io/badge/twitter-1DA1F2?style=for-the-badge&logo=twitter&logoColor=white)](https://www.udemy.com/user/eden-marco/)
+
+
+================================================
+FILE: app.py
+================================================
+from dotenv import load_dotenv
+
+load_dotenv()
+from typing import List, Union
+
+import uvicorn
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.pydantic_v1 import BaseModel
+from langserve import add_routes
+
+from support_agent.graph import graph
+
+
+class ChatInputType(BaseModel):
+    input: List[Union[HumanMessage, AIMessage, SystemMessage]]
+
+
+def test_locally():
+    for output in graph.stream(
+        {"user_question": "What information do you have on me?"},
+        config={"configurable": {"thread_id": 888}},
+    ):
+        for key, value in output.items():
+            if "messages" in value:
+                try:
+                    last_msg = value["messages"][-1]
+                    last_msg.pretty_print()
+                except Exception as e:
+                    print(last_msg)
+    print(graph.get_state({"configurable": {"thread_id": 3}}))
+
+
+def start() -> None:
+    app = FastAPI(
+        title="Gen UI Backend",
+        version="1.0",
+        description="A simple api server using Langchain's Runnable interfaces",
+    )
+
+    origins = [
+        "http://localhost",
+        "http://localhost:3000",
+    ]
+
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    # unnable = graph.with_types(input_type=ChatInputType, output_type=dict)
+
+    add_routes(app, graph, path="/chat", playground_type="chat")
+    print("Starting server...")
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+if __name__ == "__main__":
+    # start()
+    test_locally()
+
+
+
+================================================
+FILE: LICENSE
+================================================
+                                 Apache License
+                           Version 2.0, January 2004
+                        http://www.apache.org/licenses/
+
+   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+   1. Definitions.
+
+      "License" shall mean the terms and conditions for use, reproduction,
+      and distribution as defined by Sections 1 through 9 of this document.
+
+      "Licensor" shall mean the copyright owner or entity authorized by
+      the copyright owner that is granting the License.
+
+      "Legal Entity" shall mean the union of the acting entity and all
+      other entities that control, are controlled by, or are under common
+      control with that entity. For the purposes of this definition,
+      "control" means (i) the power, direct or indirect, to cause the
+      direction or management of such entity, whether by contract or
+      otherwise, or (ii) ownership of fifty percent (50%) or more of the
+      outstanding shares, or (iii) beneficial ownership of such entity.
+
+      "You" (or "Your") shall mean an individual or Legal Entity
+      exercising permissions granted by this License.
+
+      "Source" form shall mean the preferred form for making modifications,
+      including but not limited to software source code, documentation
+      source, and configuration files.
+
+      "Object" form shall mean any form resulting from mechanical
+      transformation or translation of a Source form, including but
+      not limited to compiled object code, generated documentation,
+      and conversions to other media types.
+
+      "Work" shall mean the work of authorship, whether in Source or
+      Object form, made available under the License, as indicated by a
+      copyright notice that is included in or attached to the work
+      (an example is provided in the Appendix below).
+
+      "Derivative Works" shall mean any work, whether in Source or Object
+      form, that is based on (or derived from) the Work and for which the
+      editorial revisions, annotations, elaborations, or other modifications
+      represent, as a whole, an original work of authorship. For the purposes
+      of this License, Derivative Works shall not include works that remain
+      separable from, or merely link (or bind by name) to the interfaces of,
+      the Work and Derivative Works thereof.
+
+      "Contribution" shall mean any work of authorship, including
+      the original version of the Work and any modifications or additions
+      to that Work or Derivative Works thereof, that is intentionally
+      submitted to Licensor for inclusion in the Work by the copyright owner
+      or by an individual or Legal Entity authorized to submit on behalf of
+      the copyright owner. For the purposes of this definition, "submitted"
+      means any form of electronic, verbal, or written communication sent
+      to the Licensor or its representatives, including but not limited to
+      communication on electronic mailing lists, source code control systems,
+      and issue tracking systems that are managed by, or on behalf of, the
+      Licensor for the purpose of discussing and improving the Work, but
+      excluding communication that is conspicuously marked or otherwise
+      designated in writing by the copyright owner as "Not a Contribution."
+
+      "Contributor" shall mean Licensor and any individual or Legal Entity
+      on behalf of whom a Contribution has been received by Licensor and
+      subsequently incorporated within the Work.
+
+   2. Grant of Copyright License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      copyright license to reproduce, prepare Derivative Works of,
+      publicly display, publicly perform, sublicense, and distribute the
+      Work and such Derivative Works in Source or Object form.
+
+   3. Grant of Patent License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      (except as stated in this section) patent license to make, have made,
+      use, offer to sell, sell, import, and otherwise transfer the Work,
+      where such license applies only to those patent claims licensable
+      by such Contributor that are necessarily infringed by their
+      Contribution(s) alone or by combination of their Contribution(s)
+      with the Work to which such Contribution(s) was submitted. If You
+      institute patent litigation against any entity (including a
+      cross-claim or counterclaim in a lawsuit) alleging that the Work
+      or a Contribution incorporated within the Work constitutes direct
+      or contributory patent infringement, then any patent licenses
+      granted to You under this License for that Work shall terminate
+      as of the date such litigation is filed.
+
+   4. Redistribution. You may reproduce and distribute copies of the
+      Work or Derivative Works thereof in any medium, with or without
+      modifications, and in Source or Object form, provided that You
+      meet the following conditions:
+
+      (a) You must give any other recipients of the Work or
+          Derivative Works a copy of this License; and
+
+      (b) You must cause any modified files to carry prominent notices
+          stating that You changed the files; and
+
+      (c) You must retain, in the Source form of any Derivative Works
+          that You distribute, all copyright, patent, trademark, and
+          attribution notices from the Source form of the Work,
+          excluding those notices that do not pertain to any part of
+          the Derivative Works; and
+
+      (d) If the Work includes a "NOTICE" text file as part of its
+          distribution, then any Derivative Works that You distribute must
+          include a readable copy of the attribution notices contained
+          within such NOTICE file, excluding those notices that do not
+          pertain to any part of the Derivative Works, in at least one
+          of the following places: within a NOTICE text file distributed
+          as part of the Derivative Works; within the Source form or
+          documentation, if provided along with the Derivative Works; or,
+          within a display generated by the Derivative Works, if and
+          wherever such third-party notices normally appear. The contents
+          of the NOTICE file are for informational purposes only and
+          do not modify the License. You may add Your own attribution
+          notices within Derivative Works that You distribute, alongside
+          or as an addendum to the NOTICE text from the Work, provided
+          that such additional attribution notices cannot be construed
+          as modifying the License.
+
+      You may add Your own copyright statement to Your modifications and
+      may provide additional or different license terms and conditions
+      for use, reproduction, or distribution of Your modifications, or
+      for any such Derivative Works as a whole, provided Your use,
+      reproduction, and distribution of the Work otherwise complies with
+      the conditions stated in this License.
+
+   5. Submission of Contributions. Unless You explicitly state otherwise,
+      any Contribution intentionally submitted for inclusion in the Work
+      by You to the Licensor shall be under the terms and conditions of
+      this License, without any additional terms or conditions.
+      Notwithstanding the above, nothing herein shall supersede or modify
+      the terms of any separate license agreement you may have executed
+      with Licensor regarding such Contributions.
+
+   6. Trademarks. This License does not grant permission to use the trade
+      names, trademarks, service marks, or product names of the Licensor,
+      except as required for reasonable and customary use in describing the
+      origin of the Work and reproducing the content of the NOTICE file.
+
+   7. Disclaimer of Warranty. Unless required by applicable law or
+      agreed to in writing, Licensor provides the Work (and each
+      Contributor provides its Contributions) on an "AS IS" BASIS,
+      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+      implied, including, without limitation, any warranties or conditions
+      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+      PARTICULAR PURPOSE. You are solely responsible for determining the
+      appropriateness of using or redistributing the Work and assume any
+      risks associated with Your exercise of permissions under this License.
+
+   8. Limitation of Liability. In no event and under no legal theory,
+      whether in tort (including negligence), contract, or otherwise,
+      unless required by applicable law (such as deliberate and grossly
+      negligent acts) or agreed to in writing, shall any Contributor be
+      liable to You for damages, including any direct, indirect, special,
+      incidental, or consequential damages of any character arising as a
+      result of this License or out of the use or inability to use the
+      Work (including but not limited to damages for loss of goodwill,
+      work stoppage, computer failure or malfunction, or any and all
+      other commercial damages or losses), even if such Contributor
+      has been advised of the possibility of such damages.
+
+   9. Accepting Warranty or Additional Liability. While redistributing
+      the Work or Derivative Works thereof, You may choose to offer,
+      and charge a fee for, acceptance of support, warranty, indemnity,
+      or other liability obligations and/or rights consistent with this
+      License. However, in accepting such obligations, You may act only
+      on Your own behalf and on Your sole responsibility, not on behalf
+      of any other Contributor, and only if You agree to indemnify,
+      defend, and hold each Contributor harmless for any liability
+      incurred by, or claims asserted against, such Contributor by reason
+      of your accepting any such warranty or additional liability.
+
+   END OF TERMS AND CONDITIONS
+
+   APPENDIX: How to apply the Apache License to your work.
+
+      To apply the Apache License to your work, attach the following
+      boilerplate notice, with the fields enclosed by brackets "[]"
+      replaced with your own identifying information. (Don't include
+      the brackets!)  The text should be enclosed in the appropriate
+      comment syntax for the file format. We also recommend that a
+      file or class name and description of purpose be included on the
+      same "printed page" as the copyright notice for easier
+      identification within third-party archives.
+
+   Copyright [yyyy] [name of copyright owner]
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
+
+
+
+================================================
+FILE: pyproject.toml
+================================================
+[tool.poetry]
+name = "langgraph-customer-support"
+version = "0.1.0"
+description = ""
+authors = ["Eden Marco <emarco177@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+langchain = "^0.2.5"
+langgraph = "^0.0.69"
+langchain-openai = "^0.1.8"
+langchain-community = "^0.2.4"
+black = "^24.4.2"
+python-dotenv = "^1.0.1"
+fastapi = "^0.111.0"
+langserve = "^0.2.2"
+sse-starlette = "^2.1.0"
+pydantic = "1.10.13"
+aiosqlite = "^0.20.0"
+langchain-mistralai = "^0.1.8"
+isort = "^5.13.2"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+
+
+================================================
+FILE: db/profile.json
+================================================
+[
+  {
+  "username": "edenmarco",
+  "profile_pic_url": "https://storage.cloud.google.com/publick-profile-pics/1610187870291.jpeg",
+  "first_name": "Eden",
+  "last_name": "Marco",
+  "occupation": "LLM Specialist at Google",
+  "headline": "LLMs @ Google Cloud | Best-selling Udemy Instructor | Backend & GenAI",
+  "summary": "Backend developer, Udemy.com best seller instructor",
+  "secret": {"id":777777777,  "city_of_birth": "Los Angeles", "last_4_digits": 5555}
+  },
+  {
+    "public_identifier": "jacoblee93",
+    "profile_pic_url": "https://storage.cloud.google.com/publick-profile-pics/1685590344428.jpeg",
+    "first_name": "Jacob",
+    "last_name": "Lee",
+    "follower_count": 3292,
+    "occupation": "Founding Software Engineer at LangChain",
+    "headline": "Founding Software Engineer",
+    "summary": "Seasoned software engineer and architect with years of experience designing and implementing scalable systems from first principles. Startup executive comfortable leading and mentoring a team amidst uncertainty while remaining focused on broader objectives. Passionate about developers, community building, and AGI.",
+    "country": "US",
+    "city": "San Francisco",
+    "state": "California",
+    "secret": {
+      "id": 888888888,
+      "last_4_digits": 6666
+    }
+  }
+]
+
+
+
+================================================
+FILE: support_agent/__init__.py
+================================================
+
+
+
+================================================
+FILE: support_agent/consts.py
+================================================
+# NODE NAMEs
+COLLECT_INFO = "collect_info"
+ASSISTANT = "assistant"
+VERIFY_INFORMATION = "verify_information"
+CLEAR_PROVIDED_INFORMATION = "clear_provided_information"
+SAFE_ACTION = "safe_action"
+
+
+
+================================================
+FILE: support_agent/graph.py
+================================================
+from dotenv import load_dotenv
+
+load_dotenv()
+
+from langgraph.checkpoint.sqlite import SqliteSaver
+from langgraph.prebuilt.tool_node import ToolNode
+
+from support_agent.nodes.safe_agent import assistant_with_tools
+from support_agent.tools.safe_tools import safe_tools
+
+from langgraph.graph import END, StateGraph
+
+from support_agent.consts import (
+    ASSISTANT,
+    COLLECT_INFO,
+    SAFE_ACTION,
+    VERIFY_INFORMATION,
+)
+from support_agent.nodes.assistant_node import assistant_node, collect_info
+from support_agent.nodes.verify_information import verify_information
+from support_agent.state import AssistantGraphState, RequiredInformation
+
+
+def provided_all_details(state: AssistantGraphState) -> str:
+    if "required_information" not in state:
+        return "need to collect more information"
+    provided_information: RequiredInformation = state["required_information"]
+    if (
+        provided_information.provided_name
+        and provided_information.provided_id
+        and provided_information.provided_city_of_birth
+        and provided_information.provided_4_digits
+    ):
+        return "all information collected"
+
+    else:
+        return "need to collect more information"
+
+
+def verified(state: AssistantGraphState) -> str:
+    verified_successfully = state["verified"]
+
+    if verified_successfully:
+        return "agent_with_tools"
+    else:
+        return ASSISTANT
+
+
+def route_safe_no_safe(state: AssistantGraphState) -> str:
+    ai_message = state["messages"][-1]
+
+    first_tool_call = ai_message.tool_calls[0]
+    if first_tool_call["name"] in [tool.name for tool in safe_tools]:
+        return "safe_tools"
+    else:
+        raise END
+
+
+workflow = StateGraph(AssistantGraphState)
+workflow.add_node(ASSISTANT, assistant_node)
+workflow.add_node(COLLECT_INFO, collect_info)
+workflow.add_node(VERIFY_INFORMATION, verify_information)
+workflow.add_node("agent_with_tools", assistant_with_tools)
+workflow.add_node("safe_tools", ToolNode(safe_tools))
+
+
+workflow.set_entry_point(ASSISTANT)
+workflow.add_edge(ASSISTANT, COLLECT_INFO)
+workflow.add_conditional_edges(
+    COLLECT_INFO,
+    provided_all_details,
+    {
+        "need to collect more information": "assistant",
+        "all information collected": "verify_information",
+    },
+)
+workflow.add_conditional_edges(
+    VERIFY_INFORMATION,
+    verified,
+    {"agent_with_tools": "agent_with_tools", ASSISTANT: ASSISTANT},
+)
+workflow.add_edge("safe_tools", END)
+workflow.add_conditional_edges(
+    "agent_with_tools", route_safe_no_safe, {"safe_tools": "safe_tools", END: END}
+)
+memory = SqliteSaver.from_conn_string(":checkpoints.sqlite:")
+graph = workflow.compile(checkpointer=memory)
+
+graph.get_graph().draw_mermaid_png(output_file_path="graph.png")
+
+
+
+================================================
+FILE: support_agent/state.py
+================================================
+from typing import Annotated, Optional, TypedDict
+
+from langchain_core.pydantic_v1 import BaseModel, Field
+from langgraph.graph import add_messages
+
+
+class RequiredInformation(BaseModel):
+    provided_name: Optional[str] = Field(
+        description="the provided full name of the user"
+    )
+    provided_id: Optional[int] = Field(description="the provided id name of the user")
+    provided_city_of_birth: Optional[str] = Field(
+        description="the provided city of birth of the user"
+    )
+    provided_4_digits: Optional[int] = Field(
+        description="the provided user last 4 digits of credit card"
+    )
+
+
+class AssistantGraphState(TypedDict):
+
+    user_question: str
+    required_information: RequiredInformation
+    messages: Annotated[list, add_messages]
+    verified: bool
+
+
+
+================================================
+FILE: support_agent/nodes/__init__.py
+================================================
+
+
+
+================================================
+FILE: support_agent/nodes/assistant_node.py
+================================================
+from typing import Any, Dict, List
+
+from langchain_core.messages import HumanMessage
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_mistralai import ChatMistralAI
+
+from support_agent.state import AssistantGraphState, RequiredInformation
+
+llm = ChatMistralAI(model="mistral-large-latest")
+system = """You are a a helper assistant \n tasked with helping a customer.
+            1. You first need to collect their information before you can validated them.
+            2. After your collect ALL information say thank you and that you
+               are going to validate that information in the backend systems.
+            
+            The information needs to be collected: 
+
+            class RequiredInformation(BaseModel):
+                provided_name: Optional[str] = Field(
+                    description="the provided full name of the user"
+                )
+                provided_id: Optional[int] = Field(description="the provided id name of the user")
+                provided_city_of_birth: Optional[str] = Field(
+                    description="the provided city of birth of the user"
+                )
+                provided_4_digits: Optional[int] = Field(
+                    description="the provided user last 4 digits of credit card"
+                )
+
+            make sure you have the information before you can proceed, but only one field at a time
+            if the input from user was wrong please tell them why.
+            
+            DO NOT FILL IN THE USERS INFORMATION, YOU NEED TO COLLECT IT.
+            """
+assistant_prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", system),
+        (
+            "human",
+            "User question: {user_question}"
+            "Chat history: {messages}"
+            "\n\n What the user have provided so far {provided_required_information} \n\n",
+        ),
+    ]
+)
+
+
+def assistant_node(state: AssistantGraphState) -> Dict[str, Any]:
+    get_information_chain = assistant_prompt | llm
+    res = get_information_chain.invoke(
+        {
+            "user_question": state["user_question"],
+            "provided_required_information": state["required_information"],
+            "messages": state["messages"] if "messages" in state else [],
+        }
+    )
+
+    return {"messages": [res]}
+
+
+def combine_required_info(info_list: List[RequiredInformation]) -> RequiredInformation:
+    info_list = [info for info in info_list if info is not None]
+
+    if len(info_list) == 1:
+        return info_list[0]
+    combined_info = {}
+    for info in info_list:
+        for key, value in info.dict().items():
+            if value is not None:
+                combined_info[key] = value
+    return RequiredInformation(**combined_info)
+
+
+def collect_info(state: AssistantGraphState) -> Dict[str, Any]:
+    information_from_stdin = str(input("\nenter information\n"))
+    structured_llm_user_info = llm.with_structured_output(RequiredInformation)
+
+    information_chain = assistant_prompt | structured_llm_user_info
+    res = information_chain.invoke(
+        {
+            "user_question": state["user_question"],
+            "provided_required_information": information_from_stdin,
+            "messages": state["messages"],
+        }
+    )
+    if "required_information" in state:
+        required_info = combine_required_info(
+            info_list=[res, state.get("required_information")]
+        )
+    else:
+        required_info = res
+    return {
+        "required_information": required_info,
+        "messages": [HumanMessage(content=information_from_stdin)],
+    }
+
+
+
+================================================
+FILE: support_agent/nodes/safe_agent.py
+================================================
+from datetime import datetime
+from typing import Any, Dict
+
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_mistralai import ChatMistralAI
+from langchain_openai import ChatOpenAI
+
+from support_agent.state import AssistantGraphState
+from support_agent.tools.safe_tools import safe_tools
+
+# model_with_tools = ChatMistralAI(model="mistral-large-latest").bind_tools(safe_tools)
+model_with_tools = ChatOpenAI().bind_tools(safe_tools)
+primary_assistant_prompt = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            "You are a helpful customer support assistant. " "\nCurrent time: {time}.",
+        ),
+        ("placeholder", "{messages}"),
+    ]
+).partial(time=datetime.now(), tool_names=[tool.name for tool in safe_tools])
+
+
+def assistant_with_tools(state: AssistantGraphState) -> Dict[str, Any]:
+    chain = primary_assistant_prompt | model_with_tools
+    res = chain.invoke(input=state)
+    return {"messages": [res]}
+
+
+
+================================================
+FILE: support_agent/nodes/verify_information.py
+================================================
+import json
+from typing import Any, Dict
+
+from support_agent.state import AssistantGraphState, RequiredInformation
+
+
+def verify_information(state: AssistantGraphState) -> Dict[str, Any]:
+    EDEN_INDEX = 0
+    required_information: RequiredInformation = state["required_information"]
+    with open(
+        "/Users/edenmarco/GithubProjects/langgraph-customer-support/db/profile.json",
+        "r",
+    ) as file:
+        user_info = json.load(file)[EDEN_INDEX]
+        if (
+            user_info["secret"]["id"] == required_information.provided_id
+            and user_info["secret"]["city_of_birth"]
+            == required_information.provided_city_of_birth
+            and user_info["secret"]["last_4_digits"]
+            == required_information.provided_4_digits
+            and required_information.provided_name
+            == f"{user_info['first_name']} {user_info['last_name']}"
+        ):
+            print("Verification Success")
+            return {"verified": True}
+
+    print("Verification Failed")
+    return {"verified": False}
+
+
+
+================================================
+FILE: support_agent/tools/__init__.py
+================================================
+
+
+
+================================================
+FILE: support_agent/tools/safe_tools.py
+================================================
+import json
+from typing import Any, Dict
+
+from langchain_core.messages import AIMessage
+from langchain_core.tools import tool
+
+
+@tool
+def get_info_from_db(name: str) -> Dict[str, Any]:
+    """
+    :return: A dictionary with all information about a person
+    """
+
+    with open(
+        "/Users/edenmarco/GithubProjects/langgraph-customer-support/db/profile.json",
+        "r",
+    ) as file:
+        users_info = json.load(file)
+
+        for user_info in users_info:
+            if f"{user_info['first_name']} {user_info['last_name']}" == name:
+                return user_info
+        raise ValueError(f"Couldn't find user {name} in DB")
+
+
+safe_tools = [get_info_from_db]
+
+

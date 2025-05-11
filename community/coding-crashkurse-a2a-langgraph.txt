@@ -1,0 +1,2634 @@
+Directory structure:
+└── coding-crashkurse-a2a-langgraph/
+    ├── README.md
+    ├── abc_task_manager.py
+    ├── agent.py
+    ├── agentpartner.py
+    ├── card_resolver.py
+    ├── client.py
+    ├── custom_types.py
+    ├── google_host_agent.py
+    ├── host_agent.py
+    ├── in_memory_cache.py
+    ├── mcp_app.py
+    ├── push_notification_auth.py
+    ├── requirements.txt
+    ├── server.py
+    ├── task_manager.py
+    └── utils.py
+
+================================================
+FILE: README.md
+================================================
+# A2A + MCP Example
+
+This project demonstrates communication between agents using the **Agent-to-Agent (A2A)** protocol in combination with the **Model-Context-Protocol (MCP)**.
+
+---
+
+## 🔧 Components
+
+- **mcp_app.py**
+  MCP server providing tools (functions/endpoints) that can be used by agents.
+
+- **agentpartner.py**
+  Agent B — uses tools exposed by the MCP server.
+
+- **host_agent.py**
+  Agent A — communicates with Agent B using the A2A protocol.
+
+---
+
+## ▶️ How to Run
+
+### 1. Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### 2. Start the MCP Server
+
+```bash
+python mcp_app.py
+```
+
+This will start the MCP server that exposes tool endpoints.
+
+### 3. Run Agent B (agentpartner)
+
+```bash
+python agentpartner.py
+```
+
+Agent B will register itself and wait for instructions from Agent A.
+
+### 4. Run Agent A (host agent)
+
+```bash
+python host_agent.py
+```
+
+Agent A initiates communication with Agent B using the A2A protocol and calls MCP tools via Agent B.
+
+---
+
+## ✅ Expected Result
+
+Agent A sends a request to Agent B via A2A.
+Agent B uses the MCP protocol to invoke tools and returns the result.
+
+---
+
+Feel free to extend this setup with more tools or agents!
+
+
+
+================================================
+FILE: abc_task_manager.py
+================================================
+import asyncio
+import logging
+from abc import ABC, abstractmethod
+from typing import AsyncIterable, List, Union
+
+from custom_types import (
+    Artifact,
+    CancelTaskRequest,
+    CancelTaskResponse,
+    GetTaskPushNotificationRequest,
+    GetTaskPushNotificationResponse,
+    GetTaskRequest,
+    GetTaskResponse,
+    InternalError,
+    JSONRPCError,
+    JSONRPCResponse,
+    PushNotificationConfig,
+    SendTaskRequest,
+    SendTaskResponse,
+    SendTaskStreamingRequest,
+    SendTaskStreamingResponse,
+    SetTaskPushNotificationRequest,
+    SetTaskPushNotificationResponse,
+    Task,
+    TaskIdParams,
+    TaskNotCancelableError,
+    TaskNotFoundError,
+    TaskPushNotificationConfig,
+    TaskQueryParams,
+    TaskResubscriptionRequest,
+    TaskSendParams,
+    TaskState,
+    TaskStatus,
+    TaskStatusUpdateEvent,
+)
+from utils import new_not_implemented_error
+
+logger = logging.getLogger(__name__)
+
+
+class TaskManager(ABC):
+    @abstractmethod
+    async def on_get_task(self, request: GetTaskRequest) -> GetTaskResponse:
+        pass
+
+    @abstractmethod
+    async def on_cancel_task(self, request: CancelTaskRequest) -> CancelTaskResponse:
+        pass
+
+    @abstractmethod
+    async def on_send_task(self, request: SendTaskRequest) -> SendTaskResponse:
+        pass
+
+    @abstractmethod
+    async def on_send_task_subscribe(
+        self, request: SendTaskStreamingRequest
+    ) -> Union[AsyncIterable[SendTaskStreamingResponse], JSONRPCResponse]:
+        pass
+
+    @abstractmethod
+    async def on_set_task_push_notification(
+        self, request: SetTaskPushNotificationRequest
+    ) -> SetTaskPushNotificationResponse:
+        pass
+
+    @abstractmethod
+    async def on_get_task_push_notification(
+        self, request: GetTaskPushNotificationRequest
+    ) -> GetTaskPushNotificationResponse:
+        pass
+
+    @abstractmethod
+    async def on_resubscribe_to_task(
+        self, request: TaskResubscriptionRequest
+    ) -> Union[AsyncIterable[SendTaskResponse], JSONRPCResponse]:
+        pass
+
+
+class InMemoryTaskManager(TaskManager):
+    def __init__(self):
+        self.tasks: dict[str, Task] = {}
+        self.push_notification_infos: dict[str, PushNotificationConfig] = {}
+        self.lock = asyncio.Lock()
+        self.task_sse_subscribers: dict[str, List[asyncio.Queue]] = {}
+        self.subscriber_lock = asyncio.Lock()
+
+    async def on_get_task(self, request: GetTaskRequest) -> GetTaskResponse:
+        logger.info(f"Getting task {request.params.id}")
+        task_query_params: TaskQueryParams = request.params
+
+        async with self.lock:
+            task = self.tasks.get(task_query_params.id)
+            if task is None:
+                return GetTaskResponse(id=request.id, error=TaskNotFoundError())
+
+            task_result = self.append_task_history(
+                task, task_query_params.historyLength
+            )
+
+        return GetTaskResponse(id=request.id, result=task_result)
+
+    async def on_cancel_task(self, request: CancelTaskRequest) -> CancelTaskResponse:
+        logger.info(f"Cancelling task {request.params.id}")
+        task_id_params: TaskIdParams = request.params
+
+        async with self.lock:
+            task = self.tasks.get(task_id_params.id)
+            if task is None:
+                return CancelTaskResponse(id=request.id, error=TaskNotFoundError())
+
+        return CancelTaskResponse(id=request.id, error=TaskNotCancelableError())
+
+    @abstractmethod
+    async def on_send_task(self, request: SendTaskRequest) -> SendTaskResponse:
+        pass
+
+    @abstractmethod
+    async def on_send_task_subscribe(
+        self, request: SendTaskStreamingRequest
+    ) -> Union[AsyncIterable[SendTaskStreamingResponse], JSONRPCResponse]:
+        pass
+
+    async def set_push_notification_info(
+        self, task_id: str, notification_config: PushNotificationConfig
+    ):
+        async with self.lock:
+            task = self.tasks.get(task_id)
+            if task is None:
+                raise ValueError(f"Task not found for {task_id}")
+
+            self.push_notification_infos[task_id] = notification_config
+
+        return
+
+    async def get_push_notification_info(self, task_id: str) -> PushNotificationConfig:
+        async with self.lock:
+            task = self.tasks.get(task_id)
+            if task is None:
+                raise ValueError(f"Task not found for {task_id}")
+
+            return self.push_notification_infos[task_id]
+
+        return
+
+    async def has_push_notification_info(self, task_id: str) -> bool:
+        async with self.lock:
+            return task_id in self.push_notification_infos
+
+    async def on_set_task_push_notification(
+        self, request: SetTaskPushNotificationRequest
+    ) -> SetTaskPushNotificationResponse:
+        logger.info(f"Setting task push notification {request.params.id}")
+        task_notification_params: TaskPushNotificationConfig = request.params
+
+        try:
+            await self.set_push_notification_info(
+                task_notification_params.id,
+                task_notification_params.pushNotificationConfig,
+            )
+        except Exception as e:
+            logger.error(f"Error while setting push notification info: {e}")
+            return JSONRPCResponse(
+                id=request.id,
+                error=InternalError(
+                    message="An error occurred while setting push notification info"
+                ),
+            )
+
+        return SetTaskPushNotificationResponse(
+            id=request.id, result=task_notification_params
+        )
+
+    async def on_get_task_push_notification(
+        self, request: GetTaskPushNotificationRequest
+    ) -> GetTaskPushNotificationResponse:
+        logger.info(f"Getting task push notification {request.params.id}")
+        task_params: TaskIdParams = request.params
+
+        try:
+            notification_info = await self.get_push_notification_info(task_params.id)
+        except Exception as e:
+            logger.error(f"Error while getting push notification info: {e}")
+            return GetTaskPushNotificationResponse(
+                id=request.id,
+                error=InternalError(
+                    message="An error occurred while getting push notification info"
+                ),
+            )
+
+        return GetTaskPushNotificationResponse(
+            id=request.id,
+            result=TaskPushNotificationConfig(
+                id=task_params.id, pushNotificationConfig=notification_info
+            ),
+        )
+
+    async def upsert_task(self, task_send_params: TaskSendParams) -> Task:
+        logger.info(f"Upserting task {task_send_params.id}")
+        async with self.lock:
+            task = self.tasks.get(task_send_params.id)
+            if task is None:
+                task = Task(
+                    id=task_send_params.id,
+                    sessionId=task_send_params.sessionId,
+                    messages=[task_send_params.message],
+                    status=TaskStatus(state=TaskState.SUBMITTED),
+                    history=[task_send_params.message],
+                )
+                self.tasks[task_send_params.id] = task
+            else:
+                task.history.append(task_send_params.message)
+
+            return task
+
+    async def on_resubscribe_to_task(
+        self, request: TaskResubscriptionRequest
+    ) -> Union[AsyncIterable[SendTaskStreamingResponse], JSONRPCResponse]:
+        return new_not_implemented_error(request.id)
+
+    async def update_store(
+        self, task_id: str, status: TaskStatus, artifacts: list[Artifact]
+    ) -> Task:
+        async with self.lock:
+            try:
+                task = self.tasks[task_id]
+            except KeyError:
+                logger.error(f"Task {task_id} not found for updating the task")
+                raise ValueError(f"Task {task_id} not found")
+
+            task.status = status
+
+            if status.message is not None:
+                task.history.append(status.message)
+
+            if artifacts is not None:
+                if task.artifacts is None:
+                    task.artifacts = []
+                task.artifacts.extend(artifacts)
+
+            return task
+
+    def append_task_history(self, task: Task, historyLength: int | None):
+        new_task = task.model_copy()
+        if historyLength is not None and historyLength > 0:
+            new_task.history = new_task.history[-historyLength:]
+        else:
+            new_task.history = []
+
+        return new_task
+
+    async def setup_sse_consumer(self, task_id: str, is_resubscribe: bool = False):
+        async with self.subscriber_lock:
+            if task_id not in self.task_sse_subscribers:
+                if is_resubscribe:
+                    raise ValueError("Task not found for resubscription")
+                else:
+                    self.task_sse_subscribers[task_id] = []
+
+            sse_event_queue = asyncio.Queue(maxsize=0)  # <=0 is unlimited
+            self.task_sse_subscribers[task_id].append(sse_event_queue)
+            return sse_event_queue
+
+    async def enqueue_events_for_sse(self, task_id, task_update_event):
+        async with self.subscriber_lock:
+            if task_id not in self.task_sse_subscribers:
+                return
+
+            current_subscribers = self.task_sse_subscribers[task_id]
+            for subscriber in current_subscribers:
+                await subscriber.put(task_update_event)
+
+    async def dequeue_events_for_sse(
+        self, request_id, task_id, sse_event_queue: asyncio.Queue
+    ) -> AsyncIterable[SendTaskStreamingResponse] | JSONRPCResponse:
+        try:
+            while True:
+                event = await sse_event_queue.get()
+                if isinstance(event, JSONRPCError):
+                    yield SendTaskStreamingResponse(id=request_id, error=event)
+                    break
+
+                yield SendTaskStreamingResponse(id=request_id, result=event)
+                if isinstance(event, TaskStatusUpdateEvent) and event.final:
+                    break
+        finally:
+            async with self.subscriber_lock:
+                if task_id in self.task_sse_subscribers:
+                    self.task_sse_subscribers[task_id].remove(sse_event_queue)
+
+
+
+================================================
+FILE: agent.py
+================================================
+import asyncio
+from typing import Any, AsyncIterable, Dict, Literal
+
+from langchain_core.messages import AIMessage, ToolMessage
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_openai import ChatOpenAI
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.prebuilt import create_react_agent
+from pydantic import BaseModel
+
+memory = MemorySaver()
+
+
+def _fetch_mcp_tools_sync() -> list:
+    """
+    Helper function: runs the async MultiServerMCPClient code in a synchronous manner.
+    Fetches the remote tools from your MCP server(s).
+    """
+    servers_config = {
+        "currency_server": {
+            "transport": "sse",
+            "url": "http://127.0.0.1:3000/sse",
+        }
+    }
+
+    async def _fetch_tools():
+        async with MultiServerMCPClient(servers_config) as client:
+            return client.get_tools()
+
+    # Run the async method in a blocking (sync) fashion
+    return asyncio.run(_fetch_tools())
+
+
+class ResponseFormat(BaseModel):
+    """Respond to the user in this format."""
+
+    status: Literal["input_required", "completed", "error"] = "input_required"
+    message: str
+
+
+class CurrencyAgent:
+    SYSTEM_INSTRUCTION = (
+        "You are a specialized assistant for currency conversions. "
+        "Your sole purpose is to use the 'get_exchange_rate' tool to answer questions about currency exchange rates. "
+        "If the user asks about anything other than currency conversion or exchange rates, "
+        "politely state that you cannot help with that topic and can only assist with currency-related queries. "
+        "Do not attempt to answer unrelated questions or use tools for other purposes."
+        "Set response status to input_required if the user needs to provide more information."
+        "Set response status to error if there is an error while processing the request."
+        "Set response status to completed if the request is complete."
+    )
+
+    def __init__(self):
+        # Instead of a local @tool, fetch remote tools from MCP
+        self.tools = _fetch_mcp_tools_sync()
+
+        self.model = ChatOpenAI(model="gpt-4o-mini")
+        self.graph = create_react_agent(
+            self.model,
+            tools=self.tools,
+            checkpointer=memory,
+            prompt=self.SYSTEM_INSTRUCTION,
+            response_format=ResponseFormat,
+        )
+
+    def invoke(self, query, sessionId) -> str:
+        config = {"configurable": {"thread_id": sessionId}}
+        self.graph.invoke({"messages": [("user", query)]}, config)
+        return self.get_agent_response(config)
+
+    async def stream(self, query, sessionId) -> AsyncIterable[Dict[str, Any]]:
+        inputs = {"messages": [("user", query)]}
+        config = {"configurable": {"thread_id": sessionId}}
+
+        for item in self.graph.stream(inputs, config, stream_mode="values"):
+            message = item["messages"][-1]
+            if (
+                isinstance(message, AIMessage)
+                and message.tool_calls
+                and len(message.tool_calls) > 0
+            ):
+                yield {
+                    "is_task_complete": False,
+                    "require_user_input": False,
+                    "content": "Looking up the exchange rates...",
+                }
+            elif isinstance(message, ToolMessage):
+                yield {
+                    "is_task_complete": False,
+                    "require_user_input": False,
+                    "content": "Processing the exchange rates..",
+                }
+
+        yield self.get_agent_response(config)
+
+    def get_agent_response(self, config):
+        current_state = self.graph.get_state(config)
+        structured_response = current_state.values.get("structured_response")
+        if structured_response and isinstance(structured_response, ResponseFormat):
+            if structured_response.status == "input_required":
+                return {
+                    "is_task_complete": False,
+                    "require_user_input": True,
+                    "content": structured_response.message,
+                }
+            elif structured_response.status == "error":
+                return {
+                    "is_task_complete": False,
+                    "require_user_input": True,
+                    "content": structured_response.message,
+                }
+            elif structured_response.status == "completed":
+                return {
+                    "is_task_complete": True,
+                    "require_user_input": False,
+                    "content": structured_response.message,
+                }
+
+        return {
+            "is_task_complete": False,
+            "require_user_input": True,
+            "content": "We are unable to process your request at the moment. Please try again.",
+        }
+
+    SUPPORTED_CONTENT_TYPES = ["text", "text/plain"]
+
+
+
+================================================
+FILE: agentpartner.py
+================================================
+import logging
+import os
+
+import click
+from dotenv import load_dotenv
+
+from agent import CurrencyAgent
+from custom_types import AgentCapabilities, AgentCard, AgentSkill, MissingAPIKeyError
+from push_notification_auth import PushNotificationSenderAuth
+from server import A2AServer
+from task_manager import AgentTaskManager
+
+load_dotenv()
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+@click.command()
+@click.option("--host", "host", default="localhost")
+@click.option("--port", "port", default=8000)
+def main(host, port):
+    """Starts the Currency Agent server."""
+    try:
+        if not os.getenv("OPENAI_API_KEY"):
+            raise MissingAPIKeyError("OPENAI_API_KEY environment variable not set.")
+
+        capabilities = AgentCapabilities(streaming=True, pushNotifications=False)
+        skill = AgentSkill(
+            id="convert_currency",
+            name="Currency Exchange Rates Tool",
+            description="Helps with exchange values between various currencies",
+            tags=["currency conversion", "currency exchange"],
+            examples=["What is exchange rate between USD and GBP?"],
+        )
+        agent_card = AgentCard(
+            name="Currency Agent",
+            description="Helps with exchange rates for currencies",
+            url=f"http://{host}:{port}/",
+            version="1.0.0",
+            defaultInputModes=CurrencyAgent.SUPPORTED_CONTENT_TYPES,
+            defaultOutputModes=CurrencyAgent.SUPPORTED_CONTENT_TYPES,
+            capabilities=capabilities,
+            skills=[skill],
+        )
+
+        notification_sender_auth = PushNotificationSenderAuth()
+        notification_sender_auth.generate_jwk()
+        server = A2AServer(
+            agent_card=agent_card,
+            task_manager=AgentTaskManager(
+                agent=CurrencyAgent(), notification_sender_auth=notification_sender_auth
+            ),
+            host=host,
+            port=port,
+        )
+
+        server.app.add_route(
+            "/.well-known/jwks.json",
+            notification_sender_auth.handle_jwks_endpoint,
+            methods=["GET"],
+        )
+
+        logger.info(f"Starting server on {host}:{port}")
+        server.start()
+    except MissingAPIKeyError as e:
+        logger.error(f"Error: {e}")
+        exit(1)
+    except Exception as e:
+        logger.error(f"An error occurred during server startup: {e}")
+        exit(1)
+
+
+if __name__ == "__main__":
+    main()
+
+
+
+================================================
+FILE: card_resolver.py
+================================================
+import json
+
+import httpx
+
+from custom_types import A2AClientJSONError, AgentCard
+
+
+class A2ACardResolver:
+    def __init__(self, base_url, agent_card_path="/.well-known/agent.json"):
+        self.base_url = base_url.rstrip("/")
+        self.agent_card_path = agent_card_path.lstrip("/")
+
+    def get_agent_card(self) -> AgentCard:
+        with httpx.Client() as client:
+            response = client.get(self.base_url + "/" + self.agent_card_path)
+            response.raise_for_status()
+            try:
+                return AgentCard(**response.json())
+            except json.JSONDecodeError as e:
+                raise A2AClientJSONError(str(e)) from e
+
+
+
+================================================
+FILE: client.py
+================================================
+import json
+from typing import Any, AsyncIterable
+
+import httpx
+from httpx_sse import connect_sse
+
+from custom_types import (
+    A2AClientHTTPError,
+    A2AClientJSONError,
+    AgentCard,
+    CancelTaskRequest,
+    CancelTaskResponse,
+    GetTaskPushNotificationRequest,
+    GetTaskPushNotificationResponse,
+    GetTaskRequest,
+    GetTaskResponse,
+    JSONRPCRequest,
+    SendTaskRequest,
+    SendTaskResponse,
+    SendTaskStreamingRequest,
+    SendTaskStreamingResponse,
+    SetTaskPushNotificationRequest,
+    SetTaskPushNotificationResponse,
+)
+
+
+class A2AClient:
+    def __init__(self, agent_card: AgentCard = None, url: str = None):
+        if agent_card:
+            self.url = agent_card.url
+        elif url:
+            self.url = url
+        else:
+            raise ValueError("Must provide either agent_card or url")
+
+    async def send_task(self, payload: dict[str, Any]) -> SendTaskResponse:
+        request = SendTaskRequest(params=payload)
+        return SendTaskResponse(**await self._send_request(request))
+
+    async def send_task_streaming(
+        self, payload: dict[str, Any]
+    ) -> AsyncIterable[SendTaskStreamingResponse]:
+        request = SendTaskStreamingRequest(params=payload)
+        with httpx.Client(timeout=None) as client:
+            with connect_sse(
+                client, "POST", self.url, json=request.model_dump()
+            ) as event_source:
+                try:
+                    for sse in event_source.iter_sse():
+                        yield SendTaskStreamingResponse(**json.loads(sse.data))
+                except json.JSONDecodeError as e:
+                    raise A2AClientJSONError(str(e)) from e
+                except httpx.RequestError as e:
+                    raise A2AClientHTTPError(400, str(e)) from e
+
+    async def _send_request(self, request: JSONRPCRequest) -> dict[str, Any]:
+        async with httpx.AsyncClient() as client:
+            try:
+                # Image generation could take time, adding timeout
+                response = await client.post(
+                    self.url, json=request.model_dump(), timeout=30
+                )
+                response.raise_for_status()
+                return response.json()
+            except httpx.HTTPStatusError as e:
+                raise A2AClientHTTPError(e.response.status_code, str(e)) from e
+            except json.JSONDecodeError as e:
+                raise A2AClientJSONError(str(e)) from e
+
+    async def get_task(self, payload: dict[str, Any]) -> GetTaskResponse:
+        request = GetTaskRequest(params=payload)
+        return GetTaskResponse(**await self._send_request(request))
+
+    async def cancel_task(self, payload: dict[str, Any]) -> CancelTaskResponse:
+        request = CancelTaskRequest(params=payload)
+        return CancelTaskResponse(**await self._send_request(request))
+
+    async def set_task_callback(
+        self, payload: dict[str, Any]
+    ) -> SetTaskPushNotificationResponse:
+        request = SetTaskPushNotificationRequest(params=payload)
+        return SetTaskPushNotificationResponse(**await self._send_request(request))
+
+    async def get_task_callback(
+        self, payload: dict[str, Any]
+    ) -> GetTaskPushNotificationResponse:
+        request = GetTaskPushNotificationRequest(params=payload)
+        return GetTaskPushNotificationResponse(**await self._send_request(request))
+
+
+
+================================================
+FILE: custom_types.py
+================================================
+from datetime import datetime
+from enum import Enum
+from typing import Annotated, Any, List, Literal, Optional, Union
+from uuid import uuid4
+
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    TypeAdapter,
+    field_serializer,
+    model_validator,
+)
+from typing_extensions import Self
+
+
+class TaskState(str, Enum):
+    SUBMITTED = "submitted"
+    WORKING = "working"
+    INPUT_REQUIRED = "input-required"
+    COMPLETED = "completed"
+    CANCELED = "canceled"
+    FAILED = "failed"
+    UNKNOWN = "unknown"
+
+
+class TextPart(BaseModel):
+    type: Literal["text"] = "text"
+    text: str
+    metadata: dict[str, Any] | None = None
+
+
+class FileContent(BaseModel):
+    name: str | None = None
+    mimeType: str | None = None
+    bytes: str | None = None
+    uri: str | None = None
+
+    @model_validator(mode="after")
+    def check_content(self) -> Self:
+        if not (self.bytes or self.uri):
+            raise ValueError("Either 'bytes' or 'uri' must be present in the file data")
+        if self.bytes and self.uri:
+            raise ValueError(
+                "Only one of 'bytes' or 'uri' can be present in the file data"
+            )
+        return self
+
+
+class FilePart(BaseModel):
+    type: Literal["file"] = "file"
+    file: FileContent
+    metadata: dict[str, Any] | None = None
+
+
+class DataPart(BaseModel):
+    type: Literal["data"] = "data"
+    data: dict[str, Any]
+    metadata: dict[str, Any] | None = None
+
+
+Part = Annotated[Union[TextPart, FilePart, DataPart], Field(discriminator="type")]
+
+
+class Message(BaseModel):
+    role: Literal["user", "agent"]
+    parts: List[Part]
+    metadata: dict[str, Any] | None = None
+
+
+class TaskStatus(BaseModel):
+    state: TaskState
+    message: Message | None = None
+    timestamp: datetime = Field(default_factory=datetime.now)
+
+    @field_serializer("timestamp")
+    def serialize_dt(self, dt: datetime, _info):
+        return dt.isoformat()
+
+
+class Artifact(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    parts: List[Part]
+    metadata: dict[str, Any] | None = None
+    index: int = 0
+    append: bool | None = None
+    lastChunk: bool | None = None
+
+
+class Task(BaseModel):
+    id: str
+    sessionId: str | None = None
+    status: TaskStatus
+    artifacts: List[Artifact] | None = None
+    history: List[Message] | None = None
+    metadata: dict[str, Any] | None = None
+
+
+class TaskStatusUpdateEvent(BaseModel):
+    id: str
+    status: TaskStatus
+    final: bool = False
+    metadata: dict[str, Any] | None = None
+
+
+class TaskArtifactUpdateEvent(BaseModel):
+    id: str
+    artifact: Artifact
+    metadata: dict[str, Any] | None = None
+
+
+class AuthenticationInfo(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    schemes: List[str]
+    credentials: str | None = None
+
+
+class PushNotificationConfig(BaseModel):
+    url: str
+    token: str | None = None
+    authentication: AuthenticationInfo | None = None
+
+
+class TaskIdParams(BaseModel):
+    id: str
+    metadata: dict[str, Any] | None = None
+
+
+class TaskQueryParams(TaskIdParams):
+    historyLength: int | None = None
+
+
+class TaskSendParams(BaseModel):
+    id: str
+    sessionId: str = Field(default_factory=lambda: uuid4().hex)
+    message: Message
+    acceptedOutputModes: Optional[List[str]] = None
+    pushNotification: PushNotificationConfig | None = None
+    historyLength: int | None = None
+    metadata: dict[str, Any] | None = None
+
+
+class TaskPushNotificationConfig(BaseModel):
+    id: str
+    pushNotificationConfig: PushNotificationConfig
+
+
+## RPC Messages
+
+
+class JSONRPCMessage(BaseModel):
+    jsonrpc: Literal["2.0"] = "2.0"
+    id: int | str | None = Field(default_factory=lambda: uuid4().hex)
+
+
+class JSONRPCRequest(JSONRPCMessage):
+    method: str
+    params: dict[str, Any] | None = None
+
+
+class JSONRPCError(BaseModel):
+    code: int
+    message: str
+    data: Any | None = None
+
+
+class JSONRPCResponse(JSONRPCMessage):
+    result: Any | None = None
+    error: JSONRPCError | None = None
+
+
+class SendTaskRequest(JSONRPCRequest):
+    method: Literal["tasks/send"] = "tasks/send"
+    params: TaskSendParams
+
+
+class SendTaskResponse(JSONRPCResponse):
+    result: Task | None = None
+
+
+class SendTaskStreamingRequest(JSONRPCRequest):
+    method: Literal["tasks/sendSubscribe"] = "tasks/sendSubscribe"
+    params: TaskSendParams
+
+
+class SendTaskStreamingResponse(JSONRPCResponse):
+    result: TaskStatusUpdateEvent | TaskArtifactUpdateEvent | None = None
+
+
+class GetTaskRequest(JSONRPCRequest):
+    method: Literal["tasks/get"] = "tasks/get"
+    params: TaskQueryParams
+
+
+class GetTaskResponse(JSONRPCResponse):
+    result: Task | None = None
+
+
+class CancelTaskRequest(JSONRPCRequest):
+    method: Literal["tasks/cancel",] = "tasks/cancel"
+    params: TaskIdParams
+
+
+class CancelTaskResponse(JSONRPCResponse):
+    result: Task | None = None
+
+
+class SetTaskPushNotificationRequest(JSONRPCRequest):
+    method: Literal["tasks/pushNotification/set",] = "tasks/pushNotification/set"
+    params: TaskPushNotificationConfig
+
+
+class SetTaskPushNotificationResponse(JSONRPCResponse):
+    result: TaskPushNotificationConfig | None = None
+
+
+class GetTaskPushNotificationRequest(JSONRPCRequest):
+    method: Literal["tasks/pushNotification/get",] = "tasks/pushNotification/get"
+    params: TaskIdParams
+
+
+class GetTaskPushNotificationResponse(JSONRPCResponse):
+    result: TaskPushNotificationConfig | None = None
+
+
+class TaskResubscriptionRequest(JSONRPCRequest):
+    method: Literal["tasks/resubscribe",] = "tasks/resubscribe"
+    params: TaskIdParams
+
+
+A2ARequest = TypeAdapter(
+    Annotated[
+        Union[
+            SendTaskRequest,
+            GetTaskRequest,
+            CancelTaskRequest,
+            SetTaskPushNotificationRequest,
+            GetTaskPushNotificationRequest,
+            TaskResubscriptionRequest,
+            SendTaskStreamingRequest,
+        ],
+        Field(discriminator="method"),
+    ]
+)
+
+## Error types
+
+
+class JSONParseError(JSONRPCError):
+    code: int = -32700
+    message: str = "Invalid JSON payload"
+    data: Any | None = None
+
+
+class InvalidRequestError(JSONRPCError):
+    code: int = -32600
+    message: str = "Request payload validation error"
+    data: Any | None = None
+
+
+class MethodNotFoundError(JSONRPCError):
+    code: int = -32601
+    message: str = "Method not found"
+    data: None = None
+
+
+class InvalidParamsError(JSONRPCError):
+    code: int = -32602
+    message: str = "Invalid parameters"
+    data: Any | None = None
+
+
+class InternalError(JSONRPCError):
+    code: int = -32603
+    message: str = "Internal error"
+    data: Any | None = None
+
+
+class TaskNotFoundError(JSONRPCError):
+    code: int = -32001
+    message: str = "Task not found"
+    data: None = None
+
+
+class TaskNotCancelableError(JSONRPCError):
+    code: int = -32002
+    message: str = "Task cannot be canceled"
+    data: None = None
+
+
+class PushNotificationNotSupportedError(JSONRPCError):
+    code: int = -32003
+    message: str = "Push Notification is not supported"
+    data: None = None
+
+
+class UnsupportedOperationError(JSONRPCError):
+    code: int = -32004
+    message: str = "This operation is not supported"
+    data: None = None
+
+
+class ContentTypeNotSupportedError(JSONRPCError):
+    code: int = -32005
+    message: str = "Incompatible content types"
+    data: None = None
+
+
+class AgentProvider(BaseModel):
+    organization: str
+    url: str | None = None
+
+
+class AgentCapabilities(BaseModel):
+    streaming: bool = False
+    pushNotifications: bool = False
+    stateTransitionHistory: bool = False
+
+
+class AgentAuthentication(BaseModel):
+    schemes: List[str]
+    credentials: str | None = None
+
+
+class AgentSkill(BaseModel):
+    id: str
+    name: str
+    description: str | None = None
+    tags: List[str] | None = None
+    examples: List[str] | None = None
+    inputModes: List[str] | None = None
+    outputModes: List[str] | None = None
+
+
+class AgentCard(BaseModel):
+    name: str
+    description: str | None = None
+    url: str
+    provider: AgentProvider | None = None
+    version: str
+    documentationUrl: str | None = None
+    capabilities: AgentCapabilities
+    authentication: AgentAuthentication | None = None
+    defaultInputModes: List[str] = ["text"]
+    defaultOutputModes: List[str] = ["text"]
+    skills: List[AgentSkill]
+
+
+class A2AClientError(Exception):
+    pass
+
+
+class A2AClientHTTPError(A2AClientError):
+    def __init__(self, status_code: int, message: str):
+        self.status_code = status_code
+        self.message = message
+        super().__init__(f"HTTP Error {status_code}: {message}")
+
+
+class A2AClientJSONError(A2AClientError):
+    def __init__(self, message: str):
+        self.message = message
+        super().__init__(f"JSON Error: {message}")
+
+
+class MissingAPIKeyError(Exception):
+    """Exception for missing API key."""
+
+    pass
+
+
+
+================================================
+FILE: google_host_agent.py
+================================================
+import asyncio
+import base64
+import json
+import uuid
+from typing import Callable, List
+
+from google.adk import Agent
+from google.adk.agents.callback_context import CallbackContext
+from google.adk.agents.invocation_context import InvocationContext
+from google.adk.agents.readonly_context import ReadonlyContext
+from google.adk.tools.tool_context import ToolContext
+from google.genai import types
+
+from card_resolver import A2ACardResolver
+from client import A2AClient
+from custom_types import (
+    AgentCard,
+    DataPart,
+    Message,
+    Part,
+    Task,
+    TaskArtifactUpdateEvent,
+    TaskSendParams,
+    TaskState,
+    TaskStatus,
+    TaskStatusUpdateEvent,
+    TextPart,
+)
+
+TaskCallbackArg = Task | TaskStatusUpdateEvent | TaskArtifactUpdateEvent
+TaskUpdateCallback = Callable[[TaskCallbackArg], Task]
+
+
+class RemoteAgentConnections:
+    """A class to hold the connections to the remote agents."""
+
+    def __init__(self, agent_card: AgentCard):
+        self.agent_client = A2AClient(agent_card)
+        self.card = agent_card
+
+        self.conversation_name = None
+        self.conversation = None
+        self.pending_tasks = set()
+
+    def get_agent(self) -> AgentCard:
+        return self.card
+
+    async def send_task(
+        self,
+        request: TaskSendParams,
+        task_callback: TaskUpdateCallback | None,
+    ) -> Task | None:
+        if self.card.capabilities.streaming:
+            task = None
+            if task_callback:
+                task_callback(
+                    Task(
+                        id=request.id,
+                        sessionId=request.sessionId,
+                        status=TaskStatus(
+                            state=TaskState.SUBMITTED,
+                            message=request.message,
+                        ),
+                        history=[request.message],
+                    )
+                )
+            async for response in self.agent_client.send_task_streaming(
+                request.model_dump()
+            ):
+                merge_metadata(response.result, request)
+                # For task status updates, we need to propagate metadata and provide
+                # a unique message id.
+                if (
+                    hasattr(response.result, "status")
+                    and hasattr(response.result.status, "message")
+                    and response.result.status.message
+                ):
+                    merge_metadata(response.result.status.message, request.message)
+                    m = response.result.status.message
+                    if not m.metadata:
+                        m.metadata = {}
+                    if "message_id" in m.metadata:
+                        m.metadata["last_message_id"] = m.metadata["message_id"]
+                    m.metadata["message_id"] = str(uuid.uuid4())
+                if task_callback:
+                    task = task_callback(response.result)
+                if hasattr(response.result, "final") and response.result.final:
+                    break
+            return task
+        else:  # Non-streaming
+            response = await self.agent_client.send_task(request.model_dump())
+            merge_metadata(response.result, request)
+            # For task status updates, we need to propagate metadata and provide
+            # a unique message id.
+            if (
+                hasattr(response.result, "status")
+                and hasattr(response.result.status, "message")
+                and response.result.status.message
+            ):
+                merge_metadata(response.result.status.message, request.message)
+                m = response.result.status.message
+                if not m.metadata:
+                    m.metadata = {}
+                if "message_id" in m.metadata:
+                    m.metadata["last_message_id"] = m.metadata["message_id"]
+                m.metadata["message_id"] = str(uuid.uuid4())
+
+            if task_callback:
+                task_callback(response.result)
+            return response.result
+
+
+def merge_metadata(target, source):
+    if not hasattr(target, "metadata") or not hasattr(source, "metadata"):
+        return
+    if target.metadata and source.metadata:
+        target.metadata.update(source.metadata)
+    elif source.metadata:
+        target.metadata = dict(**source.metadata)
+
+
+class HostAgent:
+    """The host agent.
+
+    This is the agent responsible for choosing which remote agents to send
+    tasks to and coordinate their work.
+    """
+
+    def __init__(
+        self,
+        remote_agent_addresses: List[str],
+        task_callback: TaskUpdateCallback | None = None,
+    ):
+        self.task_callback = task_callback
+        self.remote_agent_connections: dict[str, RemoteAgentConnections] = {}
+        self.cards: dict[str, AgentCard] = {}
+        for address in remote_agent_addresses:
+            card_resolver = A2ACardResolver(address)
+            card = card_resolver.get_agent_card()
+            remote_connection = RemoteAgentConnections(card)
+            self.remote_agent_connections[card.name] = remote_connection
+            self.cards[card.name] = card
+        agent_info = []
+        for ra in self.list_remote_agents():
+            agent_info.append(json.dumps(ra))
+        self.agents = "\n".join(agent_info)
+
+    def register_agent_card(self, card: AgentCard):
+        remote_connection = RemoteAgentConnections(card)
+        self.remote_agent_connections[card.name] = remote_connection
+        self.cards[card.name] = card
+        agent_info = []
+        for ra in self.list_remote_agents():
+            agent_info.append(json.dumps(ra))
+        self.agents = "\n".join(agent_info)
+
+    def create_agent(self) -> Agent:
+        agent = Agent(
+            model="gemini-2.0-flash-001",
+            name="host_agent",
+            instruction=self.root_instruction,
+            before_model_callback=self.before_model_callback,
+            description=(
+                "This agent orchestrates the decomposition of the user request into"
+                " tasks that can be performed by the child agents."
+            ),
+            tools=[
+                self.list_remote_agents,
+                self.send_task,
+            ],
+        )
+        agent
+        return agent
+
+    def root_instruction(self, context: ReadonlyContext) -> str:
+        current_agent = self.check_state(context)
+        return f"""You are a expert delegator that can delegate the user request to the
+appropriate remote agents.
+
+Discovery:
+- You can use `list_remote_agents` to list the available remote agents you
+can use to delegate the task.
+
+Execution:
+- For actionable tasks, you can use `create_task` to assign tasks to remote agents to perform.
+Be sure to include the remote agent name when you response to the user.
+
+You can use `check_pending_task_states` to check the states of the pending
+tasks.
+
+Please rely on tools to address the request, don't make up the response. If you are not sure, please ask the user for more details.
+Focus on the most recent parts of the conversation primarily.
+
+If there is an active agent, send the request to that agent with the update task tool.
+
+Agents:
+{self.agents}
+
+Current agent: {current_agent["active_agent"]}
+"""
+
+    def check_state(self, context: ReadonlyContext):
+        state = context.state
+        if (
+            "session_id" in state
+            and "session_active" in state
+            and state["session_active"]
+            and "agent" in state
+        ):
+            return {"active_agent": f"{state['agent']}"}
+        return {"active_agent": "None"}
+
+    def before_model_callback(self, callback_context: CallbackContext, llm_request):
+        state = callback_context.state
+        if "session_active" not in state or not state["session_active"]:
+            if "session_id" not in state:
+                state["session_id"] = str(uuid.uuid4())
+            state["session_active"] = True
+
+    def list_remote_agents(self):
+        """List the available remote agents you can use to delegate the task."""
+        if not self.remote_agent_connections:
+            return []
+
+        remote_agent_info = []
+        for card in self.cards.values():
+            remote_agent_info.append(
+                {"name": card.name, "description": card.description}
+            )
+        return remote_agent_info
+
+    async def send_task(self, agent_name: str, message: str, tool_context: ToolContext):
+        """Sends a task either streaming (if supported) or non-streaming.
+
+        This will send a message to the remote agent named agent_name.
+
+        Args:
+          agent_name: The name of the agent to send the task to.
+          message: The message to send to the agent for the task.
+          tool_context: The tool context this method runs in.
+
+        Yields:
+          A dictionary of JSON data.
+        """
+        if agent_name not in self.remote_agent_connections:
+            raise ValueError(f"Agent {agent_name} not found")
+        state = tool_context.state
+        state["agent"] = agent_name
+        card = self.cards[agent_name]
+        client = self.remote_agent_connections[agent_name]
+        if not client:
+            raise ValueError(f"Client not available for {agent_name}")
+        if "task_id" in state:
+            taskId = state["task_id"]
+        else:
+            taskId = str(uuid.uuid4())
+        sessionId = state["session_id"]
+        task: Task
+        messageId = ""
+        metadata = {}
+        if "input_message_metadata" in state:
+            metadata.update(**state["input_message_metadata"])
+            if "message_id" in state["input_message_metadata"]:
+                messageId = state["input_message_metadata"]["message_id"]
+        if not messageId:
+            messageId = str(uuid.uuid4())
+        metadata.update(**{"conversation_id": sessionId, "message_id": messageId})
+        request: TaskSendParams = TaskSendParams(
+            id=taskId,
+            sessionId=sessionId,
+            message=Message(
+                role="user",
+                parts=[TextPart(text=message)],
+                metadata=metadata,
+            ),
+            acceptedOutputModes=["text", "text/plain", "image/png"],
+            # pushNotification=None,
+            metadata={"conversation_id": sessionId},
+        )
+        task = await client.send_task(request, self.task_callback)
+        # Assume completion unless a state returns that isn't complete
+        state["session_active"] = task.status.state not in [
+            TaskState.COMPLETED,
+            TaskState.CANCELED,
+            TaskState.FAILED,
+            TaskState.UNKNOWN,
+        ]
+        if task.status.state == TaskState.INPUT_REQUIRED:
+            # Force user input back
+            tool_context.actions.skip_summarization = True
+            tool_context.actions.escalate = True
+        elif task.status.state == TaskState.CANCELED:
+            # Open question, should we return some info for cancellation instead
+            raise ValueError(f"Agent {agent_name} task {task.id} is cancelled")
+        elif task.status.state == TaskState.FAILED:
+            # Raise error for failure
+            raise ValueError(f"Agent {agent_name} task {task.id} failed")
+        response = []
+        if task.status.message:
+            # Assume the information is in the task message.
+            response.extend(convert_parts(task.status.message.parts, tool_context))
+        if task.artifacts:
+            for artifact in task.artifacts:
+                response.extend(convert_parts(artifact.parts, tool_context))
+        return response
+
+
+def convert_parts(parts: list[Part], tool_context: ToolContext):
+    rval = []
+    for p in parts:
+        rval.append(convert_part(p, tool_context))
+    return rval
+
+
+def convert_part(part: Part, tool_context: ToolContext):
+    if part.type == "text":
+        return part.text
+    elif part.type == "data":
+        return part.data
+    elif part.type == "file":
+        # Repackage A2A FilePart to google.genai Blob
+        # Currently not considering plain text as files
+        file_id = part.file.name
+        file_bytes = base64.b64decode(part.file.bytes)
+        file_part = types.Part(
+            inline_data=types.Blob(mime_type=part.file.mimeType, data=file_bytes)
+        )
+        tool_context.save_artifact(file_id, file_part)
+        tool_context.actions.skip_summarization = True
+        tool_context.actions.escalate = True
+        return DataPart(data={"artifact-file-id": file_id})
+    return f"Unknown type: {p.type}"
+
+
+from google.adk.agents.run_config import RunConfig
+from google.adk.sessions.in_memory_session_service import InMemorySessionService
+
+# ---------------------------------------------------------
+# Your HostAgent code (from your snippet)
+# ---------------------------------------------------------
+host_agent = HostAgent(["http://localhost:8000"])
+root_agent = host_agent.create_agent()
+
+# ---------------------------------------------------------
+# 1. Create an in-memory session service
+# ---------------------------------------------------------
+session_service = InMemorySessionService()
+
+# ---------------------------------------------------------
+# 2. Create a session with the required fields
+# ---------------------------------------------------------
+my_session = session_service.create_session(
+    app_name="test_app", user_id="test_user", session_id="session-123"
+)
+
+# ---------------------------------------------------------
+# 3. Provide a basic RunConfig with response_modalities
+# ---------------------------------------------------------
+run_config = RunConfig(response_modalities=["text"])
+
+# ---------------------------------------------------------
+# 4. Build the InvocationContext
+# ---------------------------------------------------------
+context = InvocationContext(
+    session_service=session_service,
+    memory_service=None,
+    artifact_service=None,
+    session=my_session,  # We just created
+    agent=root_agent,
+    invocation_id=str(uuid.uuid4()),
+    run_config=run_config,
+)
+
+
+# ---------------------------------------------------------
+# 5. Run your agent with run_async(...)
+# ---------------------------------------------------------
+async def main():
+    async for event in root_agent.run_async(context):
+        if event.content:
+            print("Agent output:", event.content.text())
+
+
+asyncio.run(main())
+
+
+
+================================================
+FILE: host_agent.py
+================================================
+import uuid
+from typing import List, Optional
+
+import requests
+import typer
+from langchain_core.messages import AIMessage
+from langchain_core.tools import tool
+from langchain_openai import ChatOpenAI
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.prebuilt import create_react_agent
+
+
+class AgentCapabilities:
+    def __init__(
+        self, streaming=False, pushNotifications=False, stateTransitionHistory=False
+    ):
+        self.streaming = streaming
+        self.pushNotifications = pushNotifications
+        self.stateTransitionHistory = stateTransitionHistory
+
+
+class AgentCard:
+    def __init__(
+        self,
+        name: str,
+        url: str,
+        version: str,
+        capabilities: AgentCapabilities,
+        description: Optional[str] = None,
+    ):
+        self.name = name
+        self.url = url
+        self.version = version
+        self.capabilities = capabilities
+        self.description = description or "No description."
+
+
+class TaskState:
+    SUBMITTED = "submitted"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELED = "canceled"
+    UNKNOWN = "unknown"
+    INPUT_REQUIRED = "input-required"
+
+
+###############################################################################
+# 2) Synchronous RemoteAgentClient
+###############################################################################
+class RemoteAgentClient:
+    """Communicates with a single remote agent (A2A) in synchronous mode."""
+
+    def __init__(self, base_url: str):
+        self.base_url = base_url
+        self.agent_card: Optional[AgentCard] = None
+
+    def fetch_agent_card(self) -> AgentCard:
+        """GET /.well-known/agent.json to retrieve the remote agent's card."""
+        url = f"{self.base_url}/.well-known/agent.json"
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+
+        caps_data = data["capabilities"]
+        caps = AgentCapabilities(**caps_data)
+
+        card = AgentCard(
+            name=data["name"],
+            url=self.base_url,
+            version=data["version"],
+            capabilities=caps,
+            description=data.get("description", ""),
+        )
+        self.agent_card = card
+        return card
+
+    def send_task(self, task_id: str, session_id: str, message_text: str) -> dict:
+        """POST / with JSON-RPC request: method=tasks/send."""
+        payload = {
+            "jsonrpc": "2.0",
+            "id": str(uuid.uuid4()),
+            "method": "tasks/send",
+            "params": {
+                "id": task_id,
+                "sessionId": session_id,
+                "message": {
+                    "role": "user",
+                    "parts": [{"type": "text", "text": message_text}],
+                },
+            },
+        }
+        r = requests.post(self.base_url, json=payload, timeout=30)
+        r.raise_for_status()
+        resp = r.json()
+        if "error" in resp and resp["error"] is not None:
+            raise RuntimeError(f"Remote agent error: {resp['error']}")
+        return resp.get("result", {})
+
+
+class HostAgent:
+    """Holds references to multiple RemoteAgentClients, one per address."""
+
+    def __init__(self, remote_addresses: List[str]):
+        self.clients = {}
+        for addr in remote_addresses:
+            self.clients[addr] = RemoteAgentClient(addr)
+
+    def initialize(self):
+        """Fetch agent cards for all addresses (synchronously)."""
+        for addr, client in self.clients.items():
+            client.fetch_agent_card()
+
+    def list_agents_info(self) -> list:
+        """Return a list of {name, description, url, streaming} for each loaded agent."""
+        infos = []
+        for addr, c in self.clients.items():
+            card = c.agent_card
+            if card:
+                infos.append(
+                    {
+                        "name": card.name,
+                        "description": card.description,
+                        "url": card.url,
+                        "streaming": card.capabilities.streaming,
+                    }
+                )
+            else:
+                infos.append(
+                    {
+                        "name": "Unknown",
+                        "description": "Not loaded",
+                        "url": addr,
+                        "streaming": False,
+                    }
+                )
+        return infos
+
+    def get_client_by_name(self, agent_name: str) -> Optional[RemoteAgentClient]:
+        """Find a client whose AgentCard name matches `agent_name`."""
+        for c in self.clients.values():
+            if c.agent_card and c.agent_card.name == agent_name:
+                return c
+        return None
+
+    def send_task(self, agent_name: str, message: str) -> str:
+        """
+        Actually send the user's request to the remote agent via tasks/send JSON-RPC.
+        Returns a textual summary or error message.
+        """
+        client = self.get_client_by_name(agent_name)
+        if not client or not client.agent_card:
+            return f"Error: No agent card found for '{agent_name}'."
+
+        task_id = str(uuid.uuid4())
+        session_id = "session-xyz"
+
+        try:
+            result = client.send_task(task_id, session_id, message)
+            # Check final state
+            state = result.get("status", {}).get("state", "unknown")
+            if state == TaskState.COMPLETED:
+                return f"Task {task_id} completed with message: {result}"
+            elif state == TaskState.INPUT_REQUIRED:
+                return f"Task {task_id} needs more input: {result}"
+            else:
+                return f"Task {task_id} ended with state={state}, result={result}"
+        except Exception as exc:
+            return f"Remote agent call failed: {exc}"
+
+
+def make_list_agents_tool(host_agent: HostAgent):
+    """Return a synchronous tool function that calls host_agent.list_agents_info()."""
+
+    @tool
+    def list_remote_agents_tool() -> list:
+        """List available remote agents (name, url, streaming)."""
+        return host_agent.list_agents_info()
+
+    return list_remote_agents_tool
+
+
+def make_send_task_tool(host_agent: HostAgent):
+    """Return a synchronous tool function that calls host_agent.send_task(...)."""
+
+    @tool
+    def send_task_tool(agent_name: str, message: str) -> str:
+        """
+        Synchronous tool: sends 'message' to 'agent_name'
+        via JSON-RPC and returns the result.
+        """
+        return host_agent.send_task(agent_name, message)
+
+    return send_task_tool
+
+
+def build_react_agent(host_agent: HostAgent):
+    # Create the top-level LLM
+    llm = ChatOpenAI(model="gpt-4o")
+    memory = MemorySaver()
+
+    # Make the two tools referencing our host_agent
+    list_tool = make_list_agents_tool(host_agent)
+    send_tool = make_send_task_tool(host_agent)
+
+    system_prompt = """
+You are a Host Agent that delegates requests to known remote agents.
+You have two tools:
+1) list_remote_agents_tool(): Lists the remote agents (their name, URL, streaming).
+2) send_task_tool(agent_name, message): Sends a text request to the agent.
+
+If the user wants currency conversion, call 'send_task_tool("some_agent_name", "5 USD to EUR")'.
+If the user wants weather info, call 'send_task_tool("some_weather_agent", "Weather in city")'.
+
+Return the final result to the user.
+"""
+
+    agent = create_react_agent(
+        model=llm,
+        tools=[list_tool, send_tool],
+        checkpointer=memory,
+        prompt=system_prompt,
+    )
+    return agent
+
+
+app = typer.Typer()
+
+
+@app.command()
+def run_agent(remote_url: str = "http://localhost:8000"):
+    """
+    Start a synchronous HostAgent pointing at 'remote_url'
+    and run a simple conversation loop.
+    """
+    # 1) Build the HostAgent
+    host_agent = HostAgent([remote_url])
+
+    host_agent.initialize()
+    react_agent = build_react_agent(host_agent)
+
+    typer.echo(f"Host agent ready. Connected to: {remote_url}")
+    typer.echo("Type 'quit' or 'exit' to stop.")
+
+    while True:
+        user_msg = typer.prompt("\nUser")
+        if user_msg.strip().lower() in ["quit", "exit", "bye"]:
+            typer.echo("Goodbye!")
+            break
+
+        raw_result = react_agent.invoke(
+            {"messages": [{"role": "user", "content": user_msg}]},
+            config={"configurable": {"thread_id": "cli-session"}},
+        )
+
+        final_text = None
+
+        # If 'raw_result' is a dictionary with "messages", try to find the last AIMessage
+        if isinstance(raw_result, dict) and "messages" in raw_result:
+            all_msgs = raw_result["messages"]
+            for msg in reversed(all_msgs):
+                if isinstance(msg, AIMessage):
+                    final_text = msg.content
+                    break
+        else:
+            # Otherwise, it's likely a plain string
+            if isinstance(raw_result, str):
+                final_text = raw_result
+            else:
+                # fallback: convert whatever it is to string
+                final_text = str(raw_result)
+
+        # Now print only the final AIMessage content
+        typer.echo(f"HostAgent: {final_text}")
+
+
+def main():
+    """
+    Entry point for 'python sync_host_agent_cli.py run-agent --remote-url http://whatever'
+    """
+    app()
+
+
+if __name__ == "__main__":
+    main()
+
+
+
+================================================
+FILE: in_memory_cache.py
+================================================
+"""In Memory Cache utility."""
+
+import threading
+import time
+from typing import Any, Dict, Optional
+
+
+class InMemoryCache:
+    """A thread-safe Singleton class to manage cache data.
+
+    Ensures only one instance of the cache exists across the application.
+    """
+
+    _instance: Optional["InMemoryCache"] = None
+    _lock: threading.Lock = threading.Lock()
+    _initialized: bool = False
+
+    def __new__(cls):
+        """Override __new__ to control instance creation (Singleton pattern).
+
+        Uses a lock to ensure thread safety during the first instantiation.
+
+        Returns:
+            The singleton instance of InMemoryCache.
+        """
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __init__(self):
+        """Initialize the cache storage.
+
+        Uses a flag (_initialized) to ensure this logic runs only on the very first
+        creation of the singleton instance.
+        """
+        if not self._initialized:
+            with self._lock:
+                if not self._initialized:
+                    # print("Initializing SessionCache storage")
+                    self._cache_data: Dict[str, Dict[str, Any]] = {}
+                    self._ttl: Dict[str, float] = {}
+                    self._data_lock: threading.Lock = threading.Lock()
+                    self._initialized = True
+
+    def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
+        """Set a key-value pair.
+
+        Args:
+            key: The key for the data.
+            value: The data to store.
+            ttl: Time to live in seconds. If None, data will not expire.
+        """
+        with self._data_lock:
+            self._cache_data[key] = value
+
+            if ttl is not None:
+                self._ttl[key] = time.time() + ttl
+            else:
+                if key in self._ttl:
+                    del self._ttl[key]
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Get the value associated with a key.
+
+        Args:
+            key: The key for the data within the session.
+            default: The value to return if the session or key is not found.
+
+        Returns:
+            The cached value, or the default value if not found.
+        """
+        with self._data_lock:
+            if key in self._ttl and time.time() > self._ttl[key]:
+                del self._cache_data[key]
+                del self._ttl[key]
+                return default
+            return self._cache_data.get(key, default)
+
+    def delete(self, key: str) -> None:
+        """Delete a specific key-value pair from a cache.
+
+        Args:
+            key: The key to delete.
+
+        Returns:
+            True if the key was found and deleted, False otherwise.
+        """
+
+        with self._data_lock:
+            if key in self._cache_data:
+                del self._cache_data[key]
+                if key in self._ttl:
+                    del self._ttl[key]
+                return True
+            return False
+
+    def clear(self) -> bool:
+        """Remove all data.
+
+        Returns:
+            True if the data was cleared, False otherwise.
+        """
+        with self._data_lock:
+            self._cache_data.clear()
+            self._ttl.clear()
+            return True
+        return False
+
+
+
+================================================
+FILE: mcp_app.py
+================================================
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP(name="MinimalServer", host="0.0.0.0", port=3000)
+
+
+@mcp.tool()
+def get_exchange_rate(
+    currency_from: str = "USD",
+    currency_to: str = "EUR",
+    currency_date: str = "latest",
+):
+    """Dummy-Tool, das 1:1 eine statische Antwort zurückgibt, anstelle eines echten API-Calls.
+
+    Args:
+        currency_from: Die Quellwährung (z.B. "USD").
+        currency_to: Die Zielwährung (z.B. "EUR").
+        currency_date: Das Datum für den Wechselkurs oder "latest". Standard "latest".
+
+    Returns:
+        Ein Dictionary mit statischen Placeholder-Daten.
+    """
+    return {
+        "amount": 1,
+        "base": currency_from,
+        "date": currency_date,
+        "rates": {currency_to: 0.85},  # Beispiel-Rate
+    }
+
+
+if __name__ == "__main__":
+    mcp.run(transport="sse")
+
+
+
+================================================
+FILE: push_notification_auth.py
+================================================
+import hashlib
+import json
+import logging
+import time
+import uuid
+from typing import Any
+
+import httpx
+import jwt
+from jwcrypto import jwk
+from jwt import PyJWK, PyJWKClient
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+
+logger = logging.getLogger(__name__)
+AUTH_HEADER_PREFIX = "Bearer "
+
+
+class PushNotificationAuth:
+    def _calculate_request_body_sha256(self, data: dict[str, Any]):
+        """Calculates the SHA256 hash of a request body.
+
+        This logic needs to be same for both the agent who signs the payload and the client verifier.
+        """
+        body_str = json.dumps(
+            data,
+            ensure_ascii=False,
+            allow_nan=False,
+            indent=None,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(body_str.encode()).hexdigest()
+
+
+class PushNotificationSenderAuth(PushNotificationAuth):
+    def __init__(self):
+        self.public_keys = []
+        self.private_key_jwk: PyJWK = None
+
+    @staticmethod
+    async def verify_push_notification_url(url: str) -> bool:
+        async with httpx.AsyncClient(timeout=10) as client:
+            try:
+                validation_token = str(uuid.uuid4())
+                response = await client.get(
+                    url, params={"validationToken": validation_token}
+                )
+                response.raise_for_status()
+                is_verified = response.text == validation_token
+
+                logger.info(f"Verified push-notification URL: {url} => {is_verified}")
+                return is_verified
+            except Exception as e:
+                logger.warning(
+                    f"Error during sending push-notification for URL {url}: {e}"
+                )
+
+        return False
+
+    def generate_jwk(self):
+        key = jwk.JWK.generate(kty="RSA", size=2048, kid=str(uuid.uuid4()), use="sig")
+        self.public_keys.append(key.export_public(as_dict=True))
+        self.private_key_jwk = PyJWK.from_json(key.export_private())
+
+    def handle_jwks_endpoint(self, _request: Request):
+        """Allow clients to fetch public keys."""
+        return JSONResponse({"keys": self.public_keys})
+
+    def _generate_jwt(self, data: dict[str, Any]):
+        """JWT is generated by signing both the request payload SHA digest and time of token generation.
+
+        Payload is signed with private key and it ensures the integrity of payload for client.
+        Including iat prevents from replay attack.
+        """
+
+        iat = int(time.time())
+
+        return jwt.encode(
+            {
+                "iat": iat,
+                "request_body_sha256": self._calculate_request_body_sha256(data),
+            },
+            key=self.private_key_jwk,
+            headers={"kid": self.private_key_jwk.key_id},
+            algorithm="RS256",
+        )
+
+    async def send_push_notification(self, url: str, data: dict[str, Any]):
+        jwt_token = self._generate_jwt(data)
+        headers = {"Authorization": f"Bearer {jwt_token}"}
+        async with httpx.AsyncClient(timeout=10) as client:
+            try:
+                response = await client.post(url, json=data, headers=headers)
+                response.raise_for_status()
+                logger.info(f"Push-notification sent for URL: {url}")
+            except Exception as e:
+                logger.warning(
+                    f"Error during sending push-notification for URL {url}: {e}"
+                )
+
+
+class PushNotificationReceiverAuth(PushNotificationAuth):
+    def __init__(self):
+        self.public_keys_jwks = []
+        self.jwks_client = None
+
+    async def load_jwks(self, jwks_url: str):
+        self.jwks_client = PyJWKClient(jwks_url)
+
+    async def verify_push_notification(self, request: Request) -> bool:
+        auth_header = request.headers.get("Authorization")
+        if not auth_header or not auth_header.startswith(AUTH_HEADER_PREFIX):
+            print("Invalid authorization header")
+            return False
+
+        token = auth_header[len(AUTH_HEADER_PREFIX) :]
+        signing_key = self.jwks_client.get_signing_key_from_jwt(token)
+
+        decode_token = jwt.decode(
+            token,
+            signing_key,
+            options={"require": ["iat", "request_body_sha256"]},
+            algorithms=["RS256"],
+        )
+
+        actual_body_sha256 = self._calculate_request_body_sha256(await request.json())
+        if actual_body_sha256 != decode_token["request_body_sha256"]:
+            # Payload signature does not match the digest in signed token.
+            raise ValueError("Invalid request body")
+
+        if time.time() - decode_token["iat"] > 60 * 5:
+            # Do not allow push-notifications older than 5 minutes.
+            # This is to prevent replay attack.
+            raise ValueError("Token is expired")
+
+        return True
+
+
+
+================================================
+FILE: requirements.txt
+================================================
+annotated-types==0.7.0
+anyio==4.9.0
+Authlib==1.5.2
+cachetools==5.5.2
+certifi==2025.1.31
+cffi==1.17.1
+charset-normalizer==3.4.1
+click==8.1.8
+colorama==0.4.6
+cryptography==44.0.2
+Deprecated==1.2.18
+distro==1.9.0
+docstring_parser==0.16
+fastapi==0.115.12
+google-adk==0.1.0
+google-api-core==2.24.2
+google-api-python-client==2.166.0
+google-auth==2.38.0
+google-auth-httplib2==0.2.0
+google-cloud-aiplatform==1.88.0
+google-cloud-bigquery==3.31.0
+google-cloud-core==2.4.3
+google-cloud-resource-manager==1.14.2
+google-cloud-secret-manager==2.23.2
+google-cloud-speech==2.31.1
+google-cloud-storage==2.19.0
+google-cloud-trace==1.16.1
+google-crc32c==1.7.1
+google-genai==1.10.0
+google-resumable-media==2.7.2
+googleapis-common-protos==1.69.2
+graphviz==0.20.3
+greenlet==3.1.1
+grpc-google-iam-v1==0.14.2
+grpcio==1.71.0
+grpcio-status==1.71.0
+h11==0.14.0
+httpcore==1.0.8
+httplib2==0.22.0
+httpx==0.28.1
+httpx-sse==0.4.0
+idna==3.10
+importlib_metadata==8.6.1
+jiter==0.9.0
+jsonpatch==1.33
+jsonpointer==3.0.0
+jwcrypto==1.5.6
+langchain==0.3.23
+langchain-core==0.3.51
+langchain-mcp-adapters==0.0.8
+langchain-openai==0.3.12
+langchain-text-splitters==0.3.8
+langgraph==0.3.29
+langgraph-checkpoint==2.0.24
+langgraph-prebuilt==0.1.8
+langgraph-sdk==0.1.61
+langsmith==0.3.30
+markdown-it-py==3.0.0
+mcp==1.6.0
+mdurl==0.1.2
+numpy==2.2.4
+openai==1.73.0
+opentelemetry-api==1.32.0
+opentelemetry-exporter-gcp-trace==1.9.0
+opentelemetry-resourcedetector-gcp==1.9.0a0
+opentelemetry-sdk==1.32.0
+opentelemetry-semantic-conventions==0.53b0
+orjson==3.10.16
+ormsgpack==1.9.1
+packaging==24.2
+proto-plus==1.26.1
+protobuf==5.29.4
+pyasn1==0.6.1
+pyasn1_modules==0.4.2
+pycparser==2.22
+pydantic==2.11.3
+pydantic-settings==2.8.1
+pydantic_core==2.33.1
+Pygments==2.19.1
+PyJWT==2.1.0
+pyparsing==3.2.3
+python-dateutil==2.9.0.post0
+python-dotenv==1.1.0
+PyYAML==6.0.2
+regex==2024.11.6
+requests==2.32.3
+requests-toolbelt==1.0.0
+rich==14.0.0
+rsa==4.9
+ruff==0.11.5
+shapely==2.1.0
+shellingham==1.5.4
+six==1.17.0
+sniffio==1.3.1
+SQLAlchemy==2.0.40
+sse-starlette==2.2.1
+starlette==0.46.2
+tenacity==9.1.2
+tiktoken==0.9.0
+tqdm==4.67.1
+typer==0.15.2
+typing-inspection==0.4.0
+typing_extensions==4.13.2
+tzdata==2025.2
+tzlocal==5.3.1
+uritemplate==4.1.1
+urllib3==2.4.0
+uvicorn==0.34.1
+websockets==15.0.1
+wrapt==1.17.2
+xxhash==3.5.0
+zipp==3.21.0
+zstandard==0.23.0
+
+
+
+================================================
+FILE: server.py
+================================================
+import json
+import logging
+from typing import Any, AsyncIterable, Union
+
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from pydantic import ValidationError
+from sse_starlette.sse import EventSourceResponse
+
+from abc_task_manager import TaskManager
+from custom_types import (
+    A2ARequest,
+    AgentCard,
+    CancelTaskRequest,
+    GetTaskPushNotificationRequest,
+    GetTaskRequest,
+    InternalError,
+    InvalidRequestError,
+    JSONParseError,
+    JSONRPCResponse,
+    SendTaskRequest,
+    SendTaskStreamingRequest,
+    SetTaskPushNotificationRequest,
+    TaskResubscriptionRequest,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class A2AServer:
+    def __init__(
+        self,
+        host: str = "0.0.0.0",
+        port: int = 5000,
+        endpoint: str = "/",
+        agent_card: AgentCard = None,
+        task_manager: TaskManager = None,
+    ):
+        self.host = host
+        self.port = port
+        self.endpoint = endpoint
+        self.task_manager = task_manager
+        self.agent_card = agent_card
+
+        # Erstelle eine FastAPI-App für automatische Dokumentation (/docs, /redoc, etc.)
+        self.app = FastAPI(
+            title="A2A Server", description="A2A Protocol JSON-RPC API", version="1.0.0"
+        )
+        # JSON-RPC-Endpunkt (POST) - automatische Response Modell Generierung deaktiviert
+        self.app.add_api_route(
+            self.endpoint, self._process_request, methods=["POST"], response_model=None
+        )
+        # AgentCard-Endpunkt unter .well-known
+        self.app.add_api_route(
+            "/.well-known/agent.json",
+            self._get_agent_card,
+            methods=["GET"],
+            response_model=None,
+        )
+
+    def start(self):
+        if self.agent_card is None:
+            raise ValueError("agent_card is not defined")
+        if self.task_manager is None:
+            raise ValueError("task_manager is not defined")
+        import uvicorn
+
+        uvicorn.run(self.app, host=self.host, port=self.port)
+
+    async def _get_agent_card(self, request: Request) -> JSONResponse:
+        # Liefert die AgentCard als JSON zurück.
+        return JSONResponse(self.agent_card.model_dump(exclude_none=True))
+
+    async def _process_request(
+        self, request: Request
+    ) -> Union[JSONResponse, EventSourceResponse]:
+        try:
+            body = await request.json()
+            json_rpc_request = A2ARequest.validate_python(body)
+
+            if isinstance(json_rpc_request, GetTaskRequest):
+                result = await self.task_manager.on_get_task(json_rpc_request)
+            elif isinstance(json_rpc_request, SendTaskRequest):
+                result = await self.task_manager.on_send_task(json_rpc_request)
+            elif isinstance(json_rpc_request, SendTaskStreamingRequest):
+                result = await self.task_manager.on_send_task_subscribe(
+                    json_rpc_request
+                )
+            elif isinstance(json_rpc_request, CancelTaskRequest):
+                result = await self.task_manager.on_cancel_task(json_rpc_request)
+            elif isinstance(json_rpc_request, SetTaskPushNotificationRequest):
+                result = await self.task_manager.on_set_task_push_notification(
+                    json_rpc_request
+                )
+            elif isinstance(json_rpc_request, GetTaskPushNotificationRequest):
+                result = await self.task_manager.on_get_task_push_notification(
+                    json_rpc_request
+                )
+            elif isinstance(json_rpc_request, TaskResubscriptionRequest):
+                result = await self.task_manager.on_resubscribe_to_task(
+                    json_rpc_request
+                )
+            else:
+                logger.warning(f"Unexpected request type: {type(json_rpc_request)}")
+                raise ValueError(f"Unexpected request type: {type(json_rpc_request)}")
+
+            return self._create_response(result)
+
+        except Exception as e:
+            return self._handle_exception(e)
+
+    def _handle_exception(self, e: Exception) -> JSONResponse:
+        if isinstance(e, json.decoder.JSONDecodeError):
+            json_rpc_error = JSONParseError()
+        elif isinstance(e, ValidationError):
+            json_rpc_error = InvalidRequestError(data=json.loads(e.json()))
+        else:
+            logger.error(f"Unhandled exception: {e}")
+            json_rpc_error = InternalError()
+
+        response = JSONRPCResponse(id=None, error=json_rpc_error)
+        return JSONResponse(response.model_dump(exclude_none=True), status_code=400)
+
+    def _create_response(self, result: Any) -> Union[JSONResponse, EventSourceResponse]:
+        if isinstance(result, AsyncIterable):
+
+            async def event_generator(
+                result: AsyncIterable,
+            ) -> AsyncIterable[dict[str, str]]:
+                async for item in result:
+                    yield {"data": item.model_dump_json(exclude_none=True)}
+
+            return EventSourceResponse(event_generator(result))
+        elif isinstance(result, JSONRPCResponse):
+            return JSONResponse(result.model_dump(exclude_none=True))
+        else:
+            logger.error(f"Unexpected result type: {type(result)}")
+            raise ValueError(f"Unexpected result type: {type(result)}")
+
+
+
+================================================
+FILE: task_manager.py
+================================================
+import asyncio
+import logging
+import traceback
+from typing import AsyncIterable, Union
+
+import utils as utils
+from abc_task_manager import InMemoryTaskManager
+from agent import CurrencyAgent
+from custom_types import (
+    Artifact,
+    InternalError,
+    InvalidParamsError,
+    JSONRPCResponse,
+    Message,
+    PushNotificationConfig,
+    SendTaskRequest,
+    SendTaskResponse,
+    SendTaskStreamingRequest,
+    SendTaskStreamingResponse,
+    Task,
+    TaskArtifactUpdateEvent,
+    TaskIdParams,
+    TaskSendParams,
+    TaskState,
+    TaskStatus,
+    TaskStatusUpdateEvent,
+    TextPart,
+)
+from push_notification_auth import PushNotificationSenderAuth
+
+logger = logging.getLogger(__name__)
+
+
+class AgentTaskManager(InMemoryTaskManager):
+    def __init__(
+        self, agent: CurrencyAgent, notification_sender_auth: PushNotificationSenderAuth
+    ):
+        super().__init__()
+        self.agent = agent
+        self.notification_sender_auth = notification_sender_auth
+
+    async def _run_streaming_agent(self, request: SendTaskStreamingRequest):
+        task_send_params: TaskSendParams = request.params
+        query = self._get_user_query(task_send_params)
+
+        try:
+            async for item in self.agent.stream(query, task_send_params.sessionId):
+                is_task_complete = item["is_task_complete"]
+                require_user_input = item["require_user_input"]
+                artifact = None
+                message = None
+                parts = [{"type": "text", "text": item["content"]}]
+                end_stream = False
+
+                if not is_task_complete and not require_user_input:
+                    task_state = TaskState.WORKING
+                    message = Message(role="agent", parts=parts)
+                elif require_user_input:
+                    task_state = TaskState.INPUT_REQUIRED
+                    message = Message(role="agent", parts=parts)
+                    end_stream = True
+                else:
+                    task_state = TaskState.COMPLETED
+                    artifact = Artifact(parts=parts, index=0, append=False)
+                    end_stream = True
+
+                task_status = TaskStatus(state=task_state, message=message)
+                latest_task = await self.update_store(
+                    task_send_params.id,
+                    task_status,
+                    None if artifact is None else [artifact],
+                )
+                await self.send_task_notification(latest_task)
+
+                if artifact:
+                    task_artifact_update_event = TaskArtifactUpdateEvent(
+                        id=task_send_params.id, artifact=artifact
+                    )
+                    await self.enqueue_events_for_sse(
+                        task_send_params.id, task_artifact_update_event
+                    )
+
+                task_update_event = TaskStatusUpdateEvent(
+                    id=task_send_params.id, status=task_status, final=end_stream
+                )
+                await self.enqueue_events_for_sse(
+                    task_send_params.id, task_update_event
+                )
+
+        except Exception as e:
+            logger.error(f"An error occurred while streaming the response: {e}")
+            await self.enqueue_events_for_sse(
+                task_send_params.id,
+                InternalError(
+                    message=f"An error occurred while streaming the response: {e}"
+                ),
+            )
+
+    def _validate_request(
+        self, request: Union[SendTaskRequest, SendTaskStreamingRequest]
+    ) -> JSONRPCResponse | None:
+        task_send_params: TaskSendParams = request.params
+        if not utils.are_modalities_compatible(
+            task_send_params.acceptedOutputModes, CurrencyAgent.SUPPORTED_CONTENT_TYPES
+        ):
+            logger.warning(
+                "Unsupported output mode. Received %s, Support %s",
+                task_send_params.acceptedOutputModes,
+                CurrencyAgent.SUPPORTED_CONTENT_TYPES,
+            )
+            return utils.new_incompatible_types_error(request.id)
+
+        if (
+            task_send_params.pushNotification
+            and not task_send_params.pushNotification.url
+        ):
+            logger.warning("Push notification URL is missing")
+            return JSONRPCResponse(
+                id=request.id,
+                error=InvalidParamsError(message="Push notification URL is missing"),
+            )
+
+        return None
+
+    async def on_send_task(self, request: SendTaskRequest) -> SendTaskResponse:
+        """Handles the 'send task' request."""
+        validation_error = self._validate_request(request)
+        if validation_error:
+            return SendTaskResponse(id=request.id, error=validation_error.error)
+
+        if request.params.pushNotification:
+            if not await self.set_push_notification_info(
+                request.params.id, request.params.pushNotification
+            ):
+                return SendTaskResponse(
+                    id=request.id,
+                    error=InvalidParamsError(
+                        message="Push notification URL is invalid"
+                    ),
+                )
+
+        await self.upsert_task(request.params)
+        task = await self.update_store(
+            request.params.id, TaskStatus(state=TaskState.WORKING), None
+        )
+        await self.send_task_notification(task)
+
+        task_send_params: TaskSendParams = request.params
+        query = self._get_user_query(task_send_params)
+        try:
+            agent_response = self.agent.invoke(query, task_send_params.sessionId)
+        except Exception as e:
+            logger.error(f"Error invoking agent: {e}")
+            raise ValueError(f"Error invoking agent: {e}")
+        return await self._process_agent_response(request, agent_response)
+
+    async def on_send_task_subscribe(
+        self, request: SendTaskStreamingRequest
+    ) -> AsyncIterable[SendTaskStreamingResponse] | JSONRPCResponse:
+        try:
+            error = self._validate_request(request)
+            if error:
+                return error
+
+            await self.upsert_task(request.params)
+
+            if request.params.pushNotification:
+                if not await self.set_push_notification_info(
+                    request.params.id, request.params.pushNotification
+                ):
+                    return JSONRPCResponse(
+                        id=request.id,
+                        error=InvalidParamsError(
+                            message="Push notification URL is invalid"
+                        ),
+                    )
+
+            task_send_params: TaskSendParams = request.params
+            sse_event_queue = await self.setup_sse_consumer(task_send_params.id, False)
+
+            asyncio.create_task(self._run_streaming_agent(request))
+
+            return self.dequeue_events_for_sse(
+                request.id, task_send_params.id, sse_event_queue
+            )
+        except Exception as e:
+            logger.error(f"Error in SSE stream: {e}")
+            print(traceback.format_exc())
+            return JSONRPCResponse(
+                id=request.id,
+                error=InternalError(
+                    message="An error occurred while streaming the response"
+                ),
+            )
+
+    async def _process_agent_response(
+        self, request: SendTaskRequest, agent_response: dict
+    ) -> SendTaskResponse:
+        """Processes the agent's response and updates the task store."""
+        task_send_params: TaskSendParams = request.params
+        task_id = task_send_params.id
+        history_length = task_send_params.historyLength
+        task_status = None
+
+        parts = [{"type": "text", "text": agent_response["content"]}]
+        artifact = None
+        if agent_response["require_user_input"]:
+            task_status = TaskStatus(
+                state=TaskState.INPUT_REQUIRED,
+                message=Message(role="agent", parts=parts),
+            )
+        else:
+            task_status = TaskStatus(state=TaskState.COMPLETED)
+            artifact = Artifact(parts=parts)
+        task = await self.update_store(
+            task_id, task_status, None if artifact is None else [artifact]
+        )
+        task_result = self.append_task_history(task, history_length)
+        await self.send_task_notification(task)
+        return SendTaskResponse(id=request.id, result=task_result)
+
+    def _get_user_query(self, task_send_params: TaskSendParams) -> str:
+        part = task_send_params.message.parts[0]
+        if not isinstance(part, TextPart):
+            raise ValueError("Only text parts are supported")
+        return part.text
+
+    async def send_task_notification(self, task: Task):
+        if not await self.has_push_notification_info(task.id):
+            logger.info(f"No push notification info found for task {task.id}")
+            return
+        push_info = await self.get_push_notification_info(task.id)
+
+        logger.info(f"Notifying for task {task.id} => {task.status.state}")
+        await self.notification_sender_auth.send_push_notification(
+            push_info.url, data=task.model_dump(exclude_none=True)
+        )
+
+    async def on_resubscribe_to_task(
+        self, request
+    ) -> AsyncIterable[SendTaskStreamingResponse] | JSONRPCResponse:
+        task_id_params: TaskIdParams = request.params
+        try:
+            sse_event_queue = await self.setup_sse_consumer(task_id_params.id, True)
+            return self.dequeue_events_for_sse(
+                request.id, task_id_params.id, sse_event_queue
+            )
+        except Exception as e:
+            logger.error(f"Error while reconnecting to SSE stream: {e}")
+            return JSONRPCResponse(
+                id=request.id,
+                error=InternalError(
+                    message=f"An error occurred while reconnecting to stream: {e}"
+                ),
+            )
+
+    async def set_push_notification_info(
+        self, task_id: str, push_notification_config: PushNotificationConfig
+    ):
+        # Verify the ownership of notification URL by issuing a challenge request.
+        is_verified = await self.notification_sender_auth.verify_push_notification_url(
+            push_notification_config.url
+        )
+        if not is_verified:
+            return False
+
+        await super().set_push_notification_info(task_id, push_notification_config)
+        return True
+
+
+
+================================================
+FILE: utils.py
+================================================
+from typing import List
+
+from custom_types import (
+    ContentTypeNotSupportedError,
+    JSONRPCResponse,
+    UnsupportedOperationError,
+)
+
+
+def are_modalities_compatible(
+    server_output_modes: List[str], client_output_modes: List[str]
+):
+    """Modalities are compatible if they are both non-empty
+    and there is at least one common element."""
+    if client_output_modes is None or len(client_output_modes) == 0:
+        return True
+
+    if server_output_modes is None or len(server_output_modes) == 0:
+        return True
+
+    return any(x in server_output_modes for x in client_output_modes)
+
+
+def new_incompatible_types_error(request_id):
+    return JSONRPCResponse(id=request_id, error=ContentTypeNotSupportedError())
+
+
+def new_not_implemented_error(request_id):
+    return JSONRPCResponse(id=request_id, error=UnsupportedOperationError())
+
+

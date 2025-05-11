@@ -1,0 +1,3142 @@
+Directory structure:
+└── langchain-ai-langgraph-gen-py/
+    ├── README.md
+    ├── LICENSE
+    ├── pyproject.toml
+    ├── examples/
+    │   ├── agentic_rag/
+    │   │   ├── spec.py
+    │   │   ├── spec.ts
+    │   │   ├── spec.yml
+    │   │   ├── spec_impl.py
+    │   │   └── spec_impl.ts
+    │   └── rag/
+    │       ├── spec.py
+    │       ├── spec.ts
+    │       ├── spec.yml
+    │       ├── spec_impl.py
+    │       └── spec_impl.ts
+    ├── langgraph_gen/
+    │   ├── __init__.py
+    │   ├── _version.py
+    │   ├── cli.py
+    │   ├── generate.py
+    │   └── assets/
+    │       ├── py-class-stub.j2
+    │       ├── py-impl-stub.j2
+    │       ├── py-stub-impl.j2
+    │       ├── py-stub-runtime-json.j2
+    │       ├── py-stub-runtime-yaml.j2
+    │       ├── py-stub.j2
+    │       ├── ts-stub-impl.j2
+    │       └── ts-stub.j2
+    ├── tests/
+    │   ├── __init__.py
+    │   ├── test_code_generation.py
+    │   └── integrations/
+    │       ├── sample_01.py
+    │       ├── sample_01.ts
+    │       ├── sample_01.yml
+    │       ├── sample_01_impl.py
+    │       ├── sample_01_impl.ts
+    │       ├── sample_02.py
+    │       ├── sample_02.ts
+    │       ├── sample_02.yml
+    │       ├── sample_02_impl.py
+    │       └── sample_02_impl.ts
+    └── .github/
+        ├── actions/
+        │   └── uv_setup/
+        │       └── action.yml
+        └── workflows/
+            ├── _lint.yml
+            ├── _test.yml
+            ├── ci.yml
+            └── release.yml
+
+================================================
+FILE: README.md
+================================================
+# langgraph-gen
+
+langgraph-gen is a CLI tool that allows you to auto-generate a LangGraph stub from a
+specification file.
+
+## Usage
+
+```shell
+pip install langgraph-gen
+```
+
+## Basic Usage
+
+```shell
+# Generate Python code from a YAML spec
+langgraph-gen spec.yml
+
+# Generate TypeScript code from a YAML spec
+langgraph-gen spec.yml --language typescript
+
+# Generate with custom output paths
+langgraph-gen spec.yml -o custom_output.py --implementation custom_impl.py
+```
+
+## Command Line Options
+
+```
+langgraph-gen [options] input
+
+Required arguments:
+  input                 Input YAML specification file
+
+Optional arguments:
+  -l, --language        Language to generate code for (python, typescript)
+                        Default: python
+  -o, --output          Output file path for the agent stub
+  --implementation      Output file path for an implementation with function stubs for all nodes
+  -V, --version         Show program's version number and exit
+```
+
+## Example Spec
+
+```YAML
+# A simple 2-step Retrieval-Augmented Generation workflow
+name: RagWorkflow
+nodes:
+- name: retrieve
+- name: generate
+edges:
+- from: __start__
+  to: retrieve
+- from: retrieve
+  to: generate
+- from: generate
+  to: __end__
+```
+
+## Quick Start
+
+Create an example specification file and generate the code:
+
+```shell
+# Create a simple RAG workflow specification
+cat > rag_example.yml << 'EOF'
+# A simple 2-step Retrieval-Augmented Generation workflow
+name: RagWorkflow
+nodes:
+  - name: retrieve
+  - name: generate
+edges:
+  - from: __start__
+    to: retrieve
+  - from: retrieve
+    to: generate
+  - from: generate
+    to: __end__
+EOF
+
+# Generate Python code
+langgraph-gen rag_example.yml
+
+# This will create rag_example.py and rag_example_impl.py
+```
+
+## Examples
+
+You can find examples of the LangGraph specification together with the generated LangGraph stubs in the [examples](./examples) directory.
+
+
+================================================
+FILE: LICENSE
+================================================
+MIT License
+
+Copyright (c) 2025-present LangChain, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+
+
+================================================
+FILE: pyproject.toml
+================================================
+[project]
+name = "langgraph-gen"
+version = "0.0.6"
+description = "Genenerate code stubs for langgraph agents."
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+dependencies = [
+    "jinja2>=3.1.5",
+    "langgraph>=0.2.74",
+    "pyyaml>=6.0.2",
+]
+
+
+[dependency-groups]
+test = [
+    "ruff>=0.9.7",
+    "pytest-socket>=0.7.0",
+]
+
+[project.scripts]
+langgraph-gen = "langgraph_gen.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+
+
+================================================
+FILE: examples/agentic_rag/spec.py
+================================================
+"""This is an automatically generated file. Do not modify it.
+
+This file was generated using `langgraph-gen` version 0.0.4.
+To regenerate this file, run `langgraph-gen` with the source `yaml` file as an argument.
+
+Usage:
+
+1. Add the generated file to your project.
+2. Create a new agent using the stub.
+
+Below is a sample implementation of the generated stub:
+
+```python
+from typing_extensions import TypedDict
+
+from spec import AgenticRag
+
+class SomeState(TypedDict):
+    # define your attributes here
+    foo: str
+
+# Define stand-alone functions
+def agent(state: SomeState) -> dict:
+    print("In node: agent")
+    return {
+        # Add your state update logic here
+    }
+
+
+def retrieve(state: SomeState) -> dict:
+    print("In node: retrieve")
+    return {
+        # Add your state update logic here
+    }
+
+
+def rewrite(state: SomeState) -> dict:
+    print("In node: rewrite")
+    return {
+        # Add your state update logic here
+    }
+
+
+def generate(state: SomeState) -> dict:
+    print("In node: generate")
+    return {
+        # Add your state update logic here
+    }
+
+
+def is_relevant(state: SomeState) -> str:
+    print("In condition: is_relevant")
+    raise NotImplementedError("Implement me.")
+
+
+agent = AgenticRag(
+    state_schema=SomeState,
+    impl=[
+        ("agent", agent),
+        ("retrieve", retrieve),
+        ("rewrite", rewrite),
+        ("generate", generate),
+        ("is_relevant", is_relevant),
+    ]
+)
+
+compiled_agent = agent.compile()
+
+print(compiled_agent.invoke({"foo": "bar"}))
+"""
+
+from typing import Callable, Any, Optional, Type
+
+from langgraph.constants import START, END  # noqa: F401
+from langgraph.graph import StateGraph
+
+
+def AgenticRag(
+    *,
+    state_schema: Optional[Type[Any]] = None,
+    config_schema: Optional[Type[Any]] = None,
+    input: Optional[Type[Any]] = None,
+    output: Optional[Type[Any]] = None,
+    impl: list[tuple[str, Callable]],
+) -> StateGraph:
+    """Create the state graph for AgenticRag."""
+    # Declare the state graph
+    builder = StateGraph(
+        state_schema, config_schema=config_schema, input=input, output=output
+    )
+
+    nodes_by_name = {name: imp for name, imp in impl}
+
+    all_names = set(nodes_by_name)
+
+    expected_implementations = {
+        "agent",
+        "retrieve",
+        "rewrite",
+        "generate",
+        "is_relevant",
+    }
+
+    missing_nodes = expected_implementations - all_names
+    if missing_nodes:
+        raise ValueError(f"Missing implementations for: {missing_nodes}")
+
+    extra_nodes = all_names - expected_implementations
+
+    if extra_nodes:
+        raise ValueError(
+            f"Extra implementations for: {extra_nodes}. Please regenerate the stub."
+        )
+
+    # Add nodes
+    builder.add_node("agent", nodes_by_name["agent"])
+    builder.add_node("retrieve", nodes_by_name["retrieve"])
+    builder.add_node("rewrite", nodes_by_name["rewrite"])
+    builder.add_node("generate", nodes_by_name["generate"])
+
+    # Add edges
+    builder.add_edge("agent", "retrieve")
+    builder.add_conditional_edges(
+        "retrieve",
+        nodes_by_name["is_relevant"],
+        [
+            "rewrite",
+            "generate",
+        ],
+    )
+    builder.add_edge("rewrite", "agent")
+    builder.add_edge("generate", END)
+    builder.set_entry_point("agent")
+    return builder
+
+
+
+================================================
+FILE: examples/agentic_rag/spec.ts
+================================================
+/* This is an automatically generated file. Do not modify it.
+
+This file was generated using `langgraph-gen` version 0.0.4.
+To regenerate this file, run `langgraph-gen` with the source `YAML` file as an argument.
+
+Usage:
+
+1. Add the generated file to your project.
+2. Create a new agent using the stub.
+
+```typescript
+import { AgenticRag } from "spec"
+
+
+const StateAnnotation = Annotation.Root({
+    // Define your state properties here
+    foo: Annotation<string>(),
+});
+
+const agent = CustomAgentStub(Annotation.Root({ foo: Annotation<string>() }), {
+    agent: (state) => console.log("In node: agent"),
+    retrieve: (state) => console.log("In node: retrieve"),
+    rewrite: (state) => console.log("In node: rewrite"),
+    generate: (state) => console.log("In node: generate"),
+    is_relevant: (state) => {
+        console.log("In condition: is_relevant");
+        throw new Error("Implement me. Returns one of the paths.");
+    },
+});
+
+const compiled_agent = agent.compile();
+console.log(await compiled_agent.invoke({ foo: "bar" }));
+```
+
+*/
+import {
+    StateGraph,
+    START,
+    END,
+    type AnnotationRoot,
+} from "@langchain/langgraph";
+
+type AnyAnnotationRoot = AnnotationRoot<any>;
+
+export function AgenticRag<TAnnotation extends AnyAnnotationRoot>(
+  stateAnnotation: TAnnotation,
+  impl: {
+    agent: (state: TAnnotation["State"]) => TAnnotation["Update"],
+    retrieve: (state: TAnnotation["State"]) => TAnnotation["Update"],
+    rewrite: (state: TAnnotation["State"]) => TAnnotation["Update"],
+    generate: (state: TAnnotation["State"]) => TAnnotation["Update"],
+    is_relevant: (state: TAnnotation["State"]) => string,
+  }
+) {
+  return new StateGraph(stateAnnotation)
+    .addNode("agent", impl.agent)
+    .addNode("retrieve", impl.retrieve)
+    .addNode("rewrite", impl.rewrite)
+    .addNode("generate", impl.generate)
+    .addEdge(START, "agent")
+    .addEdge("agent", "retrieve")
+    .addConditionalEdges(
+        "retrieve",
+        impl.is_relevant,
+        [
+            "rewrite",
+            "generate",
+        ]
+    )
+    .addEdge("rewrite", "agent")
+    .addEdge("generate", END)
+}
+
+
+================================================
+FILE: examples/agentic_rag/spec.yml
+================================================
+# Retrieval Augmented Generation (RAG) with an agent.
+# 1. The agent has access to one or more retrieval tools to retrieve relevant information.
+# 2. The agent checks whether the retrieved information is relevant.
+#   - If not, it attempts to rewrite the query and retrieve again.
+#   - If yes, it generates the final output.
+name: AgenticRag
+entrypoint: agent
+nodes:
+  - name: agent
+  - name: retrieve
+  - name: rewrite
+  - name: generate
+edges:
+  - from: agent
+    to: retrieve
+  - from: retrieve
+    condition: is_relevant
+    paths:
+      - rewrite
+      - generate
+  - from: rewrite
+    to: agent
+  - from: generate
+    to: __end__
+
+
+
+================================================
+FILE: examples/agentic_rag/spec_impl.py
+================================================
+"""This file was generated using `langgraph-gen` version 0.0.4.
+
+This file provides a placeholder implementation for the corresponding stub.
+
+Replace the placeholder implementation with your own logic.
+"""
+
+from typing_extensions import TypedDict
+
+from spec import AgenticRag
+
+
+class SomeState(TypedDict):
+    # define your attributes here
+    foo: str
+
+
+# Define stand-alone functions
+def agent(state: SomeState) -> dict:
+    print("In node: agent")
+    return {
+        # Add your state update logic here
+    }
+
+
+def retrieve(state: SomeState) -> dict:
+    print("In node: retrieve")
+    return {
+        # Add your state update logic here
+    }
+
+
+def rewrite(state: SomeState) -> dict:
+    print("In node: rewrite")
+    return {
+        # Add your state update logic here
+    }
+
+
+def generate(state: SomeState) -> dict:
+    print("In node: generate")
+    return {
+        # Add your state update logic here
+    }
+
+
+def is_relevant(state: SomeState) -> str:
+    print("In condition: is_relevant")
+    raise NotImplementedError("Implement me.")
+
+
+agent = AgenticRag(
+    state_schema=SomeState,
+    impl=[
+        ("agent", agent),
+        ("retrieve", retrieve),
+        ("rewrite", rewrite),
+        ("generate", generate),
+        ("is_relevant", is_relevant),
+    ],
+)
+
+compiled_agent = agent.compile()
+
+print(compiled_agent.invoke({"foo": "bar"}))
+
+
+
+================================================
+FILE: examples/agentic_rag/spec_impl.ts
+================================================
+/* This file was generated using `langgraph-gen` version 0.0.4.
+
+This file provides a placeholder implementation for the corresponding stub.
+
+Replace the placeholder implementation with your own logic.
+*/
+import { Annotation } from "@langchain/langgraph";
+
+import { AgenticRag } from "spec"
+
+const agent = AgenticRag(Annotation.Root({ foo: Annotation<string>() }), {
+    agent: (state) => {
+        console.log("In node: agent")
+        return {} // Add your state update logic here
+    },
+    retrieve: (state) => {
+        console.log("In node: retrieve")
+        return {} // Add your state update logic here
+    },
+    rewrite: (state) => {
+        console.log("In node: rewrite")
+        return {} // Add your state update logic here
+    },
+    generate: (state) => {
+        console.log("In node: generate")
+        return {} // Add your state update logic here
+    },
+    is_relevant: (state) => {
+        console.log("In condition: is_relevant");
+        throw new Error("Implement me. Returns one of the paths.");
+    },
+});
+
+const compiled_agent = agent.compile();
+console.log(await compiled_agent.invoke({ foo: "bar" }));
+
+
+================================================
+FILE: examples/rag/spec.py
+================================================
+"""This is an automatically generated file. Do not modify it.
+
+This file was generated using `langgraph-gen` version 0.0.4.
+To regenerate this file, run `langgraph-gen` with the source `yaml` file as an argument.
+
+Usage:
+
+1. Add the generated file to your project.
+2. Create a new agent using the stub.
+
+Below is a sample implementation of the generated stub:
+
+```python
+from typing_extensions import TypedDict
+
+from spec import RagWorkflow
+
+class SomeState(TypedDict):
+    # define your attributes here
+    foo: str
+
+# Define stand-alone functions
+def retrieve(state: SomeState) -> dict:
+    print("In node: retrieve")
+    return {
+        # Add your state update logic here
+    }
+
+
+def generate(state: SomeState) -> dict:
+    print("In node: generate")
+    return {
+        # Add your state update logic here
+    }
+
+
+agent = RagWorkflow(
+    state_schema=SomeState,
+    impl=[
+        ("retrieve", retrieve),
+        ("generate", generate),
+    ]
+)
+
+compiled_agent = agent.compile()
+
+print(compiled_agent.invoke({"foo": "bar"}))
+"""
+
+from typing import Callable, Any, Optional, Type
+
+from langgraph.constants import START, END  # noqa: F401
+from langgraph.graph import StateGraph
+
+
+def RagWorkflow(
+    *,
+    state_schema: Optional[Type[Any]] = None,
+    config_schema: Optional[Type[Any]] = None,
+    input: Optional[Type[Any]] = None,
+    output: Optional[Type[Any]] = None,
+    impl: list[tuple[str, Callable]],
+) -> StateGraph:
+    """Create the state graph for RagWorkflow."""
+    # Declare the state graph
+    builder = StateGraph(
+        state_schema, config_schema=config_schema, input=input, output=output
+    )
+
+    nodes_by_name = {name: imp for name, imp in impl}
+
+    all_names = set(nodes_by_name)
+
+    expected_implementations = {
+        "retrieve",
+        "generate",
+    }
+
+    missing_nodes = expected_implementations - all_names
+    if missing_nodes:
+        raise ValueError(f"Missing implementations for: {missing_nodes}")
+
+    extra_nodes = all_names - expected_implementations
+
+    if extra_nodes:
+        raise ValueError(
+            f"Extra implementations for: {extra_nodes}. Please regenerate the stub."
+        )
+
+    # Add nodes
+    builder.add_node("retrieve", nodes_by_name["retrieve"])
+    builder.add_node("generate", nodes_by_name["generate"])
+
+    # Add edges
+    builder.add_edge("retrieve", "generate")
+    builder.add_edge("generate", END)
+    builder.set_entry_point("retrieve")
+    return builder
+
+
+
+================================================
+FILE: examples/rag/spec.ts
+================================================
+/* This is an automatically generated file. Do not modify it.
+
+This file was generated using `langgraph-gen` version 0.0.4.
+To regenerate this file, run `langgraph-gen` with the source `YAML` file as an argument.
+
+Usage:
+
+1. Add the generated file to your project.
+2. Create a new agent using the stub.
+
+```typescript
+import { RagWorkflow } from "spec"
+
+
+const StateAnnotation = Annotation.Root({
+    // Define your state properties here
+    foo: Annotation<string>(),
+});
+
+const agent = CustomAgentStub(Annotation.Root({ foo: Annotation<string>() }), {
+    retrieve: (state) => console.log("In node: retrieve"),
+    generate: (state) => console.log("In node: generate"),
+});
+
+const compiled_agent = agent.compile();
+console.log(await compiled_agent.invoke({ foo: "bar" }));
+```
+
+*/
+import {
+    StateGraph,
+    START,
+    END,
+    type AnnotationRoot,
+} from "@langchain/langgraph";
+
+type AnyAnnotationRoot = AnnotationRoot<any>;
+
+export function RagWorkflow<TAnnotation extends AnyAnnotationRoot>(
+  stateAnnotation: TAnnotation,
+  impl: {
+    retrieve: (state: TAnnotation["State"]) => TAnnotation["Update"],
+    generate: (state: TAnnotation["State"]) => TAnnotation["Update"],
+  }
+) {
+  return new StateGraph(stateAnnotation)
+    .addNode("retrieve", impl.retrieve)
+    .addNode("generate", impl.generate)
+    .addEdge(START, "retrieve")
+    .addEdge("retrieve", "generate")
+    .addEdge("generate", END)
+}
+
+
+================================================
+FILE: examples/rag/spec.yml
+================================================
+# A simple 2-step Retrieval-Augmented Generation workflow
+name: RagWorkflow
+entrypoint: retrieve
+nodes:
+  - name: retrieve
+  - name: generate
+edges:
+  - from: retrieve
+    to: generate
+  - from: generate
+    to: __end__
+
+
+
+================================================
+FILE: examples/rag/spec_impl.py
+================================================
+"""This file was generated using `langgraph-gen` version 0.0.4.
+
+This file provides a placeholder implementation for the corresponding stub.
+
+Replace the placeholder implementation with your own logic.
+"""
+
+from typing_extensions import TypedDict
+
+from spec import RagWorkflow
+
+
+class SomeState(TypedDict):
+    # define your attributes here
+    foo: str
+
+
+# Define stand-alone functions
+def retrieve(state: SomeState) -> dict:
+    print("In node: retrieve")
+    return {
+        # Add your state update logic here
+    }
+
+
+def generate(state: SomeState) -> dict:
+    print("In node: generate")
+    return {
+        # Add your state update logic here
+    }
+
+
+agent = RagWorkflow(
+    state_schema=SomeState,
+    impl=[
+        ("retrieve", retrieve),
+        ("generate", generate),
+    ],
+)
+
+compiled_agent = agent.compile()
+
+print(compiled_agent.invoke({"foo": "bar"}))
+
+
+
+================================================
+FILE: examples/rag/spec_impl.ts
+================================================
+/* This file was generated using `langgraph-gen` version 0.0.4.
+
+This file provides a placeholder implementation for the corresponding stub.
+
+Replace the placeholder implementation with your own logic.
+*/
+import { Annotation } from "@langchain/langgraph";
+
+import { RagWorkflow } from "spec"
+
+const agent = RagWorkflow(Annotation.Root({ foo: Annotation<string>() }), {
+    retrieve: (state) => {
+        console.log("In node: retrieve")
+        return {} // Add your state update logic here
+    },
+    generate: (state) => {
+        console.log("In node: generate")
+        return {} // Add your state update logic here
+    },
+});
+
+const compiled_agent = agent.compile();
+console.log(await compiled_agent.invoke({ foo: "bar" }));
+
+
+================================================
+FILE: langgraph_gen/__init__.py
+================================================
+from langgraph_gen._version import __version__
+
+__all__ = [
+    "__version__",
+]
+
+
+
+================================================
+FILE: langgraph_gen/_version.py
+================================================
+from importlib import metadata
+
+try:
+    __version__ = metadata.version(__package__)
+except metadata.PackageNotFoundError:
+    # Case where package metadata is not available.
+    __version__ = ""
+
+
+
+================================================
+FILE: langgraph_gen/cli.py
+================================================
+"""Entrypoint script."""
+
+import argparse
+import sys
+from pathlib import Path
+from typing import Optional, Literal
+
+from langgraph_gen._version import __version__
+from langgraph_gen.generate import generate_from_spec
+
+
+def print_error(message: str) -> None:
+    """Print error messages with visual emphasis.
+
+    Args:
+        message: The error message to display
+    """
+    if sys.stderr.isatty():
+        # Use colors for terminal output
+        sys.stderr.write(f"\033[91mError: {message}\033[0m\n")
+    else:
+        # Plain text for non-terminal output
+        sys.stderr.write(f"Error: {message}\n")
+
+
+def _rewrite_path_as_import(path: Path) -> str:
+    """Rewrite a path as an import statement."""
+    return ".".join(path.with_suffix("").parts)
+
+
+def _generate(
+    input_file: Path,
+    *,
+    language: Literal["python", "typescript"],
+    output_file: Optional[Path] = None,
+    implementation: Optional[Path] = None,
+) -> tuple[str, str]:
+    """Generate agent code from a YAML specification file.
+
+    Args:
+        input_file (Path): Input YAML specification file
+        language (Literal["python", "typescript"]): Language to generate code for
+        output_file (Optional[Path]): Output Python file path
+        implementation (Optional[Path]): Output Python file path for a placeholder implementation
+
+    Returns:
+        2-tuple of path: Path to the generated stub file and implementation file
+    """
+    if language not in ["python", "typescript"]:
+        raise NotImplementedError(
+            f"Unsupported language: {language}. Use one of 'python' or 'typescript'"
+        )
+    suffix = ".py" if language == "python" else ".ts"
+    output_path = output_file or input_file.with_suffix(suffix)
+
+    # Add a _impl.py suffix to the input filename if implementation is not provided
+    if implementation is None:
+        implementation = input_file.with_name(f"{input_file.stem}_impl{suffix}")
+
+    # Get the implementation relative to the output path
+    stub_module = _rewrite_path_as_import(
+        output_path.relative_to(implementation.parent)
+    )
+
+    spec_as_yaml = input_file.read_text()
+    stub, impl = generate_from_spec(
+        spec_as_yaml,
+        "yaml",
+        templates=["stub", "implementation"],
+        language=language,
+        stub_module=stub_module,
+    )
+    output_path.write_text(stub)
+    implementation.write_text(impl)
+
+    # Return the created files for reporting
+    return output_path, implementation
+
+
+def main() -> None:
+    """Langgraph-gen CLI entry point."""
+    # Define examples text separately with proper formatting
+    examples = """
+Examples:
+  # Generate Python code from a YAML spec
+  langgraph-gen spec.yml
+
+  # Generate TypeScript code from a YAML spec
+  langgraph-gen spec.yml --language typescript
+
+  # Generate with custom output paths
+  langgraph-gen spec.yml -o custom_output.py --implementation custom_impl.py
+"""
+
+    # Use RawDescriptionHelpFormatter to preserve newlines in epilog
+    parser = argparse.ArgumentParser(
+        description="Generate LangGraph agent base classes from YAML specs.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=examples,
+    )
+    parser.add_argument("input", type=Path, help="Input YAML specification file")
+    parser.add_argument(
+        "-l",
+        "--language",
+        type=str,
+        default="python",
+        help="Language to generate code for (python, typescript)",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=Path,
+        help="Output file path for the agent stub",
+        default=None,
+    )
+
+    parser.add_argument(
+        "--implementation",
+        type=Path,
+        help="Output file path for an implementation with function stubs for all nodes",
+        default=None,
+    )
+
+    parser.add_argument(
+        "-V", "--version", action="version", version=f"%(prog)s {__version__}"
+    )
+
+    # Custom error handling for argparse
+    try:
+        args = parser.parse_args()
+    except SystemExit as e:
+        # If there's a parse error (exit code != 0), show the full help
+        if e.code != 0:
+            # Create a custom parser without formatter to avoid showing usage twice
+            custom_help_parser = argparse.ArgumentParser(
+                description=parser.description,
+                formatter_class=argparse.RawDescriptionHelpFormatter,
+                epilog=parser.epilog,
+                add_help=False,
+                usage=argparse.SUPPRESS,  # Suppress the usage line
+            )
+            # Add the same arguments
+            for action in parser._actions:
+                if action.dest != "help":  # Skip the help action
+                    custom_help_parser._add_action(action)
+
+            # Print full help without the usage line (which was already printed by argparse)
+            print()
+            custom_help_parser.print_help()
+
+            # Add error message using our helper function
+            print_error("Invalid arguments")
+        sys.exit(e.code)
+
+    # Check if input file exists
+    if not args.input.exists():
+        print_error(f"Input file {args.input} does not exist")
+        sys.exit(1)
+
+    # Generate the code
+    try:
+        stub_file, impl_file = _generate(
+            input_file=args.input,
+            output_file=args.output,
+            language=args.language,
+            implementation=args.implementation,
+        )
+
+        # Check if stdout is a TTY to use colors and emoji
+        if sys.stdout.isatty():
+            print("\033[32m✅ Successfully generated files:\033[0m")
+            print(f"\033[32m📄 Stub file:          \033[0m {stub_file}")
+            print(f"\033[32m🔧 Implementation file: \033[0m {impl_file}")
+        else:
+            print("Successfully generated files:")
+            print(f"- Stub file:           {stub_file}")
+            print(f"- Implementation file: {impl_file}")
+    except Exception as e:
+        # Use our helper function for consistent error formatting
+        print_error(str(e))
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
+
+
+
+================================================
+FILE: langgraph_gen/generate.py
+================================================
+#!/usr/bin/env python3
+"""LangGraph Agent Code Generator CLI"""
+
+import json
+import re
+from pathlib import Path
+from typing import Any, Callable, Literal, Set, Optional
+
+import jinja2
+import yaml
+from jinja2.sandbox import SandboxedEnvironment
+from langgraph.graph import StateGraph, START, END
+
+from langgraph_gen._version import __version__
+
+HERE = Path(__file__).parent
+
+ASSETS = HERE / "assets"
+
+
+def _load_template(name: str) -> str:
+    """Load a template from the assets directory"""
+    with open(ASSETS / name) as f:
+        return f.read()
+
+
+# Load fully generated functional stub
+PY_STUB = _load_template("py-stub.j2")
+PY_IMPL = _load_template("py-stub-impl.j2")
+
+# TypeScript templates
+TS_STUB = _load_template("ts-stub.j2")
+TS_IMPL = _load_template("ts-stub-impl.j2")
+
+
+class InvalidSpec(Exception):
+    """Invalid spec."""
+
+
+def _validate_spec(spec: Any) -> None:
+    """Raise an error if the spec is invalid."""
+    if not isinstance(spec, dict):
+        raise InvalidSpec("Specification must be a top level dictionary.")
+    required_fields = {"nodes", "edges"}
+    if not required_fields.issubset(spec.keys()):
+        missing = required_fields - spec.keys()
+        raise ValueError(f"Missing required fields in spec: {', '.join(missing)}")
+
+    node_names = {n["name"] for n in spec["nodes"]}
+    for edge in spec["edges"]:
+        if edge["from"] not in node_names and edge["from"] != START:
+            raise ValueError(f"Edge source node '{edge['from']}' not defined in nodes")
+        if "to" in edge:
+            if edge["to"] not in node_names and edge["to"] != END:
+                raise ValueError(
+                    f"Edge target node '{edge['to']}' not defined in nodes"
+                )
+
+
+PATTERN = re.compile(r"\W")
+
+
+def _update_spec(spec: dict) -> None:
+    """Add an id to each node in the spec which will be used as a machine name."""
+    for node in spec["nodes"]:
+        # Set the node id to be a "machine name" if not provided
+        # convert any non alpha-numeric characters to underscores
+        node["id"] = PATTERN.sub("_", node["name"])
+
+
+def generate_from_spec(
+    spec_str: str,
+    format_: Literal["yaml", "json"],
+    templates: list[Literal["stub", "implementation"]],
+    *,
+    language: Literal["python", "typescript"] = "python",
+    stub_module: Optional[str] = None,
+) -> list[str]:
+    """Generate agent code from a YAML specification file.
+
+    Args:
+        spec_str: Specification encoded as a string
+        format_: Format of the specification
+        templates: Sequence of templates to generate
+        language: Language to generate code for
+        stub_module If known, the module name to import the stub from.
+            This will be known in the CLI.
+
+    Returns:
+        list[str]: List of generated code files, in the same order as the templates.
+    """
+    if format_ == "yaml":
+        try:
+            spec = yaml.safe_load(spec_str)
+        except Exception:
+            raise InvalidSpec("Invalid YAML spec.")
+    elif format_ == "json":
+        try:
+            spec = json.loads(spec_str)
+        except Exception:
+            raise InvalidSpec("Invalid JSON spec.")
+    else:
+        raise ValueError(f"Invalid format: {format_}")
+
+    _validate_spec(spec)
+    # Add machine names to the nodes
+    _update_spec(spec)
+
+    env = SandboxedEnvironment(
+        loader=jinja2.BaseLoader, trim_blocks=True, lstrip_blocks=True
+    )
+
+    generated = []
+
+    for template_name in templates:
+        try:
+            if template_name == "stub":
+                if language == "python":
+                    template = env.from_string(PY_STUB)
+                elif language == "typescript":
+                    template = env.from_string(TS_STUB)
+                else:
+                    raise ValueError(f"Invalid language: {language}")
+            elif template_name == "implementation":
+                if language == "python":
+                    template = env.from_string(PY_IMPL)
+                elif language == "typescript":
+                    template = env.from_string(TS_IMPL)
+                else:
+                    raise ValueError(f"Invalid language: {language}")
+            else:
+                raise ValueError(f"Invalid template type: {template_name}")
+            # Update the name based on the language
+
+            if "name" not in spec:
+                if language == "python":
+                    stub_name = "create_agent"
+                elif language == "typescript":
+                    stub_name = "createAgent"
+                else:
+                    raise ValueError(f"Invalid language: {language}")
+            else:
+                stub_name = spec["name"]
+
+            code = template.render(
+                stub_name=stub_name,
+                nodes=spec["nodes"],
+                edges=spec["edges"],
+                entrypoint=spec.get("entrypoint", None),
+                version=__version__,
+                stub_module=stub_module,
+            )
+            generated.append(code)
+        except jinja2.TemplateError as e:
+            raise AssertionError(
+                f"Error rendering template: {str(e)}",
+            )
+
+    return generated
+
+
+def _add_to_graph(
+    state_graph: StateGraph,
+    spec: str,
+    implementations: list[tuple[str, Callable]],
+) -> None:
+    """Add edges and implementations to the state graph, updating it in place.
+
+    Args:
+        state_graph (StateGraph): The state graph to update.
+        spec: Specification as a YAML string
+        implementations (list[tuple[str, Callable]]): The list of implementations.
+    """
+    spec_ = yaml.safe_load(spec)
+
+    # Declare the state graph
+    if not isinstance(spec_, dict):
+        raise TypeError(
+            f"Specification must be a top level dictionary. Found: {type(spec_)}"
+        )
+
+    # Identify all node implementations by scanning the edges
+    if "edges" not in spec_:
+        raise ValueError("Missing key 'edges' in spec.")
+
+    edges = spec_["edges"]
+    found_nodes: Set[str] = set()
+
+    for edge in edges:
+        if "from" in edge:
+            found_nodes.add(edge["from"])
+        if "to" in edge:
+            found_nodes.add(edge["to"])
+        if "condition" in edge:
+            found_nodes.add(edge["condition"])
+        if "paths" in edge:
+            if isinstance(edge["paths"], dict):
+                found_nodes.update(edge["paths"].values())
+            elif isinstance(edge["paths"], list):
+                found_nodes.update(edge["paths"])
+            else:
+                raise TypeError(f"Invalid paths: {edge['paths']}")
+
+    # Remove the end node from the edges since it's a special case
+    found_nodes = found_nodes - {"__end__"}
+
+    nodes_by_name = {name: implementation for name, implementation in implementations}
+    found_implementations = set(nodes_by_name)
+
+    missing_implementations = found_nodes - found_implementations
+
+    if missing_implementations:
+        raise ValueError(f"Missing implementations for : {missing_implementations}")
+
+    for name, node in nodes_by_name.items():
+        state_graph.add_node(name, node)
+
+    for edge in spec_["edges"]:
+        # It's a conditional edge
+        if "condition" in edge:
+            state_graph.add_conditional_edges(
+                edge["from"],
+                nodes_by_name[edge["condition"]],
+                path_map=edge["paths"] if "paths" in edge else None,
+            )
+        else:
+            # it's a directed edge
+            state_graph.add_edge(edge["from"], edge["to"])
+
+    # Set the entry point
+    if "entrypoint" in spec_:
+        state_graph.add_edge(START, spec_["entrypoint"])
+
+
+def _add_to_graph_from_yaml(
+    state_graph: StateGraph,
+    spec: str,
+    implementations: list[tuple[str, Callable]],
+) -> None:
+    """Add edges and implementations to the state graph, updating it in place.
+
+    Args:
+        state_graph (StateGraph): The state graph to update.
+        spec: Specification as a YAML string
+        implementations (list[tuple[str, Callable]]): The list of implementations.
+    """
+    spec_ = yaml.safe_load(spec)
+    return _add_to_graph(
+        state_graph,
+        spec_,
+        implementations,
+    )
+
+
+
+================================================
+FILE: langgraph_gen/assets/py-class-stub.j2
+================================================
+# This is an automatically generated file. Do not modify it.
+# This file was generated using `langgraph-gen` version {{ version }}.
+# To regenerate this file, run `langgraph-gen` with the source `YAML` file
+# as an argument.
+from abc import ABC, abstractmethod
+from typing import Type
+
+from langgraph.graph import StateGraph, END
+from pydantic import BaseModel
+
+
+class {{ class_name }}(ABC):
+    """Automatically generated stub."""
+
+    def __init__(self) -> None:
+        """Build the underlying graph."""
+        self.builder = StateGraph(self.state_schema)
+        {% for node in nodes %}
+        self.builder.add_node("{{ node.name }}", self.{{ node.name }})
+        {% endfor %}
+
+        {% for edge in edges %}
+        {% if edge.condition is defined %}
+        self.builder.add_conditional_edges(
+            "{{ edge.from }}",
+            self.{{ edge.condition }},
+            {% if edge.paths is mapping %}
+            {
+            {% for key, value in edge.paths.items() %}
+                "{{ key }}": "{{ value }}"
+            {% endfor %}
+            }
+            {% else %}
+            {% for path in edge.paths %}
+            "{{ path }}",
+            {% endfor %}
+            {% endif %}
+        )
+        {% else %}
+        self.builder.add_edge("{{ edge.from }}", {% if not edge.to %}END{%else %}"{{ edge.to }}"{% endif %})
+        {% endif %}
+        {% endfor %}
+
+        self.builder.set_entry_point("{{ entrypoint }}")
+        self.graph = self.builder.compile()
+
+    @property
+    @abstractmethod
+    def state_schema(self) -> Type[BaseModel]:
+        """Define your state schema as a Pydantic model"""
+
+    {% for node in nodes %}
+    @abstractmethod
+    def {{ node.name }}(self, state: dict) -> dict:
+        """{% if node.description %}{{ node.description }}{% else %}Node: {{ node.name }}{% endif %}"""
+
+    {% endfor %}
+    {% for edge in edges if edge.condition is defined %}
+    @abstractmethod
+    def {{ edge.condition }}(self, state: dict) -> str:
+        """Condition for {{ edge.from }} → {{ edge.paths|join(', ') }}"""
+    {% endfor %}
+
+
+================================================
+FILE: langgraph_gen/assets/py-impl-stub.j2
+================================================
+from typing import Type
+
+from pydantic import BaseModel
+
+# import the auto-generated stub
+## from [YOUR PACKAGE NAME] import {{ stub_name }}
+
+
+class MyState(BaseModel):
+    """Define your state schema as a Pydantic model"""
+    pass
+
+
+class {{ stub_name }}Implementation({{ stub_name }}):
+    def __init__(self) -> None:
+        """Build the underlying graph."""
+        super().__init__()
+
+    @property
+    def state_schema(self) -> Type[BaseModel]:
+        """Define your state schema as a Pydantic model"""
+        return MyState
+
+    {% for node in nodes %}
+    def {{ node.name }}(self, state: dict) -> dict:
+        """{% if node.description %}{{ node.description }}{% else %}Node: {{ node.name }}{% endif %}"""
+        raise NotImplementedError("Implement me.")
+
+    {% endfor %}
+    {% for edge in edges if edge.condition is defined %}
+    def {{ edge.condition }}(self, state: dict) -> str:
+        """Condition for {{ edge.from }} → {{ edge.paths|join(', ') }}"""
+        raise NotImplementedError("Implement me.")
+    {% endfor %}
+
+
+================================================
+FILE: langgraph_gen/assets/py-stub-impl.j2
+================================================
+"""This file was generated using `langgraph-gen` version {{ version }}.
+
+This file provides a placeholder implementation for the corresponding stub.
+
+Replace the placeholder implementation with your own logic.
+"""
+
+from typing_extensions import TypedDict
+
+{% if stub_module %}
+from {{ stub_module }} import {{ stub_name }}
+{% else %}
+# Update the import path
+# from [path to your stub] import {{ stub_name }}
+{% endif %}
+
+
+class SomeState(TypedDict):
+    # define your attributes here
+    foo: str
+
+
+# Define stand-alone functions
+{% for node in nodes %}
+def {{ node.id }}(state: SomeState) -> dict:
+    print("In node: {{ node.name }}")
+    return {
+        # Add your state update logic here
+    }
+
+
+{% endfor %}
+{% for edge in edges if edge.condition is defined %}
+def {{ edge.condition }}(state: SomeState) -> str:
+    print("In condition: {{ edge.condition }}")
+    raise NotImplementedError("Implement me.")
+
+
+{% endfor %}
+agent = {{ stub_name }}(
+    state_schema=SomeState,
+    impl=[
+    {% for node in nodes %}
+        ("{{ node.id }}", {{ node.id }}),
+    {% endfor %}
+    {% for edge in edges if edge.condition is defined %}
+        ("{{ edge.condition }}", {{ edge.condition }}),
+    {% endfor %}
+    ],
+)
+
+compiled_agent = agent.compile()
+
+print(compiled_agent.invoke({"foo": "bar"}))
+
+
+
+
+================================================
+FILE: langgraph_gen/assets/py-stub-runtime-json.j2
+================================================
+# This file was generated using `langgraph-gen` version {{ version }}.
+from typing import Callable, Set
+
+from langgraph.constants import START
+from langgraph.graph import StateGraph
+from typing_extensions import TypedDict
+
+
+class StateSchema(TypedDict):
+    # Define your attributes here
+    pass
+
+
+SPEC = {
+    "entrypoint": "{{ entrypoint }}",
+    "edges": [
+        {% for edge in edges %}
+        {
+            "from": "{{ edge.from }}",
+            {% if edge.condition is defined %}
+            "condition": "{{ edge.condition }}",
+            {% if edge.paths is mapping %}
+            "paths": {
+               {% for key, value in edge.paths.items() %}
+                "{{ key }}": "{{ value }}",
+                {% endfor %}
+            },
+            {% else %}
+            "paths": [
+                {% for path in edge.paths %}
+                "{{ path }}",
+                {% endfor %}
+            ],
+            {% endif %}
+            {% else %}
+            "to": "{{ edge.to }}",
+            {% endif %}
+        },
+        {% endfor %}
+    ]
+}
+
+
+# User defined implementations
+
+# Define the node functions
+{% for node in nodes %}
+def {{ node.name }}(state: StateSchema) -> dict:
+    """{% if node.description %}{{ node.description }}{% else %}Node: {{ node.name }}{% endif %}"""
+    print("Node: {{ node.name }}")
+    return {
+        # Add your state update logic here
+    }
+
+
+{% endfor %}
+{% for edge in edges if edge.condition is defined %}
+def {{ edge.condition }}(state: StateSchema) -> str:
+    """Condition for {{ edge.from }} → {{ edge.paths|join(', ') }}"""
+    raise NotImplementedError("Implement me.")
+
+
+{% endfor %}
+# Define a list of (node name, node function) tuples
+implementations = [
+    {% for node in nodes %}
+    ("{{ node.name }}", {{ node.name }}),
+    {% endfor %}
+    {% for edge in edges if edge.condition is defined %}
+    ("{{ edge.condition }}", {{ edge.condition }}),
+    {% endfor %}
+]
+
+
+# Declare the state graph
+builder = StateGraph(StateSchema)
+
+
+def add_to_graph(
+    state_graph: StateGraph,
+    spec: dict,
+    implementations: list[tuple[str, Callable]],
+) -> None:
+    """Add edges and implementations to the state graph, updating it in place."""
+    # Declare the state graph
+    if not isinstance(spec, dict):
+        raise TypeError(
+            f"Specification must be a top level dictionary. Found: {type(spec)}"
+        )
+
+    # Identify all node implementations by scanning the edges
+    if "edges" not in spec:
+        raise ValueError("Missing key 'edges' in spec.")
+
+    edges = spec["edges"]
+    found_nodes: Set[str] = set()
+
+    for edge in edges:
+        if "from" in edge:
+            found_nodes.add(edge["from"])
+        if "to" in edge:
+            found_nodes.add(edge["to"])
+        if "condition" in edge:
+            found_nodes.add(edge["condition"])
+        if "paths" in edge:
+            if isinstance(edge["paths"], dict):
+                found_nodes.update(edge["paths"].values())
+            elif isinstance(edge["paths"], list):
+                found_nodes.update(edge["paths"])
+            else:
+                raise TypeError(f"Invalid paths: {edge['paths']}")
+
+    # Remove the end node from the edges since it's a special case
+    found_nodes = found_nodes - {"__end__"}
+
+    nodes_by_name = {name: implementation for name, implementation in implementations}
+    found_implementations = set(nodes_by_name)
+
+    missing_implementations = found_nodes - found_implementations
+
+    if missing_implementations:
+        raise ValueError(f"Missing implementations for : {missing_implementations}")
+
+    for name, node in nodes_by_name.items():
+        state_graph.add_node(name, node)
+
+    for edge in spec["edges"]:
+        # It's a conditional edge
+        if "condition" in edge:
+            state_graph.add_conditional_edges(
+                edge["from"],
+                nodes_by_name[edge["condition"]],
+                path_map=edge["paths"] if "paths" in edge else None,
+            )
+        else:
+            # it's a directed edge
+            state_graph.add_edge(edge["from"], edge["to"])
+
+    # Set the entry point
+    state_graph.add_edge(START, spec["entrypoint"])
+
+
+# Update the state graph in place
+add_to_graph(builder, SPEC, implementations)
+
+# Compile the graph
+graph = builder.compile()
+
+# Invoke the graph
+# After you define StateSchema (above), you can invoke the graph with appropriate state
+# graph.invoke(...)
+
+
+================================================
+FILE: langgraph_gen/assets/py-stub-runtime-yaml.j2
+================================================
+# This file was generated using `langgraph-gen` version {{ version }}.
+from typing import Callable, Set
+
+import yaml
+from langgraph.constants import START
+from langgraph.graph import StateGraph
+from langgraph_gen import add_to_graph_from_yaml
+from typing_extensions import TypedDict
+
+
+class StateSchema(TypedDict):
+    # Define your attributes here
+    pass
+
+
+SPEC = """
+entrypoint: {{ entrypoint }}
+edges:
+  {% for edge in edges %}
+  - from: {{ edge.from }}
+    {% if edge.condition is defined %}
+    condition: {{ edge.condition }}
+    {% if edge.paths is mapping %}
+    paths:
+      {% for key, value in edge.paths.items() %}
+      {{ key }}: {{ value }}
+      {% endfor %}
+    {% else %}
+    paths:
+      {% for path in edge.paths %}
+      - {{ path }}
+      {% endfor %}
+    {% endif %}
+    {% else %}
+    to: {{ edge.to }}
+    {% endif %}
+  {% endfor %}
+"""
+
+# User defined implementations
+
+# Define the node functions
+{% for node in nodes %}
+def {{ node.name }}(state: StateSchema) -> dict:
+    """{% if node.description %}{{ node.description }}{% else %}Node: {{ node.name }}{% endif %}"""
+    print("Node: {{ node.name }}")
+    return {
+        # Add your state update logic here
+    }
+
+
+{% endfor %}
+{% for edge in edges if edge.condition is defined %}
+def {{ edge.condition }}(state: StateSchema) -> str:
+    """Condition for {{ edge.from }} → {{ edge.paths|join(', ') }}"""
+    raise NotImplementedError("Implement me.")
+
+
+{% endfor %}
+# Define a list of (node name, node function) tuples
+implementations = [
+    {% for node in nodes %}
+    ("{{ node.name }}", {{ node.name }}),
+    {% endfor %}
+    {% for edge in edges if edge.condition is defined %}
+    ("{{ edge.condition }}", {{ edge.condition }}),
+    {% endfor %}
+]
+
+
+# Declare the state graph
+builder = StateGraph(StateSchema)
+
+# Update the state graph in place
+add_to_graph(builder, SPEC, implementations)
+
+# Compile the graph
+graph = builder.compile()
+
+# Invoke the graph
+# After you define StateSchema (above), you can invoke the graph with appropriate state
+# graph.invoke(...)
+
+
+================================================
+FILE: langgraph_gen/assets/py-stub.j2
+================================================
+"""This is an automatically generated file. Do not modify it.
+
+This file was generated using `langgraph-gen` version {{ version }}.
+To regenerate this file, run `langgraph-gen` with the source `yaml` file as an argument.
+
+Usage:
+
+1. Add the generated file to your project.
+2. Create a new agent using the stub.
+
+Below is a sample implementation of the generated stub:
+
+```python
+from typing_extensions import TypedDict
+
+{% if stub_module %}
+from {{ stub_module }} import {{ stub_name }}
+{% else %}
+# Update the import path
+# from [path to your stub] import {{ stub_name }}
+{% endif %}
+
+class SomeState(TypedDict):
+    # define your attributes here
+    foo: str
+
+# Define stand-alone functions
+{% for node in nodes %}
+def {{ node.id }}(state: SomeState) -> dict:
+    print("In node: {{ node.name }}")
+    return {
+        # Add your state update logic here
+    }
+
+
+{% endfor %}
+{% for edge in edges if edge.condition is defined %}
+def {{ edge.condition }}(state: SomeState) -> str:
+    print("In condition: {{ edge.condition }}")
+    raise NotImplementedError("Implement me.")
+
+
+{% endfor %}
+agent = {{ stub_name }}(
+    state_schema=SomeState,
+    impl=[
+    {% for node in nodes %}
+        ("{{ node.name }}", {{ node.id }}),
+    {% endfor %}
+    {% for edge in edges if edge.condition is defined %}
+        ("{{ edge.condition }}", {{ edge.condition }}),
+    {% endfor %}
+    ]
+)
+
+compiled_agent = agent.compile()
+
+print(compiled_agent.invoke({"foo": "bar"}))
+"""
+{% macro standard_edge(edge) %}
+    {% if edge == "__end__" %}END{% elif edge == "__start__" %}START{% else %}"{{ edge }}"{% endif %}
+{% endmacro %}
+
+from typing import Callable, Any, Optional, Type
+
+from langgraph.constants import START, END  # noqa: F401
+from langgraph.graph import StateGraph
+
+
+def {{ stub_name }}(
+    *,
+    state_schema: Optional[Type[Any]] = None,
+    config_schema: Optional[Type[Any]] = None,
+    input: Optional[Type[Any]] = None,
+    output: Optional[Type[Any]] = None,
+    impl: list[tuple[str, Callable]],
+) -> StateGraph:
+    """Create the state graph for {{ stub_name }}."""
+    # Declare the state graph
+    builder = StateGraph(
+        state_schema, config_schema=config_schema, input=input, output=output
+    )
+
+    nodes_by_name = {name: imp for name, imp in impl}
+
+    all_names = set(nodes_by_name)
+
+    expected_implementations = {
+        {% for node in nodes %}
+        "{{ node.id }}",
+        {% endfor %}
+        {% for edge in edges if edge.condition %}
+        "{{ edge.condition }}",
+        {% endfor %}
+    }
+
+    missing_nodes = expected_implementations - all_names
+    if missing_nodes:
+        raise ValueError(f"Missing implementations for: {missing_nodes}")
+
+    extra_nodes = all_names - expected_implementations
+
+    if extra_nodes:
+        raise ValueError(
+            f"Extra implementations for: {extra_nodes}. Please regenerate the stub."
+        )
+
+    # Add nodes
+    {% for node in nodes %}
+    builder.add_node("{{ node.name }}", nodes_by_name["{{ node.id }}"])
+    {% endfor %}
+
+    # Add edges
+    {% for edge in edges %}
+    {% if edge.condition is defined %}
+    builder.add_conditional_edges(
+        {{ standard_edge(edge.from) }},
+        nodes_by_name["{{ edge.condition }}"],
+        {% if edge.paths is mapping %}
+        {
+        {% for key, value in edge.paths.items() %}
+            "{{ key }}": {{ standard_edge(value) }},
+        {% endfor %}
+        }
+        {% else %}
+        [
+        {%  for path in edge.paths %}
+            {{ standard_edge(path) }},
+        {% endfor %}
+        ],
+        {% endif %}
+    )
+    {% else %}
+    builder.add_edge({{ standard_edge(edge.from) }}, {{ standard_edge(edge.to) }})
+    {% endif %}
+    {% endfor %}
+    {% if entrypoint %}
+    builder.set_entry_point("{{ entrypoint }}")
+    {% endif %}
+    return builder
+
+
+
+
+================================================
+FILE: langgraph_gen/assets/ts-stub-impl.j2
+================================================
+/* This file was generated using `langgraph-gen` version {{ version }}.
+
+This file provides a placeholder implementation for the corresponding stub.
+
+Replace the placeholder implementation with your own logic.
+*/
+import { Annotation } from "@langchain/langgraph";
+
+{% if stub_module %}
+import { {{ stub_name }} } from "{{ stub_module }}"
+{% else %}
+// Update the import path appropriately
+// import { {{ stub_name }} } from "[some_path]";
+{% endif %}
+
+const agent = {{ stub_name }}(Annotation.Root({ foo: Annotation<string>() }), {
+    {%  for node in nodes  %}
+    {{ node.id }}: (state) => {
+        console.log("In node: {{ node.name }}")
+        return {} // Add your state update logic here
+    },
+    {%  endfor  %}
+    {% for edge in edges %}
+    {% if edge.condition is defined %}
+    {{ edge.condition }}: (state) => {
+        console.log("In condition: {{ edge.condition }}");
+        throw new Error("Implement me. Returns one of the paths.");
+    },
+    {% endif %}
+    {% endfor %}
+});
+
+const compiled_agent = agent.compile();
+console.log(await compiled_agent.invoke({ foo: "bar" }));
+
+
+================================================
+FILE: langgraph_gen/assets/ts-stub.j2
+================================================
+/* This is an automatically generated file. Do not modify it.
+
+This file was generated using `langgraph-gen` version {{ version }}.
+To regenerate this file, run `langgraph-gen` with the source `YAML` file as an argument.
+
+Usage:
+
+1. Add the generated file to your project.
+2. Create a new agent using the stub.
+
+```typescript
+{% macro standard_edge(edge) %}
+    {% if edge == "__end__" %}END{% elif edge == "__start__" %}START{% else %}"{{ edge }}"{% endif %}
+{% endmacro %}
+{% if stub_module %}
+import { {{ stub_name }} } from "{{ stub_module }}"
+{% else %}
+import { {{ stub_name }} } from "[some_path]";
+{% endif %}
+
+
+const StateAnnotation = Annotation.Root({
+    // Define your state properties here
+    foo: Annotation<string>(),
+});
+
+const agent = CustomAgentStub(Annotation.Root({ foo: Annotation<string>() }), {
+    {%  for node in nodes  %}
+    {{ node.id }}: (state) => console.log("In node: {{ node.name }}"),
+    {%  endfor  %}
+    {% for edge in edges %}
+    {% if edge.condition is defined %}
+    {{ edge.condition }}: (state) => {
+        console.log("In condition: {{ edge.condition }}");
+        throw new Error("Implement me. Returns one of the paths.");
+    },
+    {% endif %}
+    {% endfor %}
+});
+
+const compiled_agent = agent.compile();
+console.log(await compiled_agent.invoke({ foo: "bar" }));
+```
+
+*/
+import {
+    StateGraph,
+    START,
+    END,
+    type AnnotationRoot,
+} from "@langchain/langgraph";
+
+type AnyAnnotationRoot = AnnotationRoot<any>;
+
+export function {{ stub_name }}<TAnnotation extends AnyAnnotationRoot>(
+  stateAnnotation: TAnnotation,
+  impl: {
+    {%  for node in nodes  %}
+    {{ node.id }}: (state: TAnnotation["State"]) => TAnnotation["Update"],
+    {%  endfor  %}
+    {% for edge in edges %}
+    {% if edge.condition is defined %}
+    {{ edge.condition }}: (state: TAnnotation["State"]) => string,
+    {% endif %}
+    {% endfor %}
+  }
+) {
+  return new StateGraph(stateAnnotation)
+    {% for node in nodes %}
+    .addNode("{{ node.name }}", impl.{{ node.id }})
+    {% endfor %}
+    {% if entrypoint %}
+    .addEdge(START, "{{ entrypoint }}")
+    {% endif %}
+    {% for edge in edges %}
+    {% if edge.condition is defined %}
+    .addConditionalEdges(
+        {{ standard_edge(edge.from) }},
+        impl.{{ edge.condition }},
+        {% if edge.paths is mapping %}
+        {
+        {% for key, value in edge.paths.items() %}
+            {{ key }}: {{ standard_edge(value) }},
+        {% endfor %}
+        }
+        {% else %}
+        [
+        {% for path in edge.paths %}
+            {{ standard_edge(path) }},
+        {% endfor %}
+        ]
+        {% endif %}
+    )
+    {% else %}
+    .addEdge({{ standard_edge(edge.from) }}, {{ standard_edge(edge.to) }})
+    {% endif %}
+    {% endfor %}
+}
+
+
+
+================================================
+FILE: tests/__init__.py
+================================================
+
+
+
+================================================
+FILE: tests/test_code_generation.py
+================================================
+import ast
+
+from langgraph_gen.generate import generate_from_spec
+
+SAMPLE_YAML = """\
+# agent_graph.yaml
+entrypoint: start
+nodes:
+  - name: start
+  - name: process
+  - name: decide
+edges:
+  - from: start
+    to: process
+  - from: process
+    to: decide
+  - from: decide
+    condition: check_decision
+    paths:
+      continue: process
+      end: __end__
+"""
+
+
+def test_generate_from_yaml() -> None:
+    """Simple end-to-end test to verify that valid python code is generated"""
+    stub = generate_from_spec(
+        SAMPLE_YAML, "yaml", language="python", templates=["stub"]
+    )[0]
+    # Try to parse the ast to verify it works
+    ast.parse(stub)
+
+    # Try to exec the code to verify it works
+    # Prepare a globals dictionary that simulates the main module environment
+    globals_dict = {
+        "__name__": "__main__",
+        "__file__": "your_script.py",
+        "__package__": None,
+    }
+
+    # Exec is safe in this context since all the code is fully controlled by us
+    # and it appears only on the test path.
+    exec(stub, globals_dict)
+
+
+JSON_SPEC = """\
+{
+  "entrypoint": "start",
+  "nodes": [
+    { "name": "start" },
+    { "name": "process" },
+    { "name": "decide" }
+  ],
+  "edges": [
+    { "from": "start", "to": "process" },
+    { "from": "process", "to": "decide" },
+    {
+      "from": "decide",
+      "condition": "check_decision",
+      "paths": {
+        "continue": "process",
+        "end": "__end__"
+      }
+    }
+  ]
+}
+"""
+
+
+def test_generate_from_json() -> None:
+    """Simple end-to-end test to verify that valid python code is generated"""
+    code = generate_from_spec(JSON_SPEC, "json", language="python", templates=["stub"])[
+        0
+    ]
+    # Try to parse the ast to verify it works
+    ast.parse(code)
+    # Try to exec the code to verify it works
+    # Prepare a globals dictionary that simulates the main module environment
+    globals_dict = {
+        "__name__": "__main__",
+        "__file__": "your_script.py",
+        "__package__": None,
+    }
+
+    # Exec is safe in this context since all the code is fully controlled by us
+    # and it appears only on the test path.
+    exec(code, globals_dict)
+
+
+def test_generate_from_yaml_typescript() -> None:
+    """Simple end-to-end test to verify that valid python code is generated"""
+    code = generate_from_spec(
+        SAMPLE_YAML, "yaml", language="typescript", templates=["stub"]
+    )[0]
+    assert isinstance(code, str)
+
+
+THREE_NODE_SEQUENCE_YAML = """\
+# agent_graph.yaml
+entrypoint: node1
+nodes:
+  - name: node1
+  - name: node2
+  - name: node3
+edges:
+  - from: node1
+    to: node2
+  - from: node2
+    to: node3
+"""
+
+
+def test_stub_and_implementation() -> None:
+    """Test stub and generated implementation for a simple 3 node graph."""
+    stub, impl = generate_from_spec(
+        THREE_NODE_SEQUENCE_YAML,
+        "yaml",
+        language="python",
+        templates=["stub", "implementation"],
+    )
+    # Try to parse the ast to verify it works
+    ast.parse(stub)
+    ast.parse(impl)
+
+    # Try to exec the code to verify it works
+    # Prepare a globals dictionary that simulates the main module environment
+    globals_dict = {
+        "__name__": "__main__",
+        "__file__": "your_script.py",
+        "__package__": None,
+    }
+
+    # Exec is safe in this context since all the code is fully controlled by us
+    # and it appears only on the test path.
+    exec(stub, globals_dict)
+
+    exec(impl, globals_dict)
+
+
+NON_MACHINE_FRIENDLY_NAMES_YAML = """\
+# agent_graph.yaml
+entrypoint: node-1
+nodes:
+  - name: node-1
+  - name: node-2
+  - name: node-3
+edges:
+  - from: node-1
+    to: node-2
+  - from: node-2
+    to: node-3
+"""
+
+
+def test_generation_with_human_names() -> None:
+    """Test generation with non machine-friendly names."""
+    stub, impl = generate_from_spec(
+        NON_MACHINE_FRIENDLY_NAMES_YAML,
+        "yaml",
+        language="python",
+        templates=["stub", "implementation"],
+    )
+    # Try to parse the ast to verify it works
+    ast.parse(stub)
+    ast.parse(impl)
+
+    # Try to exec the code to verify it works
+    # Prepare a globals dictionary that simulates the main module environment
+    globals_dict = {
+        "__name__": "__main__",
+        "__file__": "your_script.py",
+        "__package__": None,
+    }
+
+    # Exec is safe in this context since all the code is fully controlled by us
+    # and it appears only on the test path.
+    exec(stub, globals_dict)
+
+    exec(impl, globals_dict)
+
+
+
+================================================
+FILE: tests/integrations/sample_01.py
+================================================
+"""This is an automatically generated file. Do not modify it.
+
+This file was generated using `langgraph-gen` version 0.0.3.
+To regenerate this file, run `langgraph-gen` with the source `yaml` file as an argument.
+
+Usage:
+
+1. Add the generated file to your project.
+2. Create a new agent using the stub.
+
+Below is a sample implementation of the generated stub:
+
+```python
+from typing_extensions import TypedDict
+
+from sample_01 import create_agent
+
+class SomeState(TypedDict):
+    # define your attributes here
+    foo: str
+
+# Define stand-alone functions
+def Node_1(state: SomeState) -> dict:
+    print("In node: Node 1")
+    return {
+        # Add your state update logic here
+    }
+
+
+def Node_2(state: SomeState) -> dict:
+    print("In node: Node 2")
+    return {
+        # Add your state update logic here
+    }
+
+
+def Node_3(state: SomeState) -> dict:
+    print("In node: Node 3")
+    return {
+        # Add your state update logic here
+    }
+
+
+def conditional_edge(state: SomeState) -> str:
+    print("In condition: conditional_edge")
+    raise NotImplementedError("Implement me.")
+
+
+agent = create_agent(
+    state_schema=SomeState,
+    impl=[
+        ("Node 1", Node_1),
+        ("Node 2", Node_2),
+        ("Node 3", Node_3),
+        ("conditional_edge", conditional_edge),
+    ]
+)
+
+compiled_agent = agent.compile()
+
+print(compiled_agent.invoke({"foo": "bar"}))
+"""
+
+from typing import Callable, Any, Optional, Type
+
+from langgraph.constants import START, END
+from langgraph.graph import StateGraph
+
+
+def create_agent(
+    *,
+    state_schema: Optional[Type[Any]] = None,
+    config_schema: Optional[Type[Any]] = None,
+    input: Optional[Type[Any]] = None,
+    output: Optional[Type[Any]] = None,
+    impl: list[tuple[str, Callable]],
+) -> StateGraph:
+    """Create the state graph for create_agent."""
+    # Declare the state graph
+    builder = StateGraph(
+        state_schema, config_schema=config_schema, input=input, output=output
+    )
+
+    nodes_by_name = {name: imp for name, imp in impl}
+
+    all_names = set(nodes_by_name)
+
+    expected_implementations = {
+        "Node_1",
+        "Node_2",
+        "Node_3",
+        "conditional_edge",
+    }
+
+    missing_nodes = expected_implementations - all_names
+    if missing_nodes:
+        raise ValueError(f"Missing implementations for: {missing_nodes}")
+
+    extra_nodes = all_names - expected_implementations
+
+    if extra_nodes:
+        raise ValueError(
+            f"Extra implementations for: {extra_nodes}. Please regenerate the stub."
+        )
+
+    # Add nodes
+    builder.add_node("Node 1", nodes_by_name["Node_1"])
+    builder.add_node("Node 2", nodes_by_name["Node_2"])
+    builder.add_node("Node 3", nodes_by_name["Node_3"])
+
+    # Add edges
+    builder.add_edge(START, "Node 1")
+    builder.add_edge("Node 3", END)
+    builder.add_edge("Node 2", END)
+    builder.add_conditional_edges(
+        "Node 1",
+        nodes_by_name["conditional_edge"],
+        [
+            "Node 2",
+            "Node 3",
+        ],
+    )
+    return builder
+
+
+
+================================================
+FILE: tests/integrations/sample_01.ts
+================================================
+/* This is an automatically generated file. Do not modify it.
+
+This file was generated using `langgraph-gen` version 0.0.3.
+To regenerate this file, run `langgraph-gen` with the source `YAML` file as an argument.
+
+Usage:
+
+1. Add the generated file to your project.
+2. Create a new agent using the stub.
+
+```typescript
+import { createAgent } from "sample_01"
+
+
+const StateAnnotation = Annotation.Root({
+    // Define your state properties here
+    foo: Annotation<string>(),
+});
+
+const agent = CustomAgentStub(Annotation.Root({ foo: Annotation<string>() }), {
+    Node_1: (state) => console.log("In node: Node 1"),
+    Node_2: (state) => console.log("In node: Node 2"),
+    Node_3: (state) => console.log("In node: Node 3"),
+    conditional_edge: (state) => {
+        console.log("In condition: conditional_edge");
+        throw new Error("Implement me. Returns one of the paths.");
+    },
+});
+
+const compiled_agent = agent.compile();
+console.log(await compiled_agent.invoke({ foo: "bar" }));
+```
+
+*/
+import {
+    StateGraph,
+    START,
+    END,
+    type AnnotationRoot,
+} from "@langchain/langgraph";
+
+type AnyAnnotationRoot = AnnotationRoot<any>;
+
+export function createAgent<TAnnotation extends AnyAnnotationRoot>(
+  stateAnnotation: TAnnotation,
+  impl: {
+    Node_1: (state: TAnnotation["State"]) => TAnnotation["Update"],
+    Node_2: (state: TAnnotation["State"]) => TAnnotation["Update"],
+    Node_3: (state: TAnnotation["State"]) => TAnnotation["Update"],
+    conditional_edge: (state: TAnnotation["State"]) => string,
+  }
+) {
+  return new StateGraph(stateAnnotation)
+    .addNode("Node 1", impl.Node_1)
+    .addNode("Node 2", impl.Node_2)
+    .addNode("Node 3", impl.Node_3)
+    .addEdge(START, "Node 1")
+    .addEdge("Node 3", END)
+    .addEdge("Node 2", END)
+    .addConditionalEdges(
+        "Node 1",
+        impl.conditional_edge,
+        [
+            "Node 2",
+            "Node 3",
+        ]
+    )
+}
+
+
+================================================
+FILE: tests/integrations/sample_01.yml
+================================================
+nodes:
+  - name: Node 1
+  - name: Node 2
+  - name: Node 3
+edges:
+  - from: __start__
+    to: Node 1
+  - from: Node 3
+    to: __end__
+  - from: Node 2
+    to: __end__
+  - from: Node 1
+    condition: conditional_edge
+    paths: [Node 2, Node 3]
+
+
+================================================
+FILE: tests/integrations/sample_01_impl.py
+================================================
+"""This file was generated using `langgraph-gen` version 0.0.3.
+
+This file provides a placeholder implementation for the corresponding stub.
+
+Replace the placeholder implementation with your own logic.
+"""
+
+from typing_extensions import TypedDict
+
+from sample_01 import create_agent
+
+
+class SomeState(TypedDict):
+    # define your attributes here
+    foo: str
+
+
+# Define stand-alone functions
+def Node_1(state: SomeState) -> dict:
+    print("In node: Node 1")
+    return {
+        # Add your state update logic here
+    }
+
+
+def Node_2(state: SomeState) -> dict:
+    print("In node: Node 2")
+    return {
+        # Add your state update logic here
+    }
+
+
+def Node_3(state: SomeState) -> dict:
+    print("In node: Node 3")
+    return {
+        # Add your state update logic here
+    }
+
+
+def conditional_edge(state: SomeState) -> str:
+    print("In condition: conditional_edge")
+    raise NotImplementedError("Implement me.")
+
+
+agent = create_agent(
+    state_schema=SomeState,
+    impl=[
+        ("Node_1", Node_1),
+        ("Node_2", Node_2),
+        ("Node_3", Node_3),
+        ("conditional_edge", conditional_edge),
+    ],
+)
+
+compiled_agent = agent.compile()
+
+print(compiled_agent.invoke({"foo": "bar"}))
+
+
+
+================================================
+FILE: tests/integrations/sample_01_impl.ts
+================================================
+/* This file was generated using `langgraph-gen` version 0.0.3.
+
+This file provides a placeholder implementation for the corresponding stub.
+
+Replace the placeholder implementation with your own logic.
+*/
+import { Annotation } from "@langchain/langgraph";
+
+import { createAgent } from "sample_01"
+
+const agent = createAgent(Annotation.Root({ foo: Annotation<string>() }), {
+    Node_1: (state) => {
+        console.log("In node: Node 1")
+        return {} // Add your state update logic here
+    },
+    Node_2: (state) => {
+        console.log("In node: Node 2")
+        return {} // Add your state update logic here
+    },
+    Node_3: (state) => {
+        console.log("In node: Node 3")
+        return {} // Add your state update logic here
+    },
+    conditional_edge: (state) => {
+        console.log("In condition: conditional_edge");
+        throw new Error("Implement me. Returns one of the paths.");
+    },
+});
+
+const compiled_agent = agent.compile();
+console.log(await compiled_agent.invoke({ foo: "bar" }));
+
+
+================================================
+FILE: tests/integrations/sample_02.py
+================================================
+"""This is an automatically generated file. Do not modify it.
+
+This file was generated using `langgraph-gen` version 0.0.3.
+To regenerate this file, run `langgraph-gen` with the source `yaml` file as an argument.
+
+Usage:
+
+1. Add the generated file to your project.
+2. Create a new agent using the stub.
+
+Below is a sample implementation of the generated stub:
+
+```python
+from typing_extensions import TypedDict
+
+from sample_02 import create_agent
+
+class SomeState(TypedDict):
+    # define your attributes here
+    foo: str
+
+# Define stand-alone functions
+def Node_1(state: SomeState) -> dict:
+    print("In node: Node 1")
+    return {
+        # Add your state update logic here
+    }
+
+
+def Node_2(state: SomeState) -> dict:
+    print("In node: Node 2")
+    return {
+        # Add your state update logic here
+    }
+
+
+def conditional_edge(state: SomeState) -> str:
+    print("In condition: conditional_edge")
+    raise NotImplementedError("Implement me.")
+
+
+agent = create_agent(
+    state_schema=SomeState,
+    impl=[
+        ("Node 1", Node_1),
+        ("Node 2", Node_2),
+        ("conditional_edge", conditional_edge),
+    ]
+)
+
+compiled_agent = agent.compile()
+
+print(compiled_agent.invoke({"foo": "bar"}))
+"""
+
+from typing import Callable, Any, Optional, Type
+
+from langgraph.constants import START, END
+from langgraph.graph import StateGraph
+
+
+def create_agent(
+    *,
+    state_schema: Optional[Type[Any]] = None,
+    config_schema: Optional[Type[Any]] = None,
+    input: Optional[Type[Any]] = None,
+    output: Optional[Type[Any]] = None,
+    impl: list[tuple[str, Callable]],
+) -> StateGraph:
+    """Create the state graph for create_agent."""
+    # Declare the state graph
+    builder = StateGraph(
+        state_schema, config_schema=config_schema, input=input, output=output
+    )
+
+    nodes_by_name = {name: imp for name, imp in impl}
+
+    all_names = set(nodes_by_name)
+
+    expected_implementations = {
+        "Node_1",
+        "Node_2",
+        "conditional_edge",
+    }
+
+    missing_nodes = expected_implementations - all_names
+    if missing_nodes:
+        raise ValueError(f"Missing implementations for: {missing_nodes}")
+
+    extra_nodes = all_names - expected_implementations
+
+    if extra_nodes:
+        raise ValueError(
+            f"Extra implementations for: {extra_nodes}. Please regenerate the stub."
+        )
+
+    # Add nodes
+    builder.add_node("Node 1", nodes_by_name["Node_1"])
+    builder.add_node("Node 2", nodes_by_name["Node_2"])
+
+    # Add edges
+    builder.add_conditional_edges(
+        START,
+        nodes_by_name["conditional_edge"],
+        [
+            "Node 1",
+            "Node 2",
+            END,
+        ],
+    )
+    builder.add_edge("Node 1", "Node 2")
+    builder.add_edge("Node 2", END)
+    return builder
+
+
+
+================================================
+FILE: tests/integrations/sample_02.ts
+================================================
+/* This is an automatically generated file. Do not modify it.
+
+This file was generated using `langgraph-gen` version 0.0.3.
+To regenerate this file, run `langgraph-gen` with the source `YAML` file as an argument.
+
+Usage:
+
+1. Add the generated file to your project.
+2. Create a new agent using the stub.
+
+```typescript
+import { createAgent } from "sample_02"
+
+
+const StateAnnotation = Annotation.Root({
+    // Define your state properties here
+    foo: Annotation<string>(),
+});
+
+const agent = CustomAgentStub(Annotation.Root({ foo: Annotation<string>() }), {
+    Node_1: (state) => console.log("In node: Node 1"),
+    Node_2: (state) => console.log("In node: Node 2"),
+    conditional_edge: (state) => {
+        console.log("In condition: conditional_edge");
+        throw new Error("Implement me. Returns one of the paths.");
+    },
+});
+
+const compiled_agent = agent.compile();
+console.log(await compiled_agent.invoke({ foo: "bar" }));
+```
+
+*/
+import {
+    StateGraph,
+    START,
+    END,
+    type AnnotationRoot,
+} from "@langchain/langgraph";
+
+type AnyAnnotationRoot = AnnotationRoot<any>;
+
+export function createAgent<TAnnotation extends AnyAnnotationRoot>(
+  stateAnnotation: TAnnotation,
+  impl: {
+    Node_1: (state: TAnnotation["State"]) => TAnnotation["Update"],
+    Node_2: (state: TAnnotation["State"]) => TAnnotation["Update"],
+    conditional_edge: (state: TAnnotation["State"]) => string,
+  }
+) {
+  return new StateGraph(stateAnnotation)
+    .addNode("Node 1", impl.Node_1)
+    .addNode("Node 2", impl.Node_2)
+    .addConditionalEdges(
+        START,
+        impl.conditional_edge,
+        [
+            "Node 1",
+            "Node 2",
+            END,
+        ]
+    )
+    .addEdge("Node 1", "Node 2")
+    .addEdge("Node 2", END)
+}
+
+
+================================================
+FILE: tests/integrations/sample_02.yml
+================================================
+nodes:
+  - name: Node 1
+  - name: Node 2
+edges:
+  - from: __start__
+    condition: conditional_edge
+    paths: [Node 1, Node 2, __end__]
+  - from: Node 1
+    to: Node 2
+  - from: Node 2
+    to: __end__
+
+
+
+================================================
+FILE: tests/integrations/sample_02_impl.py
+================================================
+"""This file was generated using `langgraph-gen` version 0.0.3.
+
+This file provides a placeholder implementation for the corresponding stub.
+
+Replace the placeholder implementation with your own logic.
+"""
+
+from typing_extensions import TypedDict
+
+from sample_02 import create_agent
+
+
+class SomeState(TypedDict):
+    # define your attributes here
+    foo: str
+
+
+# Define stand-alone functions
+def Node_1(state: SomeState) -> dict:
+    print("In node: Node 1")
+    return {
+        # Add your state update logic here
+    }
+
+
+def Node_2(state: SomeState) -> dict:
+    print("In node: Node 2")
+    return {
+        # Add your state update logic here
+    }
+
+
+def conditional_edge(state: SomeState) -> str:
+    print("In condition: conditional_edge")
+    raise NotImplementedError("Implement me.")
+
+
+agent = create_agent(
+    state_schema=SomeState,
+    impl=[
+        ("Node_1", Node_1),
+        ("Node_2", Node_2),
+        ("conditional_edge", conditional_edge),
+    ],
+)
+
+compiled_agent = agent.compile()
+
+print(compiled_agent.invoke({"foo": "bar"}))
+
+
+
+================================================
+FILE: tests/integrations/sample_02_impl.ts
+================================================
+/* This file was generated using `langgraph-gen` version 0.0.3.
+
+This file provides a placeholder implementation for the corresponding stub.
+
+Replace the placeholder implementation with your own logic.
+*/
+import { Annotation } from "@langchain/langgraph";
+
+import { createAgent } from "sample_02"
+
+const agent = createAgent(Annotation.Root({ foo: Annotation<string>() }), {
+    Node_1: (state) => {
+        console.log("In node: Node 1")
+        return {} // Add your state update logic here
+    },
+    Node_2: (state) => {
+        console.log("In node: Node 2")
+        return {} // Add your state update logic here
+    },
+    conditional_edge: (state) => {
+        console.log("In condition: conditional_edge");
+        throw new Error("Implement me. Returns one of the paths.");
+    },
+});
+
+const compiled_agent = agent.compile();
+console.log(await compiled_agent.invoke({ foo: "bar" }));
+
+
+================================================
+FILE: .github/actions/uv_setup/action.yml
+================================================
+# TODO: https://docs.astral.sh/uv/guides/integration/github/#caching
+
+name: uv-install
+description: Set up Python and uv
+
+inputs:
+  python-version:
+    description: Python version, supporting MAJOR.MINOR only
+    required: true
+
+env:
+  UV_VERSION: "0.5.25"
+
+runs:
+  using: composite
+  steps:
+    - name: Install uv and set the python version
+      uses: astral-sh/setup-uv@v5
+      with:
+        version: ${{ env.UV_VERSION }}
+        python-version: ${{ inputs.python-version }}
+
+
+
+================================================
+FILE: .github/workflows/_lint.yml
+================================================
+name: lint
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        required: true
+        type: string
+        description: "From which folder this pipeline executes"
+      python-version:
+        required: true
+        type: string
+        description: "Python version to use"
+
+env:
+  WORKDIR: ${{ inputs.working-directory == '' && '.' || inputs.working-directory }}
+
+  # This env var allows us to get inline annotations when ruff has complaints.
+  RUFF_OUTPUT_FORMAT: github
+
+  UV_FROZEN: "true"
+
+jobs:
+  build:
+    name: "make lint #${{ inputs.python-version }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ inputs.python-version }} + uv
+        uses: "./.github/actions/uv_setup"
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Install dependencies
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          uv sync --group test
+
+      - name: Analysing the code with our lint
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          make lint
+
+
+
+================================================
+FILE: .github/workflows/_test.yml
+================================================
+name: test
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        required: true
+        type: string
+        description: "From which folder this pipeline executes"
+      python-version:
+        required: true
+        type: string
+        description: "Python version to use"
+
+env:
+  UV_FROZEN: "true"
+  UV_NO_SYNC: "true"
+
+jobs:
+  build:
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    name: "make test #${{ inputs.python-version }}"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ inputs.python-version }} + uv
+        uses: "./.github/actions/uv_setup"
+        id: setup-python
+        with:
+          python-version: ${{ inputs.python-version }}
+      - name: Install dependencies
+        shell: bash
+        run: uv sync --group test
+
+      - name: Run core tests
+        shell: bash
+        run: |
+          make test
+
+
+
+================================================
+FILE: .github/workflows/ci.yml
+================================================
+---
+name: Run CI Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:  # Allows to trigger the workflow manually in GitHub UI
+
+# If another push to the same PR or branch happens while this workflow is still running,
+# cancel the earlier run in favor of the next run.
+#
+# There's no point in testing an outdated version of the code. GitHub only allows
+# a limited number of job runners to be active at the same time, so it's better to cancel
+# pointless jobs early so that more useful jobs can run sooner.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    strategy:
+      matrix:
+        # Only lint on the min and max supported Python versions.
+        # It's extremely unlikely that there's a lint issue on any version in between
+        # that doesn't show up on the min or max versions.
+        #
+        # GitHub rate-limits how many jobs can be running at any one time.
+        # Starting new jobs is also relatively slow,
+        # so linting on fewer versions makes CI faster.
+        python-version:
+          - "3.12"
+    uses:
+      ./.github/workflows/_lint.yml
+    with:
+      working-directory: .
+      python-version: ${{ matrix.python-version }}
+    secrets: inherit
+  test:
+    strategy:
+      matrix:
+        # Only lint on the min and max supported Python versions.
+        # It's extremely unlikely that there's a lint issue on any version in between
+        # that doesn't show up on the min or max versions.
+        #
+        # GitHub rate-limits how many jobs can be running at any one time.
+        # Starting new jobs is also relatively slow,
+        # so linting on fewer versions makes CI faster.
+        python-version:
+          - "3.9"
+          - "3.12"
+    uses:
+      ./.github/workflows/_test.yml
+    with:
+      working-directory: .
+      python-version: ${{ matrix.python-version }}
+    secrets: inherit
+
+
+
+
+================================================
+FILE: .github/workflows/release.yml
+================================================
+name: release
+run-name: Release ${{ inputs.working-directory }} by @${{ github.actor }}
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        required: true
+        type: string
+        description: "From which folder this pipeline executes"
+  workflow_dispatch:
+    inputs:
+      working-directory:
+        description: "From which folder this pipeline executes"
+        default: "."
+      dangerous-nonmain-release:
+        required: false
+        type: boolean
+        default: false
+        description: "Release from a non-main branch (danger!)"
+
+env:
+  PYTHON_VERSION: "3.11"
+  UV_FROZEN: "true"
+  UV_NO_SYNC: "true"
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main' || inputs.dangerous-nonmain-release
+    environment: Scheduled testing
+    runs-on: ubuntu-latest
+
+    outputs:
+      pkg-name: ${{ steps.check-version.outputs.pkg-name }}
+      version: ${{ steps.check-version.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python + uv
+        uses: "./.github/actions/uv_setup"
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      # We want to keep this build stage *separate* from the release stage,
+      # so that there's no sharing of permissions between them.
+      # The release stage has trusted publishing and GitHub repo contents write access,
+      # and we want to keep the scope of that access limited just to the release job.
+      # Otherwise, a malicious `build` step (e.g. via a compromised dependency)
+      # could get access to our GitHub or PyPI credentials.
+      #
+      # Per the trusted publishing GitHub Action:
+      # > It is strongly advised to separate jobs for building [...]
+      # > from the publish job.
+      # https://github.com/pypa/gh-action-pypi-publish#non-goals
+      - name: Build project for distribution
+        run: uv build
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: ${{ inputs.working-directory }}/dist/
+
+      - name: Check Version
+        id: check-version
+        shell: python
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          import os
+          import tomllib
+          with open("pyproject.toml", "rb") as f:
+              data = tomllib.load(f)
+          pkg_name = data["project"]["name"]
+          version = data["project"]["version"]
+          with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"pkg-name={pkg_name}\n")
+              f.write(f"version={version}\n")
+
+  publish:
+    needs:
+      - build
+    runs-on: ubuntu-latest
+    permissions:
+      # This permission is used for trusted publishing:
+      # https://blog.pypi.org/posts/2023-04-20-introducing-trusted-publishers/
+      #
+      # Trusted publishing has to also be configured on PyPI for each package:
+      # https://docs.pypi.org/trusted-publishers/adding-a-publisher/
+      id-token: write
+
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python + uv
+        uses: "./.github/actions/uv_setup"
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: ${{ inputs.working-directory }}/dist/
+
+      - name: Publish package distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: ${{ inputs.working-directory }}/dist/
+          verbose: true
+          print-hash: true
+          # Temp workaround since attestations are on by default as of gh-action-pypi-publish v1.11.0
+          attestations: false
+
+  mark-release:
+    needs:
+      - build
+      - publish
+    runs-on: ubuntu-latest
+    permissions:
+      # This permission is needed by `ncipollo/release-action` to
+      # create the GitHub release.
+      contents: write
+
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python + uv
+        uses: "./.github/actions/uv_setup"
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: ${{ inputs.working-directory }}/dist/
+
+      - name: Create Tag
+        uses: ncipollo/release-action@v1
+        with:
+          artifacts: "dist/*"
+          token: ${{ secrets.GITHUB_TOKEN }}
+          generateReleaseNotes: true
+          tag: ${{needs.build.outputs.pkg-name}}==${{ needs.build.outputs.version }}
+          body: ${{ needs.release-notes.outputs.release-body }}
+          commit: main
+          makeLatest: true
+

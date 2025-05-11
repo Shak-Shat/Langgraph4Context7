@@ -1,0 +1,616 @@
+Directory structure:
+└── backend/
+    ├── Dockerfile
+    ├── pyproject.toml
+    ├── .gitignore
+    └── app/
+        ├── __init__.py
+        ├── add_langgraph_route.py
+        ├── server.py
+        └── langgraph/
+            ├── agent.py
+            ├── state.py
+            └── tools.py
+
+================================================
+FILE: backend/Dockerfile
+================================================
+FROM python:3.11-slim
+
+RUN pip install poetry==1.6.1
+
+RUN poetry config virtualenvs.create false
+
+WORKDIR /code
+
+COPY ./pyproject.toml ./README.md ./poetry.lock* ./
+
+COPY ./package[s] ./packages
+
+RUN poetry install  --no-interaction --no-ansi --no-root
+
+COPY ./app ./app
+
+RUN poetry install --no-interaction --no-ansi
+
+EXPOSE 8080
+
+CMD exec uvicorn app.server:app --host 0.0.0.0 --port 8080
+
+
+
+================================================
+FILE: backend/pyproject.toml
+================================================
+[tool.poetry]
+name = "backend"
+version = "0.1.0"
+description = ""
+authors = ["Hoang Le"]
+readme = "README.md"
+packages = [
+    { include = "app" },
+]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+uvicorn = "^0.23.2"
+pydantic = "^2.9.2"
+langchain-core = "^0.3.17"
+langchain-openai = "^0.2.8"
+langgraph = "^0.2.46"
+python-dotenv = "^1.0.1"
+assistant-stream = "^0.0.5"
+
+
+[tool.poetry.group.dev.dependencies]
+langchain-cli = ">=0.0.15"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+
+
+================================================
+FILE: backend/.gitignore
+================================================
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+# lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+#  Usually these files are written by a python script from a template
+#  before PyInstaller builds the exe, so as to inject date/other infos into it.
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
+
+# Translations
+*.mo
+*.pot
+
+# Django stuff:
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+
+# Flask stuff:
+instance/
+.webassets-cache
+
+# Scrapy stuff:
+.scrapy
+
+# Sphinx documentation
+docs/_build/
+
+# PyBuilder
+.pybuilder/
+target/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IPython
+profile_default/
+ipython_config.py
+
+# pyenv
+#   For a library or package, you might want to ignore these files since the code is
+#   intended to run in multiple environments; otherwise, check them in:
+# .python-version
+
+# pipenv
+#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
+#   However, in case of collaboration, if having platform-specific dependencies or dependencies
+#   having no cross-platform support, pipenv may install dependencies that don't work, or not
+#   install all needed dependencies.
+#Pipfile.lock
+
+# poetry
+#   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
+#   This is especially recommended for binary packages to ensure reproducibility, and is more
+#   commonly ignored for libraries.
+#   https://python-poetry.org/docs/basic-usage/#commit-your-poetrylock-file-to-version-control
+#poetry.lock
+
+# pdm
+#   Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.
+#pdm.lock
+#   pdm stores project-wide configurations in .pdm.toml, but it is recommended to not include it
+#   in version control.
+#   https://pdm.fming.dev/latest/usage/project/#working-with-version-control
+.pdm.toml
+.pdm-python
+.pdm-build/
+
+# PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
+__pypackages__/
+
+# Celery stuff
+celerybeat-schedule
+celerybeat.pid
+
+# SageMath parsed files
+*.sage.py
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Spyder project settings
+.spyderproject
+.spyproject
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Pyre type checker
+.pyre/
+
+# pytype static type analyzer
+.pytype/
+
+# Cython debug symbols
+cython_debug/
+
+# PyCharm
+#  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
+#  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
+#  and can be added to the global gitignore or merged into this file.  For a more nuclear
+#  option (not recommended) you can uncomment the following to ignore the entire idea folder.
+#.idea/
+
+.DS_Store
+.env
+
+
+================================================
+FILE: backend/app/__init__.py
+================================================
+
+
+
+================================================
+FILE: backend/app/add_langgraph_route.py
+================================================
+from assistant_stream import create_run, RunController
+from assistant_stream.serialization import DataStreamResponse
+from langchain_core.messages import (
+    HumanMessage,
+    AIMessageChunk,
+    AIMessage,
+    ToolMessage,
+    SystemMessage,
+    BaseMessage,
+)
+from fastapi import FastAPI
+from pydantic import BaseModel
+from typing import List, Literal, Union, Optional, Any
+
+
+class LanguageModelTextPart(BaseModel):
+    type: Literal["text"]
+    text: str
+    providerMetadata: Optional[Any] = None
+
+
+class LanguageModelImagePart(BaseModel):
+    type: Literal["image"]
+    image: str  # Will handle URL or base64 string
+    mimeType: Optional[str] = None
+    providerMetadata: Optional[Any] = None
+
+
+class LanguageModelFilePart(BaseModel):
+    type: Literal["file"]
+    data: str  # URL or base64 string
+    mimeType: str
+    providerMetadata: Optional[Any] = None
+
+
+class LanguageModelToolCallPart(BaseModel):
+    type: Literal["tool-call"]
+    toolCallId: str
+    toolName: str
+    args: Any
+    providerMetadata: Optional[Any] = None
+
+
+class LanguageModelToolResultContentPart(BaseModel):
+    type: Literal["text", "image"]
+    text: Optional[str] = None
+    data: Optional[str] = None
+    mimeType: Optional[str] = None
+
+
+class LanguageModelToolResultPart(BaseModel):
+    type: Literal["tool-result"]
+    toolCallId: str
+    toolName: str
+    result: Any
+    isError: Optional[bool] = None
+    content: Optional[List[LanguageModelToolResultContentPart]] = None
+    providerMetadata: Optional[Any] = None
+
+
+class LanguageModelSystemMessage(BaseModel):
+    role: Literal["system"]
+    content: str
+
+
+class LanguageModelUserMessage(BaseModel):
+    role: Literal["user"]
+    content: List[
+        Union[LanguageModelTextPart, LanguageModelImagePart, LanguageModelFilePart]
+    ]
+
+
+class LanguageModelAssistantMessage(BaseModel):
+    role: Literal["assistant"]
+    content: List[Union[LanguageModelTextPart, LanguageModelToolCallPart]]
+
+
+class LanguageModelToolMessage(BaseModel):
+    role: Literal["tool"]
+    content: List[LanguageModelToolResultPart]
+
+
+LanguageModelV1Message = Union[
+    LanguageModelSystemMessage,
+    LanguageModelUserMessage,
+    LanguageModelAssistantMessage,
+    LanguageModelToolMessage,
+]
+
+
+def convert_to_langchain_messages(
+    messages: List[LanguageModelV1Message],
+) -> List[BaseMessage]:
+    result = []
+
+    for msg in messages:
+        if msg.role == "system":
+            result.append(SystemMessage(content=msg.content))
+
+        elif msg.role == "user":
+            content = []
+            for p in msg.content:
+                if isinstance(p, LanguageModelTextPart):
+                    content.append({"type": "text", "text": p.text})
+                elif isinstance(p, LanguageModelImagePart):
+                    content.append({"type": "image_url", "image_url": p.image})
+            result.append(HumanMessage(content=content))
+
+        elif msg.role == "assistant":
+            # Handle both text and tool calls
+            text_parts = [
+                p for p in msg.content if isinstance(p, LanguageModelTextPart)
+            ]
+            text_content = " ".join(p.text for p in text_parts)
+            tool_calls = [
+                {
+                    "id": p.toolCallId,
+                    "name": p.toolName,
+                    "args": p.args,
+                }
+                for p in msg.content
+                if isinstance(p, LanguageModelToolCallPart)
+            ]
+            result.append(AIMessage(content=text_content, tool_calls=tool_calls))
+
+        elif msg.role == "tool":
+            for tool_result in msg.content:
+                result.append(
+                    ToolMessage(
+                        content=str(tool_result.result),
+                        tool_call_id=tool_result.toolCallId,
+                    )
+                )
+
+    return result
+
+
+class FrontendToolCall(BaseModel):
+    name: str
+    description: Optional[str] = None
+    parameters: dict[str, Any]
+
+
+class ChatRequest(BaseModel):
+    system: Optional[str] = ""
+    tools: Optional[List[FrontendToolCall]] = []
+    messages: List[LanguageModelV1Message]
+
+
+def add_langgraph_route(app: FastAPI, graph, path: str):
+    async def chat_completions(request: ChatRequest):
+        inputs = convert_to_langchain_messages(request.messages)
+
+        async def run(controller: RunController):
+            tool_calls = {}
+            tool_calls_by_idx = {}
+
+            async for msg, metadata in graph.astream(
+                {"messages": inputs},
+                {
+                    "configurable": {
+                        "system": request.system,
+                        "frontend_tools": request.tools,
+                    }
+                },
+                stream_mode="messages",
+            ):
+                if isinstance(msg, ToolMessage):
+                    tool_controller = tool_calls[msg.tool_call_id]
+                    tool_controller.set_result(msg.content)
+
+                if isinstance(msg, AIMessageChunk) or isinstance(msg, AIMessage):
+                    if msg.content:
+                        controller.append_text(msg.content)
+
+                    for chunk in msg.tool_call_chunks:
+                        if not chunk["index"] in tool_calls_by_idx:
+                            tool_controller = await controller.add_tool_call(
+                                chunk["name"], chunk["id"]
+                            )
+                            tool_calls_by_idx[chunk["index"]] = tool_controller
+                            tool_calls[chunk["id"]] = tool_controller
+                        else:
+                            tool_controller = tool_calls_by_idx[chunk["index"]]
+
+                        tool_controller.append_args_text(chunk["args"])
+
+        return DataStreamResponse(create_run(run))
+
+    app.add_api_route(path, chat_completions, methods=["POST"])
+
+
+
+================================================
+FILE: backend/app/server.py
+================================================
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI
+from .langgraph.agent import assistant_ui_graph
+from .add_langgraph_route import add_langgraph_route
+
+app = FastAPI()
+# cors
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+add_langgraph_route(app, assistant_ui_graph, "/api/chat")
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+
+================================================
+FILE: backend/app/langgraph/agent.py
+================================================
+from langchain_openai import ChatOpenAI
+from langgraph.graph import StateGraph, END
+from langgraph.prebuilt import ToolNode
+from langchain_core.messages import SystemMessage
+from langgraph.errors import NodeInterrupt
+from langchain_core.tools import BaseTool
+from pydantic import BaseModel
+from .tools import tools
+from .state import AgentState
+
+
+model = ChatOpenAI()
+
+
+def should_continue(state):
+    messages = state["messages"]
+    last_message = messages[-1]
+    if not last_message.tool_calls:
+        return END
+    else:
+        return "tools"
+
+
+class AnyArgsSchema(BaseModel):
+    # By not defining any fields and allowing extras,
+    # this schema will accept any input passed in.
+    class Config:
+        extra = "allow"
+
+
+class FrontendTool(BaseTool):
+    def __init__(self, name: str):
+        super().__init__(name=name, description="", args_schema=AnyArgsSchema)
+
+    def _run(self, *args, **kwargs):
+        # Since this is a frontend-only tool, it might not actually execute anything.
+        # Raise an interrupt or handle accordingly.
+        raise NodeInterrupt("This is a frontend tool call")
+
+    async def _arun(self, *args, **kwargs) -> str:
+        # Similarly handle async calls
+        raise NodeInterrupt("This is a frontend tool call")
+
+
+def get_tool_defs(config):
+    frontend_tools = [
+        {"type": "function", "function": tool}
+        for tool in config["configurable"]["frontend_tools"]
+    ]
+    return tools + frontend_tools
+
+
+def get_tools(config):
+    frontend_tools = [
+        FrontendTool(tool.name) for tool in config["configurable"]["frontend_tools"]
+    ]
+    return tools + frontend_tools
+
+
+async def call_model(state, config):
+    system = config["configurable"]["system"]
+
+    messages = [SystemMessage(content=system)] + state["messages"]
+    model_with_tools = model.bind_tools(get_tool_defs(config))
+    response = await model_with_tools.ainvoke(messages)
+    # We return a list, because this will get added to the existing list
+    return {"messages": response}
+
+
+async def run_tools(input, config, **kwargs):
+    tool_node = ToolNode(get_tools(config))
+    return await tool_node.ainvoke(input, config, **kwargs)
+
+
+# Define a new graph
+workflow = StateGraph(AgentState)
+
+workflow.add_node("agent", call_model)
+workflow.add_node("tools", run_tools)
+
+workflow.set_entry_point("agent")
+workflow.add_conditional_edges(
+    "agent",
+    should_continue,
+    ["tools", END],
+)
+
+workflow.add_edge("tools", "agent")
+
+assistant_ui_graph = workflow.compile()
+
+
+
+================================================
+FILE: backend/app/langgraph/state.py
+================================================
+from typing import Annotated
+from typing_extensions import TypedDict
+from langgraph.graph.message import add_messages
+
+
+class AgentState(TypedDict):
+    messages: Annotated[list, add_messages]
+
+
+
+================================================
+FILE: backend/app/langgraph/tools.py
+================================================
+from langchain_core.tools import tool
+from datetime import datetime, timezone
+
+
+@tool(return_direct=True)
+def get_stock_price(stock_symbol: str):
+    """Call to get the current stock price and related information for a given stock symbol."""
+    # This is a mock implementation
+    mock_stock_data = {
+        "AAPL": {
+            "symbol": "AAPL",
+            "company_name": "Apple Inc.",
+            "current_price": 173.50,
+            "change": 2.35,
+            "change_percent": 1.37,
+            "volume": 52436789,
+            "market_cap": "2.73T",
+            "pe_ratio": 28.5,
+            "fifty_two_week_high": 198.23,
+            "fifty_two_week_low": 124.17,
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        },
+        # Add more mock data for other symbols as needed
+    }
+
+    return mock_stock_data["AAPL"]
+
+
+tools = [get_stock_price]
+
+

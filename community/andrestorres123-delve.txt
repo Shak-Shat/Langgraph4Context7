@@ -1,0 +1,1358 @@
+Directory structure:
+└── taxonomy_generator/
+    ├── __init__.py
+    ├── configuration.py
+    ├── graph.py
+    ├── prompts.py
+    ├── state.py
+    ├── utils.py
+    ├── nodes/
+    │   ├── __init__.py
+    │   ├── doc_labeler.py
+    │   ├── minibatches_generator.py
+    │   ├── runs_retriever.py
+    │   ├── summary_generator.py
+    │   ├── taxonomy_generator.py
+    │   ├── taxonomy_reviewer.py
+    │   └── taxonomy_updater.py
+    └── routing/
+        ├── __init__.py
+        └── should_review.py
+
+================================================
+FILE: src/taxonomy_generator/__init__.py
+================================================
+"""Taxonomy Generator.
+
+This module defines a custom taxonomy generation agent graph.
+It processes documents and generates taxonomies.
+"""
+
+from taxonomy_generator.graph import graph
+from taxonomy_generator.configuration import Configuration
+from taxonomy_generator.state import State, InputState, OutputState, Doc, UserFeedback
+
+__all__ = [
+    "graph", 
+    "Configuration", 
+    "State", 
+    "InputState", 
+    "OutputState",
+    "Doc",
+    "UserFeedback"
+]
+
+
+
+================================================
+FILE: src/taxonomy_generator/configuration.py
+================================================
+"""Define the configurable parameters for the agent."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field, fields
+from typing import Annotated, Optional
+
+from langchain_core.runnables import RunnableConfig, ensure_config
+
+@dataclass(kw_only=True)
+class Configuration:
+    """The configuration for the agent."""
+
+    model: Annotated[str, {"__template_metadata__": {"kind": "llm"}}] = field(
+        default="anthropic/claude-3-5-sonnet-20240620",
+        metadata={
+            "description": "The name of the language model to use for the agent's main interactions. "
+            "Should be in the form: provider/model-name."
+        },
+    )
+
+    fast_llm: Annotated[str, {"__template_metadata__": {"kind": "llm"}}] = field(
+        default="anthropic/claude-3-haiku-20240307",
+        metadata={
+            "description": "A faster, lighter model for tasks like summarization. "
+            "Should be in the form: provider/model-name."
+        },
+    )
+
+    max_runs: int = field(
+        default=500,
+        metadata={
+            "description": "Maximum number of runs to retrieve from LangSmith."
+        },
+    )
+
+    sample_size: int = field(
+        default=50,
+        metadata={
+            "description": "Number of runs to sample for processing."
+        },
+    )
+
+    batch_size: int = field(
+        default=200,
+        metadata={
+            "description": "Size of minibatches for document processing."
+        },
+    )
+
+    suggestion_length: int = field(
+        default=30,
+        metadata={"description": "Maximum length for taxonomy suggestions"}
+    )
+    cluster_name_length: int = field(
+        default=10,
+        metadata={"description": "Maximum length for cluster names"}
+    )
+    cluster_description_length: int = field(
+        default=30,
+        metadata={"description": "Maximum length for cluster descriptions"}
+    )
+    explanation_length: int = field(
+        default=20,
+        metadata={"description": "Maximum length for explanations"}
+    )
+    max_num_clusters: int = field(
+        default=25,
+        metadata={"description": "Maximum number of clusters allowed"}
+    )
+
+    @classmethod
+    def from_runnable_config(
+        cls, config: Optional[RunnableConfig] = None
+    ) -> Configuration:
+        """Create a Configuration instance from a RunnableConfig object."""
+        config = ensure_config(config)
+        configurable = config.get("configurable") or {}
+        _fields = {f.name for f in fields(cls) if f.init}
+        return cls(**{k: v for k, v in configurable.items() if k in _fields})
+
+
+
+================================================
+FILE: src/taxonomy_generator/graph.py
+================================================
+"""Define a custom Reasoning and Action agent.
+
+Works with a chat model with tool calling support.
+"""
+
+from langgraph.graph import StateGraph, START, END
+
+from taxonomy_generator.configuration import Configuration
+from taxonomy_generator.routing.should_review import should_review
+from taxonomy_generator.state import InputState, OutputState, State
+from taxonomy_generator.nodes.runs_retriever import retrieve_runs
+from taxonomy_generator.nodes.taxonomy_generator import generate_taxonomy
+from taxonomy_generator.nodes.minibatches_generator import generate_minibatches
+from taxonomy_generator.nodes.taxonomy_updater import update_taxonomy
+from taxonomy_generator.nodes.taxonomy_reviewer import review_taxonomy
+from taxonomy_generator.nodes.summary_generator import generate_summaries
+from taxonomy_generator.nodes.doc_labeler import label_documents
+
+
+builder = StateGraph(State, input=InputState, output=OutputState, config_schema=Configuration)
+
+# Add nodes
+builder.add_node("get_runs", retrieve_runs)
+builder.add_node("summarize", generate_summaries)
+builder.add_node("get_minibatches", generate_minibatches)
+builder.add_node("generate_taxonomy", generate_taxonomy)
+builder.add_node("update_taxonomy", update_taxonomy)
+builder.add_node("review_taxonomy", review_taxonomy)
+
+builder.add_node("label_documents", label_documents)
+
+# Add edges
+builder.add_edge(START, "get_runs")
+builder.add_edge("get_runs", "summarize")
+builder.add_edge("summarize", "get_minibatches")
+builder.add_edge("get_minibatches", "generate_taxonomy")
+builder.add_edge("generate_taxonomy", "update_taxonomy")
+builder.add_edge("review_taxonomy", "label_documents")
+builder.add_edge("label_documents", END)
+
+builder.add_conditional_edges(
+    "update_taxonomy",
+    should_review,
+    {
+        "update_taxonomy": "update_taxonomy",
+        "review_taxonomy": "review_taxonomy"
+    }
+)
+
+graph = builder.compile()
+graph.name = "Taxonomy Generation"
+
+
+
+================================================
+FILE: src/taxonomy_generator/prompts.py
+================================================
+"""Default prompts used by the agent."""
+
+from langchain_core.prompts import ChatPromptTemplate
+
+LABELER_PROMPT = ChatPromptTemplate.from_messages([
+    ("system", """Your task is to use the provided taxonomy to categorize the overall topic or intent of a conversation between a human and an AI assistant.  
+
+First, here is the taxonomy to use:
+
+<taxonomy>
+{taxonomy}
+</taxonomy>
+
+To complete the task:
+
+1. Carefully read through the entire conversation, paying attention to the key topics discussed and the apparent intents behind the human's messages.
+
+2. Consult the taxonomy and identify the single most relevant category that best captures the overall topic or intent of the conversation. 
+
+3. Write out a chain of reasoning for why you selected that category. Explain how the category fits the content of the conversation, referencing specific statements or passages as evidence. Output this reasoning inside <reasoning></reasoning> tags.
+
+4. If by any chance, no category fits the content nicely, use the category 'Other'.
+
+5. Output the name of the category you chose inside <category></category> tags.
+
+That's it! Remember, choose the single most relevant category. Don't choose multiple categories. Think it through carefully and explain your reasoning before giving your final category choice.
+"""),
+    
+    ("human", """Assign a single category to the following content:
+
+<content>
+{content} 
+</content>
+
+Respond with your reasoning and category within XML tags. Do not include the number, just the category text.""")
+])
+
+TAXONOMY_GENERATION_PROMPT = ChatPromptTemplate.from_messages([
+    ("system", """# Instruction
+
+## Context
+
+- **Goal**: Your goal is to cluster the input data into meaningful categories for the given use case.
+
+- **Data**: The input data will be a list of human-AI conversation summaries in XML format, including the following elements:
+
+  - **id**: conversation index.
+
+  - **text**: conversation summary.
+
+- **Use case**: {use_case}
+
+- **Previous feedback**: {feedback}
+
+## Requirements
+
+### User Feedback Integration (CRITICAL)
+
+- You MUST incorporate any previous user feedback into your clustering decisions
+- If specific changes were requested, implement them exactly as specified
+- If general feedback was given, ensure your clustering reflects those preferences
+- If no feedback exists, proceed with standard clustering
+
+### Format
+
+- Output clusters in **XML format** with each cluster as a `<cluster>` element, containing the following sub-elements:
+
+  - **id**: category number starting from 1 in an incremental manner.
+
+  - **name**: category name should be **within {cluster_name_length} words**. It can be either verb phrase or noun phrase, whichever is more appropriate.
+
+  - **description**: category description should be **within {cluster_description_length} words**.
+
+Here is an example of your output:
+
+```xml
+
+<clusters>
+
+  <cluster>
+
+    <id>category id</id>
+
+    <name>category name</name>
+
+    <description>category description</description>
+
+  </cluster>
+
+</clusters>
+
+```
+
+- Total number of categories should be **no more than {max_num_clusters}**.
+
+- Output should be in **English** only.
+
+### Quality
+
+- **User Feedback Alignment**: Clusters MUST align with any provided user feedback and preferences
+- **No overlap or contradiction** among the categories.
+- **Name** is a concise and clear label for the category. Use only phrases that are specific to each category and avoid those that are common to all categories.
+- **Description** differentiates one category from another.
+- **Name** and **description** can **accurately** and **consistently** classify new data points **without ambiguity**.
+- **Name** and **description** are *consistent with each other*.
+- Output clusters match the data as closely as possible, without missing important categories or adding unnecessary ones.
+- Output clusters should strive to be orthogonal, providing solid coverage of the target domain.
+- Output clusters serve the given use case well.
+- Output clusters should be specific and meaningful. Do not invent categories that are not in the data.
+
+# Data
+
+<conversations>
+
+{data_xml}
+
+</conversations>"""),
+    ("human", """# Questions
+
+## Q1. Please generate a cluster table from the input data that meets the requirements.
+
+Tips
+
+- **User Feedback is MANDATORY**: You MUST address any previous user feedback in your clustering
+- If user feedback was provided, explicitly explain how you've incorporated their specific concerns and suggestions
+     
+- The cluster table should be a **flat list** of **mutually exclusive** categories. Sort them based on their semantic relatedness.
+
+- Though you should aim for {max_num_clusters} categories, you can have *fewer than {max_num_clusters} categories* in the cluster table;  but **do not exceed the limit.** 
+
+- Be **specific** about each category. **Do not include vague categories** such as "Other", "General", "Unclear", "Miscellaneous" or "Undefined" in the cluster table.
+
+- You can ignore low quality or ambiguous data points.
+
+## Q2. Why did you cluster the data the way you did? Explain your reasoning **within {explanation_length} words**. Include how you addressed any user feedback.
+
+## Provide your answers between the tags: <cluster_table>your generated cluster table with no more than {max_num_clusters} categories</cluster_table>, <explanation>explanation of your reasoning process within {explanation_length} words</explanation>.
+
+# Output""")
+])
+
+
+================================================
+FILE: src/taxonomy_generator/state.py
+================================================
+"""Define the state structures for the agent."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Annotated, List, Optional, Dict, Sequence, Literal
+import operator
+
+from langchain_core.messages import AnyMessage
+from langgraph.graph import add_messages
+from langgraph.managed import IsLastStep
+from pydantic import BaseModel
+
+@dataclass
+class Doc:
+    """Represents a document in the taxonomy generation process."""
+    id: str
+    content: str
+    summary: Optional[str] = None
+    explanation: Optional[str] = None
+    category: Optional[str] = None
+
+
+class UserFeedback(BaseModel):
+    """Represents user feedback on the taxonomy.
+    
+    Attributes:
+        decision: Whether to continue with current taxonomy or modify it
+        explanation: Explanation of why this decision was made
+        feedback: Optional specific feedback from the user
+    """
+    decision: Literal["continue", "modify"]
+    explanation: str
+    feedback: Optional[str] = None
+
+
+@dataclass
+class InputState:
+    """Defines the input state for the agent, representing initial configuration parameters."""
+    project_name: str = ""
+    org_id: str = ""  # LangSmith API Key
+    days: int = 3  # Number of days to look back for runs
+
+
+@dataclass
+class OutputState:
+    """Defines the output state for the agent, representing the interaction history."""
+    messages: Annotated[Sequence[AnyMessage], add_messages] = field(default_factory=list)
+    clusters: Annotated[List[List[Dict]], operator.add] = field(default_factory=list)
+    documents: List[Doc] = field(default_factory=list)
+
+
+@dataclass
+class State(InputState, OutputState):
+    """Represents the complete state of the taxonomy generation agent.
+    
+    This class extends InputState and OutputState with additional attributes needed 
+    throughout the taxonomy generation process.
+    """
+    all_documents: List[Doc] = field(default_factory=list)
+    documents: List[Doc] = field(default_factory=list)
+    minibatches: List[List[int]] = field(default_factory=list)
+    clusters: Annotated[List[List[Dict]], operator.add] = field(default_factory=list)
+    status: Annotated[List[str], operator.add] = field(default_factory=list)
+    use_case: str = field(default="")
+    is_last_step: IsLastStep = field(default=False)
+    user_feedback: UserFeedback = field(default=None)
+
+
+
+
+================================================
+FILE: src/taxonomy_generator/utils.py
+================================================
+import re
+import random
+from typing import List, Optional, Dict, Union
+from langchain_core.runnables import Runnable, RunnableConfig
+
+from langchain.chat_models import init_chat_model
+from langchain_core.language_models import BaseChatModel
+from langsmith.schemas import Run
+
+from taxonomy_generator.state import Doc, State
+from taxonomy_generator.configuration import Configuration
+
+def load_chat_model(fully_specified_name: str) -> BaseChatModel:
+    """Load a chat model from a fully specified name.
+
+    Args:
+        fully_specified_name (str): String in the format 'provider/model'.
+    """
+    provider, model = fully_specified_name.split("/", maxsplit=1)
+    return init_chat_model(model, model_provider=provider)
+
+
+def to_xml(
+    data: Union[Dict, List],
+    tag_name: str,
+    *,
+    exclude: Optional[List[str]] = None,
+    include: Optional[List[str]] = None,
+    nested: Optional[List[str]] = None,
+    body_key: Optional[str] = None,
+    list_item_tag: str = "item",
+    max_body_length: Optional[int] = None,
+) -> str:
+    """Convert data structure to XML format.
+    
+    Args:
+        data: The data to convert
+        tag_name: The name of the root tag
+        exclude: Keys to exclude from the output
+        include: Keys to include in the output (if None, include all)
+        nested: Keys that should be processed as nested structures
+        body_key: Key whose value should be used as the tag body
+        list_item_tag: Tag name to use for list items
+        max_body_length: Maximum length for body text before truncating
+    
+    Returns:
+        str: The XML representation of the data
+    """
+    skip = exclude or []
+    nested = nested or []
+
+    def process_dict(d: Dict) -> tuple[str, str]:
+        attr_str = ""
+        body = ""
+
+        for key, value in d.items():
+            if key == body_key:
+                body += str(value)
+                continue
+            if value is None or key in skip:
+                continue
+            if include and key not in include:
+                continue
+            if key in nested:
+                body += process_value(value, key)
+            elif isinstance(value, (dict, list)):
+                body += f"<{key}>{process_value(value, key)}</{key}>"
+            else:
+                attr_str += f' {key}="{value}"'
+
+        return attr_str, body
+
+    def process_value(value: Union[Dict, List, str, int, float], key: str) -> str:
+        if isinstance(value, dict):
+            attr, body = process_dict(value)
+
+            if max_body_length and len(body) > max_body_length:
+                body = body[:max_body_length] + "..."
+            return f"<{key}{attr}>{body}</{key}>"
+        elif isinstance(value, list):
+            res = "".join(
+                f"<{list_item_tag}>{process_value(item, list_item_tag)}</{list_item_tag}>"
+                for item in value
+            )
+            if max_body_length and len(res) > max_body_length:
+                res = res[:max_body_length] + "..."
+            return res
+        else:
+            val = str(value)
+            if max_body_length and len(val) > max_body_length:
+                val = val[:max_body_length] + "..."
+            return val
+
+    if isinstance(data, dict):
+        attr_str, body = process_dict(data)
+        return f"<{tag_name}{attr_str}>{body}</{tag_name}>"
+    elif isinstance(data, (list, tuple)):
+        body = "".join(
+            f"<{list_item_tag}>{process_value(item, list_item_tag)}</{list_item_tag}>"
+            for item in data
+        )
+        return f"<{tag_name}>{body}</{tag_name}>"
+
+
+def run_to_doc(
+    run: Run,
+    max_length: int = 500,
+) -> Doc:
+    """Convert a LangSmith run to a document.
+    
+    Args:
+        run: The LangSmith run to convert
+        max_length: Maximum length for content fields
+    
+    Returns:
+        Doc: A document containing the run's content
+    """
+    inputs_str = to_xml(
+        run.inputs,
+        "inputs",
+        include=["messages", "content", "type", "chat_history"],
+        exclude=["__end__", "id"],
+        max_body_length=max_length,
+        body_key="content",
+    )
+    outputs_str = ""
+    if run.outputs:
+        outputs_str = "\n" + to_xml(
+            run.outputs,
+            "outputs",
+            include=["answer"],
+            exclude=["__end__", "documents"],
+            max_body_length=max_length,
+            body_key="answer",
+        )
+    return Doc(
+        id=str(run.id),
+        content=f"{inputs_str}{outputs_str}",
+    )
+
+
+def process_runs(left: List[Doc], right: List[Union[Doc, Run]], sample: Optional[int] = None) -> List[Doc]:
+    """Process a list of runs, optionally sampling them.
+    
+    Args:
+        left: Existing list of documents
+        right: New runs or documents to process
+        sample: Number of items to sample from right (if None, use all)
+    
+    Returns:
+        List[Doc]: Combined list of documents
+    """
+    converted = [r if isinstance(r, dict) else run_to_doc(r) for r in right if right]
+
+    if sample is not None and sample < len(converted):
+        converted = random.sample(converted, sample)
+
+    return left + converted
+
+
+def parse_taxa(output_text: str) -> Dict[str, List[Dict[str, str]]]:
+    """Extract the taxonomy from the generated output."""
+    
+    cluster_matches = re.findall(
+        r"\s*<id>(.*?)</id>\s*<name>(.*?)</name>\s*<description>(.*?)</description>\s*",
+        output_text,
+        re.DOTALL,
+    )
+    
+    clusters = [
+        {"id": id.strip(), "name": name.strip(), "description": description.strip()}
+        for id, name, description in cluster_matches
+    ]
+    
+    return {"clusters": clusters}
+
+
+def format_docs(docs: List[Doc]) -> str:
+    """Format documents as XML for taxonomy generation.
+    
+    Args:
+        docs: List of documents to format
+        
+    Returns:
+        str: XML formatted document summaries
+    """
+    xml_table = "<conversations>\n"
+    for doc in docs:
+        doc_id = doc["id"] if isinstance(doc, dict) else doc.id
+        doc_summary = doc.get("summary", "") if isinstance(doc, dict) else (doc.summary or "")
+        xml_table += f'<conv_summ id={doc_id}>{doc_summary}</conv_summ>\n'
+    xml_table += "</conversations>"
+    return xml_table
+
+
+def format_taxonomy(clusters: List[Dict[str, str]]) -> str:
+    """Format taxonomy clusters as XML.
+    
+    Args:
+        clusters: List of cluster dictionaries
+        
+    Returns:
+        str: XML formatted taxonomy
+    """
+
+    xml = "<cluster_table>\n"
+    for label in clusters:
+        xml += "  <cluster>\n"
+        xml += f'    <id>{label["id"]}</id>\n'
+        xml += f'    <name>{label["name"]}</name>\n'
+        xml += f'    <description>{label["description"]}</description>\n'
+        xml += "  </cluster>\n"
+    xml += "</cluster_table>"
+    return xml
+
+
+async def invoke_taxonomy_chain(
+    chain: Runnable,
+    state: State,
+    config: RunnableConfig,
+    mb_indices: List[int],
+) -> Dict[str, List[List[Dict[str, str]]]]:
+    """Invoke the taxonomy generation chain."""
+    try:
+        configuration = Configuration.from_runnable_config(config)
+        minibatch = [state.documents[idx] for idx in mb_indices]
+        data_table_xml = format_docs(minibatch)
+        
+        previous_taxonomy = state.clusters[-1] if state.clusters else []
+        cluster_table_xml = format_taxonomy(previous_taxonomy)
+
+        # Format feedback if it exists
+        feedback = "No previous feedback provided."
+        if state.user_feedback:
+            feedback = f"Previous user feedback: {state.user_feedback.feedback}"
+            if state.user_feedback.explanation:
+                feedback += f"\nReason for modification: {state.user_feedback.explanation}"
+
+        updated_taxonomy = await chain.ainvoke(
+            {
+                "data_xml": data_table_xml,
+                "use_case": state.use_case,
+                "cluster_table_xml": cluster_table_xml,
+                "feedback": feedback,
+                "suggestion_length": configuration.suggestion_length,
+                "cluster_name_length": configuration.cluster_name_length,
+                "cluster_description_length": configuration.cluster_description_length,
+                "explanation_length": configuration.explanation_length,
+                "max_num_clusters": configuration.max_num_clusters,
+            }
+        )
+        return {
+            "clusters": [updated_taxonomy["clusters"]],
+            "status": ["Taxonomy generated.."],
+        }
+    except Exception as e:
+        print("Taxonomy generation error: ", e)
+        raise
+
+
+
+================================================
+FILE: src/taxonomy_generator/nodes/__init__.py
+================================================
+"""Node functions for the taxonomy generator graph."""
+
+from taxonomy_generator.nodes.runs_retriever import retrieve_runs
+from taxonomy_generator.nodes.taxonomy_generator import generate_taxonomy
+from taxonomy_generator.nodes.minibatches_generator import generate_minibatches
+from taxonomy_generator.nodes.taxonomy_updater import update_taxonomy
+from taxonomy_generator.nodes.taxonomy_reviewer import review_taxonomy
+from taxonomy_generator.nodes.summary_generator import generate_summaries
+from taxonomy_generator.nodes.doc_labeler import label_documents
+
+__all__ = [
+    "retrieve_runs",
+    "generate_taxonomy",
+    "generate_minibatches",
+    "update_taxonomy",
+    "review_taxonomy",
+    "generate_summaries",
+    "label_documents"
+]
+
+
+================================================
+FILE: src/taxonomy_generator/nodes/doc_labeler.py
+================================================
+"""Node for labeling documents using the generated taxonomy."""
+
+import re
+from typing import Dict, Any, List
+from langchain import hub
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnableConfig
+from langchain_core.messages import AIMessage
+
+from taxonomy_generator.state import State, Doc
+from taxonomy_generator.utils import load_chat_model
+from taxonomy_generator.configuration import Configuration
+from taxonomy_generator.prompts import LABELER_PROMPT
+
+def _parse_labels(output_text: str) -> Dict[str, str]:
+    """Parse the generated labels from the predictions."""
+    category_matches = re.findall(
+        r"\s*<category>(.*?)</category>.*",
+        output_text,
+        re.DOTALL,
+    )
+    categories = [{"category": category.strip()} for category in category_matches]
+    
+    if len(categories) > 1:
+        print(f"Warning: Multiple selected categories: {categories}")
+    
+    if categories:
+        label = categories[0]
+        stripped = re.sub(r"^\d+\.\s*", "", label["category"]).strip()
+        return {"category": stripped}
+    
+    return {"category": "Other"}
+
+
+def _format_taxonomy(clusters: List[Dict[str, str]]) -> str:
+    """Format taxonomy clusters as XML."""
+    
+    xml = "<cluster_table>\n"
+    
+    if clusters and isinstance(clusters[0], list):
+        clusters = clusters[0]
+    
+    if isinstance(clusters, dict):
+        clusters = [clusters]
+    
+    for cluster in clusters:
+        xml += "  <cluster>\n"
+        if isinstance(cluster, dict):
+            xml += f'    <id>{cluster["id"]}</id>\n'
+            xml += f'    <name>{cluster["name"]}</name>\n'
+            xml += f'    <description>{cluster["description"]}</description>\n'
+        else:
+            xml += f'    <id>{getattr(cluster, "id", "")}</id>\n'
+            xml += f'    <name>{getattr(cluster, "name", "")}</name>\n'
+            xml += f'    <description>{getattr(cluster, "description", "")}</description>\n'
+        xml += "  </cluster>\n"
+    xml += "</cluster_table>"
+    return xml
+
+
+def _format_results(docs: List[Doc]) -> str:
+    """Format labeled documents in a readable way.
+    
+    Args:
+        docs: List of labeled documents
+        
+    Returns:
+        str: Formatted string showing document previews and their labels
+    """
+    result = " Document Classification Results:\n\n"
+    for doc in docs:
+        # Get first 200 chars of content, clean it up
+        preview = doc.content[:400].replace('\n', ' ').strip()
+        if len(doc.content) > 200:
+            preview += "..."
+            
+        # Add document preview and its category
+        result += f"🏷️  Category: {doc.category}\n"
+        result += f"📄 Document: {preview}\n"
+        result += "─" * 80 + "\n\n"
+    
+    return result
+
+
+def _setup_classification_chain(configuration: Configuration):
+    """Set up the chain for document labeling."""
+    model = load_chat_model(configuration.fast_llm)
+
+    return (
+        LABELER_PROMPT
+        | model
+        | StrOutputParser()
+        | _parse_labels
+    ).with_config(run_name="LabelDocs")
+
+
+async def label_documents(
+    state: State,
+    config: RunnableConfig,
+    model_name: str = "claude-3-haiku-20240307",
+    max_tokens: int = 2000,
+) -> dict:
+    """Label documents using the generated taxonomy."""
+    
+    configuration = Configuration.from_runnable_config(config)
+    # Set up the chain
+    labeling_chain = _setup_classification_chain(configuration)
+    
+    # Get configuration
+    batch_size = configuration.batch_size
+    
+    # Get latest complete set of clusters
+    latest_clusters = None
+    for clusters in reversed(state.clusters):
+        if isinstance(clusters, list) and clusters:
+            latest_clusters = clusters
+            break
+    
+    if not latest_clusters and state.clusters:
+        # Fallback to last state if no complete set found
+        latest_clusters = [state.clusters[-1]] if isinstance(state.clusters[-1], dict) else state.clusters[-1]
+    
+    if not latest_clusters:
+        raise ValueError("No valid clusters found in state")
+        
+    
+    # Process documents in batches
+    labeled_docs = []
+    for i in range(0, len(state.documents), batch_size):
+        batch = state.documents[i : i + batch_size]
+        batch_results = [
+            await labeling_chain.ainvoke(
+                {
+                    "content": doc["content"] if isinstance(doc, dict) else doc.content,
+                    "taxonomy": _format_taxonomy(latest_clusters),
+                }
+            )
+            for doc in batch
+        ]
+        labeled_docs.extend(batch_results)
+
+    # Update documents with labels
+    updated_docs = [
+        Doc(
+            id=doc["id"] if isinstance(doc, dict) else doc.id,
+            content=doc["content"] if isinstance(doc, dict) else doc.content,
+            summary=doc.get("summary", "") if isinstance(doc, dict) else (doc.summary or ""),
+            explanation=doc.get("explanation", "") if isinstance(doc, dict) else (doc.explanation or ""),
+            category=category["category"]
+        )
+        for doc, category in zip(state.documents, labeled_docs)
+    ]
+
+    # Format results for display
+    results_display = _format_results(updated_docs)
+    message = AIMessage(content=f"✅ Documents have been labeled!\n\n{results_display}")
+
+    return {
+        "documents": updated_docs,
+        "messages": [message],
+        "status": ["Documents labeled successfully"],
+    } 
+
+
+================================================
+FILE: src/taxonomy_generator/nodes/minibatches_generator.py
+================================================
+"""Node for generating minibatches from documents."""
+
+import random
+from typing import List, Dict
+from langchain_core.runnables import RunnableConfig
+
+from taxonomy_generator.state import State
+from taxonomy_generator.configuration import Configuration
+
+
+def _create_batches(indices: List[int], batch_size: int) -> List[List[int]]:
+    """Create batches of document indices.
+    
+    Args:
+        indices: List of document indices to batch
+        batch_size: Size of each batch
+        
+    Returns:
+        List of batches, where each batch is a list of document indices
+    """
+    if len(indices) < batch_size:
+        return [indices]
+
+    num_full_batches = len(indices) // batch_size
+    batches = [
+        indices[i * batch_size : (i + 1) * batch_size]
+        for i in range(num_full_batches)
+    ]
+
+    leftovers = len(indices) % batch_size
+    if leftovers:
+        last_batch = indices[num_full_batches * batch_size :]
+        elements_to_add = batch_size - leftovers
+        last_batch += random.sample(indices, elements_to_add)
+        batches.append(last_batch)
+
+    return batches
+
+
+async def generate_minibatches(state: State, config: RunnableConfig) -> dict:
+    """Generate minibatches from documents for processing.
+    
+    Args:
+        state: Current application state
+        config: Configuration for the run
+        
+    Returns:
+        dict: Updated state fields with minibatches
+    """
+    configuration = Configuration.from_runnable_config(config)
+    
+    # Create and shuffle document indices
+    indices = list(range(len(state.documents)))
+    random.shuffle(indices)
+
+    # Generate batches
+    batches = _create_batches(indices, configuration.batch_size)
+
+    return {
+        "minibatches": batches,
+        "status": ["Minibatches generated successfully.."],
+    }
+
+
+
+================================================
+FILE: src/taxonomy_generator/nodes/runs_retriever.py
+================================================
+"""Node for retrieving runs from LangSmith."""
+
+from datetime import datetime, timedelta
+from langsmith import Client, traceable
+from langchain_core.runnables import RunnableConfig
+
+from taxonomy_generator.state import State
+from taxonomy_generator.configuration import Configuration
+from taxonomy_generator.utils import process_runs
+
+@traceable
+async def retrieve_runs(state: State, config: RunnableConfig) -> dict:
+    """Retrieve and process runs from LangSmith.
+    
+    Args:
+        state: Current application state
+        config: Configuration for the run
+        
+    Returns:
+        dict: Updated state fields with retrieved documents
+        
+    Raises:
+        ValueError: If project_name is not set
+    """
+
+    if not state.project_name:
+        raise ValueError("project_name not set in state")
+    
+    configuration = Configuration.from_runnable_config(config)
+
+    client = Client(api_key=state.org_id)
+
+    delta_days = datetime.now() - timedelta(days=state.days)
+
+    runs = list(
+        client.list_runs(
+            project_name=state.project_name,
+            filter="eq(is_root, true)",
+            start_time=delta_days,
+            select=["inputs", "outputs"],
+            limit=configuration.max_runs,
+        )
+    )
+
+    if len(runs) == configuration.max_runs:
+        status_message = f"Fetched runs were capped at {configuration.max_runs} due to the set limit."
+    else:
+        status_message = f"Fetched {len(runs)} runs successfully..."
+
+    return {
+        "all_documents": process_runs(left=[], right=runs),
+        "documents": process_runs(left=[], right=runs, sample=configuration.sample_size),
+        "status": [status_message],
+    }
+
+
+
+================================================
+FILE: src/taxonomy_generator/nodes/summary_generator.py
+================================================
+"""Node for generating summaries of documents."""
+
+import re
+from typing import Dict, List, Any
+from uuid import uuid4
+
+from langchain import hub
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnableLambda, RunnablePassthrough, RunnableConfig
+
+from taxonomy_generator.state import State
+from taxonomy_generator.utils import load_chat_model, parse_taxa, invoke_taxonomy_chain
+from taxonomy_generator.configuration import Configuration
+
+
+def _get_content(state: Dict[str, List]) -> List[Dict[str, str]]:
+    """Extract content from documents for summarization.
+    
+    Args:
+        state: State dictionary containing documents
+        
+    Returns:
+        List of document contents formatted for summarization
+    """
+    docs = state["documents"]
+    return [
+        {
+            "content": (
+                doc["content"] if isinstance(doc, dict) 
+                else doc.content
+            )
+        }
+        for doc in docs
+    ]
+
+
+def _parse_summary(xml_string: str) -> dict:
+    """Parse summary and explanation from XML string.
+    
+    Args:
+        xml_string: XML formatted string containing summary and explanation
+        
+    Returns:
+        dict: Parsed summary and explanation
+    """
+    summary_pattern = r"<summary>(.*?)</summary>"
+    explanation_pattern = r"<explanation>(.*?)</explanation>"
+
+    summary_match = re.search(summary_pattern, xml_string, re.DOTALL)
+    explanation_match = re.search(explanation_pattern, xml_string, re.DOTALL)
+
+    summary = summary_match.group(1).strip() if summary_match else ""
+    explanation = explanation_match.group(1).strip() if explanation_match else ""
+
+    return {"summary": summary, "explanation": explanation}
+
+
+def _reduce_summaries(combined: Dict[str, Any]) -> Dict[str, List[Dict[str, Any]]]:
+    """Combine documents with their summaries.
+    
+    Args:
+        combined: Dictionary containing documents and their summaries
+        
+    Returns:
+        dict: Documents enriched with summaries and explanations
+    """
+    summaries = combined["summaries"]
+    documents = combined["documents"]
+    return {
+        "documents": [
+            {
+                "id": doc.get("id", str(uuid4())),
+                "content": doc.get("content", ""),
+                "summary": summ_info.get("summary", ""),
+                "explanation": summ_info.get("explanation", ""),
+            }
+            for doc, summ_info in zip(documents, summaries)
+        ],
+        "status": ["Summarized successfully."],
+    }
+
+
+async def generate_summaries(
+    state: State,
+    config: RunnableConfig,
+) -> dict:
+    """Generate summaries for a collection of documents."""
+
+    configuration = Configuration.from_runnable_config(config)
+
+    # Initialize the model and prompt
+    model = load_chat_model(configuration.fast_llm)
+    summary_prompt = hub.pull("wfh/tnt-llm-summary-generation").partial(
+        summary_length=20, explanation_length=30
+    )
+
+    # Create the summary chain
+    summary_llm_chain = (
+        summary_prompt 
+        | model 
+        | StrOutputParser()
+    ).with_config(run_name="GenerateSummary")
+
+    summary_chain = summary_llm_chain | _parse_summary
+
+    # Create the full chain with map-reduce
+    map_reduce_chain = (
+        RunnablePassthrough.assign(
+            summaries=_get_content
+            | RunnableLambda(func=summary_chain.batch, afunc=summary_chain.abatch)
+        )
+        | _reduce_summaries
+    )
+
+    # Process documents
+    processed_docs = []
+    for doc in state.documents:
+        if isinstance(doc, str):
+            processed_docs.append({"id": str(uuid4()), "content": doc})
+        elif isinstance(doc, dict):
+            if "id" not in doc:
+                doc["id"] = str(uuid4())
+            processed_docs.append(doc)
+        else:
+            processed_docs.append({"id": str(uuid4()), "content": str(doc)})
+
+    return await map_reduce_chain.ainvoke({"documents": processed_docs})
+
+
+
+================================================
+FILE: src/taxonomy_generator/nodes/taxonomy_generator.py
+================================================
+"""Node for generating taxonomies from document batches."""
+
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnableConfig
+
+from taxonomy_generator.state import State
+from taxonomy_generator.utils import load_chat_model, parse_taxa, invoke_taxonomy_chain
+from taxonomy_generator.configuration import Configuration
+from taxonomy_generator.prompts import TAXONOMY_GENERATION_PROMPT
+
+def _setup_taxonomy_chain(configuration: Configuration, feedback: str):
+    """Set up the chain for taxonomy generation."""
+    # Initialize the prompt with default use case
+    taxonomy_prompt = TAXONOMY_GENERATION_PROMPT.partial(
+        use_case="Generate the taxonomy that can be used to label the user intent in the conversation.",
+        feedback=feedback,
+    )
+    # Create the chain
+    model = load_chat_model(
+        configuration.fast_llm,
+    )
+
+    return (
+        taxonomy_prompt
+        | model
+        | StrOutputParser()
+        | parse_taxa
+    ).with_config(run_name="GenerateTaxonomy")
+
+
+async def generate_taxonomy(
+    state: State,
+    config: RunnableConfig,
+) -> dict:
+    """Generate taxonomy from the first batch of documents."""
+    configuration = Configuration.from_runnable_config(config)
+
+    # Format the feedback if it exists
+    feedback = "No previous feedback provided."
+    if state.user_feedback:
+        feedback = f"Previous user feedback: {state.user_feedback.feedback}"
+        if state.user_feedback.explanation:
+            feedback += f"\nReason for modification: {state.user_feedback.explanation}"
+    
+    # Set up the chain
+    taxonomy_chain = _setup_taxonomy_chain(configuration, feedback)
+
+    # Generate taxonomy using the first batch
+    return await invoke_taxonomy_chain(
+        taxonomy_chain,
+        state,
+        config,
+        state.minibatches[0],
+    )
+
+
+
+================================================
+FILE: src/taxonomy_generator/nodes/taxonomy_reviewer.py
+================================================
+"""Node for reviewing and finalizing taxonomies."""
+
+import random
+from langchain import hub
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnableConfig
+
+from taxonomy_generator.state import State
+from taxonomy_generator.utils import load_chat_model, parse_taxa, invoke_taxonomy_chain
+from taxonomy_generator.configuration import Configuration
+
+
+def _setup_review_chain(configuration: Configuration):
+    """Set up the chain for taxonomy review.
+    
+    Args:
+        model_name: Name of the model to use
+        max_tokens: Maximum tokens for model response
+        
+    Returns:
+        Chain for reviewing and parsing taxonomies
+    """
+    # Initialize the prompt
+    review_prompt = hub.pull("wfh/tnt-llm-taxonomy-review")
+
+    # Create the chain
+    model = load_chat_model(configuration.fast_llm)
+
+    return (
+        review_prompt
+        | model
+        | StrOutputParser()
+        | parse_taxa
+    ).with_config(run_name="ReviewTaxonomy")
+
+
+async def review_taxonomy(
+    state: State,
+    config: RunnableConfig
+) -> dict:
+    """Review and finalize taxonomy using a random sample of documents.
+    
+    Args:
+        state: Current application state
+        config: Configuration for the run
+        model_name: Name of the model to use
+        max_tokens: Maximum tokens for model response
+        
+    Returns:
+        dict: Updated state fields with reviewed taxonomy
+    """
+    configuration = Configuration.from_runnable_config(config)
+    
+    # Set up the chain
+    review_chain = _setup_review_chain(configuration)
+
+    # Create random sample of documents
+    batch_size = configuration.batch_size
+    indices = list(range(len(state.documents)))
+    random.shuffle(indices)
+    sample_indices = indices[:batch_size]
+
+    # Review taxonomy using sampled documents
+    return await invoke_taxonomy_chain(
+        review_chain,
+        state,
+        config,
+        sample_indices
+    )
+
+
+
+================================================
+FILE: src/taxonomy_generator/nodes/taxonomy_updater.py
+================================================
+"""Node for updating taxonomies based on new document batches."""
+
+from langchain import hub
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnableConfig
+
+from taxonomy_generator.state import State
+from taxonomy_generator.utils import load_chat_model, parse_taxa, invoke_taxonomy_chain
+from taxonomy_generator.configuration import Configuration
+
+
+def _setup_update_chain(configuration: Configuration):
+    """Set up the chain for taxonomy updates.
+    
+    Args:
+        model_name: Name of the model to use
+        max_tokens: Maximum tokens for model response
+        
+    Returns:
+        Chain for updating and parsing taxonomies
+    """
+    # Initialize the prompt
+    update_prompt = hub.pull("wfh/tnt-llm-taxonomy-update")
+
+    # Create the chain
+    model = load_chat_model(configuration.fast_llm)
+
+    return (
+        update_prompt
+        | model
+        | StrOutputParser()
+        | parse_taxa
+    ).with_config(run_name="UpdateTaxonomy")
+
+
+async def update_taxonomy(
+    state: State,
+    config: RunnableConfig
+) -> dict:
+    """Update taxonomy using the next batch of documents.
+    
+    Args:
+        state: Current application state
+        config: Configuration for the run
+        model_name: Name of the model to use
+        max_tokens: Maximum tokens for model response
+        
+    Returns:
+        dict: Updated state fields with revised taxonomy
+    """
+    configuration = Configuration.from_runnable_config(config)
+    
+    # Set up the chain
+    update_chain = _setup_update_chain(configuration)
+
+    # Determine which minibatch to use
+    which_mb = len(state.clusters) % len(state.minibatches)
+
+    # Update taxonomy using the next batch
+    return await invoke_taxonomy_chain(
+        update_chain,
+        state,
+        config,
+        state.minibatches[which_mb]
+    )
+
+
+
+================================================
+FILE: src/taxonomy_generator/routing/__init__.py
+================================================
+"""Routing functions for the taxonomy generator graph."""
+
+from taxonomy_generator.routing.should_review import should_review
+
+__all__ = ["should_review"]
+
+
+
+================================================
+FILE: src/taxonomy_generator/routing/should_review.py
+================================================
+"""Route model output to the next node in the graph."""
+
+from typing import Literal
+
+from taxonomy_generator.state import State
+
+def should_review(state: State) -> Literal["update_taxonomy", "review_taxonomy"]:
+    """Determine whether to continue updating or move to review."""
+    num_minibatches = len(state.minibatches)
+    num_revisions = len(state.clusters)
+    if num_revisions < num_minibatches:
+        return "update_taxonomy"
+    return "review_taxonomy"
+
